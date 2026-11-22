@@ -29,7 +29,7 @@ type Selection struct {
 	Kind    string
 	Day     string
 	ModelID int64
-	Public  bool // 同一快照内读取资料，在评分前排除禁用和已下榜身份。
+	Public  bool // 同一快照内读取资料，在评分前排除禁用、隐藏和退出的席位。
 }
 
 type Profile struct {
@@ -105,7 +105,7 @@ func (r *Reader) Read(ctx context.Context, s Selection) (Snapshot, error) {
 	join := ""
 	if s.Public {
 		columns += `,c.display_name,c.avatar_id`
-		join = ` JOIN clients c ON c.id=s.client_id AND c.disabled=0 AND c.ranking_hidden=0`
+		join = ` JOIN clients c ON c.id=s.client_id AND c.disabled=0 AND c.ranking_hidden=0 AND c.withdrawn=0`
 	}
 	query := `SELECT ` + columns + ` FROM period_stats s` + join + ` WHERE s.kind=? AND s.model_id=?`
 	kind := s.Kind

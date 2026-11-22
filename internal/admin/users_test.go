@@ -17,8 +17,11 @@ import (
 
 func seedRankedUsers(t *testing.T, s *Service) {
 	t.Helper()
-	_, err := s.writer.Exec(`INSERT INTO clients(id,token_hash,display_name,avatar_id,created_at_ms) VALUES(1,randomblob(32),'one',1,123),(2,randomblob(32),'two',2,456);
-	INSERT INTO daily_reports VALUES('2026-11-17',1,7,zeroblob(32),789),('2026-11-18',1,8,zeroblob(32),789),('2026-11-17',2,7,zeroblob(32),789),('2026-11-18',2,8,zeroblob(32),789);
+	_, err := s.writer.Exec(`INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','one',1,123),(2,2,'550e8400-e29b-41d4-a716-446655440000','two',2,456);
+	INSERT INTO client_writers(id,client_id,token_hash) VALUES(1,1,randomblob(32)),(2,2,randomblob(32));
+	INSERT INTO daily_reports VALUES('2026-11-17',1,789),('2026-11-18',1,789),('2026-11-17',2,789),('2026-11-18',2,789);
+	INSERT INTO daily_writer_versions(day,writer_id,client_id,revision,digest)
+	SELECT day,client_id,client_id,CASE day WHEN '2026-11-17' THEN 7 ELSE 8 END,zeroblob(32) FROM daily_reports;
 	INSERT INTO daily_stats SELECT day,client_id,0,1500,1000,500,200,0,0,100,90,10000,100,20000,100 FROM daily_reports`)
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +45,7 @@ func TestBanOnlyUpdatesTargetStateAndRechecksDeletedActor(t *testing.T) {
 	s, _ := serviceDB(t)
 	seedRankedUsers(t, s)
 	var before string
-	query := `SELECT hex(token_hash)||display_name||avatar_id||created_at_ms FROM clients WHERE id=1`
+	query := `SELECT hex(w.token_hash)||github_id||cpa_uuid||display_name||avatar_id||created_at_ms FROM clients c JOIN client_writers w ON c.id=w.client_id WHERE c.id=1`
 	if err := s.reader.QueryRow(query).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +63,7 @@ func TestBanOnlyUpdatesTargetStateAndRechecksDeletedActor(t *testing.T) {
 		}
 	}
 	var revision, total, other int
-	if err := s.reader.QueryRow(`SELECT r.revision,d.total_tokens,c.disabled FROM daily_reports r JOIN daily_stats d USING(day,client_id) JOIN clients c ON c.id=2 WHERE r.client_id=1 AND r.day='2026-11-18'`).Scan(&revision, &total, &other); err != nil || revision != 8 || total != 1500 || other != 0 {
+	if err := s.reader.QueryRow(`SELECT r.revision,d.total_tokens,c.disabled FROM daily_writer_versions r JOIN daily_stats d USING(day,client_id) JOIN clients c ON c.id=2 WHERE r.client_id=1 AND r.day='2026-11-18'`).Scan(&revision, &total, &other); err != nil || revision != 8 || total != 1500 || other != 0 {
 		t.Fatal("ban changed stats or another client", err)
 	}
 	account, err := s.CreateAccount(ctx, s.owner, "staff", "ordinary-test-password")

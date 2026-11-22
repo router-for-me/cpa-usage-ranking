@@ -74,7 +74,7 @@ func TestBurstBarrierRetrySerialDatesAndActualInFlight(t *testing.T) {
 		}
 		_ = json.Unmarshal(body, &payload)
 		rev, _ := strconv.ParseInt(payload.Revision, 10, 64)
-		day := strings.TrimPrefix(r.URL.Path, "/v1/reports/")
+		day := strings.TrimPrefix(r.URL.Path, "/v1/clients/report/")
 		key := fmt.Sprintf("%d/%s", id, day)
 		mu.Lock()
 		active[id]++

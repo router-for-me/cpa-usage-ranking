@@ -16,7 +16,7 @@ func TestPeriodSchemaKeysAndConstraints(t *testing.T) {
 	if queryInt(t, db.Reader, `SELECT count(*) FROM sqlite_schema WHERE name='period_stats' AND sql LIKE '%WITHOUT ROWID%'`) != 1 || queryInt(t, db.Reader, `SELECT count(*) FROM pragma_table_info('period_stats') WHERE name='tier'`) != 0 {
 		t.Fatal("period table missing")
 	}
-	execSQL(t, db.Writer, `INSERT INTO clients(token_hash,display_name,avatar_id,created_at_ms) VALUES(zeroblob(32),'one',1,0), (randomblob(32),'two',1,0)`)
+	execSQL(t, db.Writer, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','one',1,0), (2,'550e8400-e29b-41d4-a716-446655440000','two',1,0)`)
 	insert := `INSERT INTO period_stats VALUES(?,?,?,?,1,1,0,0,0,0,1,1,0,0,0,0)`
 	for _, row := range []struct {
 		kind, day     string

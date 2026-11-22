@@ -46,7 +46,7 @@ func TestCancelledReportNeverFallsThroughToEmptySuccess(t *testing.T) {
 			if !queued {
 				body = cancellingReportBody{body, cancel}
 			}
-			req := httptest.NewRequest("PUT", "/v1/reports/2026-11-01", body).WithContext(ctx)
+			req := httptest.NewRequest("PUT", "/v1/clients/report/2026-11-01", body).WithContext(ctx)
 			req.Header.Set("Authorization", "Bearer "+testSecret(1))
 			req.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()

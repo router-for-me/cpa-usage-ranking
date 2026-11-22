@@ -12,9 +12,9 @@ import (
 
 func TestBoundedUserListAndLiteralSearch(t *testing.T) {
 	ctx := context.Background()
-	_, repository := openRepository(t, filepath.Join(t.TempDir(), "list.db"))
+	db, repository := openRepository(t, filepath.Join(t.TempDir(), "list.db"))
 	for i := 0; i < 105; i++ {
-		client := create(t, repository, fmt.Sprintf("list-%d", i))
+		client := create(t, db, fmt.Sprintf("list-%d", i))
 		if i == 0 {
 			if err := repository.SetDisabled(ctx, client.ID, true); err != nil {
 				t.Fatal(err)

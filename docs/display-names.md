@@ -4,10 +4,10 @@
 public nickname and returns the value to store and return to the client.
 Invalid input returns an empty string and an error matching
 `profiles.ErrInvalidDisplayName` with `errors.Is`; errors do not include the
-submitted name. The [registration API](registration-api.md) applies this helper
-for new identities before calling the repository. Existing-identity retries
-return current stored profiles without revalidating submitted new-profile fields.
-The repository itself still expects already-validated values.
+submitted name. [Registration](registration-api.md) applies this helper to the
+GitHub `name` for a new seat. An empty or invalid name falls back to the GitHub
+`login`, truncated to fit. Clients do not submit a name; an additional writer
+or completion retry does not change the current stored profile.
 
 ## Rules, in order
 

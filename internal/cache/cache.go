@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -64,6 +65,8 @@ type Cache struct {
 	current          atomic.Pointer[Snapshot]
 	running          atomic.Bool
 	refreshRequested chan struct{}
+	publicationMu    sync.Mutex
+	refreshEpoch     uint64
 }
 
 func New(reader *statistics.Reader, items []Item, opts Options, logger *slog.Logger) (*Cache, error) {
@@ -92,9 +95,11 @@ func (c *Cache) Current() (Snapshot, error) {
 	return *s, nil
 }
 
-// RequestRefresh coalesces management changes without doing work on a request
-// goroutine. A signal arriving during a build remains pending for a later round.
+// RequestRefresh 合并已提交的资格变更，不在请求协程上构建榜单。
 func (c *Cache) RequestRefresh() {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	c.refreshEpoch++
 	select {
 	case c.refreshRequested <- struct{}{}:
 	default:
@@ -133,6 +138,9 @@ func (c *Cache) refresh(ctx context.Context) error {
 	if len(c.items) == 0 {
 		return ErrNoItems
 	}
+	c.publicationMu.Lock()
+	epoch := c.refreshEpoch
+	c.publicationMu.Unlock()
 	when := c.opts.Now().UTC()
 	next := &Snapshot{entries: make(map[string]Entry, len(c.items))}
 	remaining := c.opts.MaxBytes
@@ -147,7 +155,12 @@ func (c *Cache) refresh(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.current.Store(next)
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	// 各周期分别读取 SQLite；期间资格变更会留下刷新信号，不发布可能含旧资格的轮次。
+	if epoch == c.refreshEpoch {
+		c.current.Store(next)
+	}
 	return nil
 }
 func (c *Cache) build(ctx context.Context, item Item, when time.Time, max int) (Entry, error) {

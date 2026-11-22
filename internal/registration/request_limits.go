@@ -70,8 +70,8 @@ func NewRequestLimiter(limits RequestLimits, now func() time.Time) (*RequestLimi
 	return &RequestLimiter{limits: limits, now: now, sources: make(map[string]*requestWindow)}, nil
 }
 
-// Admit must run before credential/body validation, for every registration
-// attempt including failed requests and safe retries. No other route uses it.
+// Admit runs before credential/body validation on every start attempt.
+// Complete does not consume a new start slot.
 func (l *RequestLimiter) Admit(source string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

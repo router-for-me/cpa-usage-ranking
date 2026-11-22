@@ -1,28 +1,38 @@
-// Package registration combines identity persistence and validated public profiles.
+// Package registration 管理有界的 GitHub 注册事务与凭据绑定。
 package registration
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"database/sql"
+	"encoding/base64"
 	"errors"
-	"sync"
+	"fmt"
+	"net/netip"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
-	"cpa-usage-ranking/internal/avatars"
 	"cpa-usage-ranking/internal/clients"
-	"cpa-usage-ranking/internal/profiles"
+	"cpa-usage-ranking/internal/storage"
 )
 
 var (
-	ErrDisabled           = errors.New("client is disabled")
-	ErrInvalidAvatar      = errors.New("invalid avatar selection")
-	ErrRegistrationClosed = errors.New("new identity registration is closed")
+	ErrInvalidRequest     = errors.New("invalid registration request")
+	ErrWrongCredential    = errors.New("registration credential mismatch")
+	ErrRegistrationClosed = errors.New("new registration is closed")
+	ErrExpired            = errors.New("registration request expired")
+	ErrPending            = errors.New("registration authorization pending")
+	ErrDenied             = errors.New("GitHub authorization denied")
+	ErrGitHub             = errors.New("GitHub authorization failed")
 )
 
-// Profile only describes a new identity; it cannot claim an existing client ID.
-type Profile struct {
-	DisplayName string
-	AvatarID    *int64
-}
+const PendingRetryAfter = 2 * time.Second
+
+var cpaUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type Result struct {
 	Client  clients.Client
@@ -30,88 +40,226 @@ type Result struct {
 }
 
 type Options struct {
-	CreationLimits       CreationLimits
-	NewIdentitiesEnabled bool
-	Now                  func() time.Time
+	Enabled  bool
+	TTL      time.Duration
+	Capacity int
+	Now      func() time.Time
 }
 
 func DefaultOptions() Options {
-	return Options{CreationLimits: DefaultCreationLimits(), NewIdentitiesEnabled: true}
+	return Options{Enabled: true, TTL: 10 * time.Minute, Capacity: 2000}
 }
 
 type Service struct {
-	mu                   sync.Mutex
-	repo                 *clients.Repository
-	catalog              *avatars.Catalog
-	limits               CreationLimits
-	now                  func() time.Time
-	creations            map[string][]time.Time
-	newIdentitiesEnabled bool
+	reader   *sql.DB
+	writer   *sql.DB
+	avatarID int64
+	options  Options
 }
 
-// Use one Service per process so admission and successful-create accounting share a lock.
-func NewService(repo *clients.Repository, catalog *avatars.Catalog, options Options) (*Service, error) {
-	if err := options.CreationLimits.Validate(); err != nil {
-		return nil, err
+func NewService(db *storage.DB, defaultAvatarID int64, options Options) (*Service, error) {
+	if db == nil || db.Reader == nil || db.Writer == nil || defaultAvatarID <= 0 || options.TTL < time.Millisecond || options.Capacity <= 0 {
+		return nil, fmt.Errorf("invalid registration options")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Service{repo: repo, catalog: catalog, limits: options.CreationLimits,
-		now: options.Now, creations: make(map[string][]time.Time), newIdentitiesEnabled: options.NewIdentitiesEnabled}, nil
+	return &Service{reader: db.Reader, writer: db.Writer, avatarID: defaultAvatarID, options: options}, nil
 }
 
-// Register accepts a validated credential digest, never the credential text.
-// An existing digest wins before profile validation, including disabled status.
-func (s *Service) Register(ctx context.Context, source string, hash clients.CredentialHash, profile Profile) (Result, error) {
-	// 进程内串行准入直到 INSERT 完成，无预扣名额，也不在持有写事务时再借写池。
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	client, err := s.repo.ByCredentialHash(ctx, hash)
-	if err == nil {
-		return existing(client)
+func opaqueToken() string {
+	var raw [32]byte
+	rand.Read(raw[:])
+	return base64.RawURLEncoding.EncodeToString(raw[:])
+}
+
+func validToken(token string) bool {
+	if len(token) != 43 {
+		return false
 	}
-	if !errors.Is(err, clients.ErrNotFound) {
-		return Result{}, err
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	return err == nil && len(decoded) == 32
+}
+
+func httpURL(raw string) (*url.URL, bool) {
+	// 浏览器和 net/url 对反斜杠与控制字符的解释不同，不接受这类歧义地址。
+	if strings.ContainsAny(raw, " \\") || strings.IndexFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return nil, false
 	}
-	// 关闭只影响尚不存在的身份；安全重试与禁用判断优先，鉴权使用独立路径。
-	if !s.newIdentitiesEnabled {
-		return Result{}, ErrRegistrationClosed
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return nil, false
 	}
-	name, err := profiles.NormalizeDisplayName(profile.DisplayName)
+	if port := u.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return nil, false
+		}
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		if addr, err := netip.ParseAddr(u.Hostname()); err != nil || !addr.Is6() {
+			return nil, false
+		}
+	} else if strings.ContainsRune(u.Hostname(), ':') {
+		return nil, false
+	}
+	return u, true
+}
+
+// Start 固定 UUID、原样返回地址和凭据摘要，不创建设席或上报端。
+func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, cpaUUID, returnTo string) (string, error) {
+	if _, valid := httpURL(returnTo); !valid || !cpaUUIDPattern.MatchString(cpaUUID) || cpaUUID == "00000000-0000-0000-0000-000000000000" {
+		return "", ErrInvalidRequest
+	}
+	if !s.options.Enabled {
+		return "", ErrRegistrationClosed
+	}
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return Result{}, err
+		return "", err
 	}
-	avatarID := s.catalog.DefaultID()
-	if profile.AvatarID != nil {
-		avatarID = *profile.AvatarID
+	defer tx.Rollback()
+	now := s.options.Now()
+	// 限额包含未过期的办结结果；不为新请求逐出仍可丢包恢复的编号。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM registration_requests WHERE expires_at_ms<=?`, now.UnixMilli()); err != nil {
+		return "", err
 	}
-	if _, ok := s.catalog.Lookup(avatarID); !ok {
-		return Result{}, ErrInvalidAvatar
+	var count int
+	var firstExpiry int64
+	if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(min(expires_at_ms),0) FROM registration_requests`).Scan(&count, &firstExpiry); err != nil {
+		return "", err
 	}
-	if err := s.checkCreationQuota(source, s.now()); err != nil {
-		return Result{}, err
+	if count >= s.options.Capacity {
+		return "", &LimitError{Code: "registration_capacity", RetryAfter: time.UnixMilli(firstExpiry).Sub(now)}
 	}
-	// 单条 INSERT 原子保存身份与完整资料；摘要唯一约束处理跨请求并发。
-	client, err = s.repo.Create(ctx, clients.NewClient{CredentialHash: hash, DisplayName: name, AvatarID: avatarID})
-	if errors.Is(err, clients.ErrCredentialExists) {
-		client, err = s.repo.ByCredentialHash(ctx, hash)
+	id := opaqueToken()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,cpa_uuid,return_to,expires_at_ms,stage)
+		VALUES(?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(cpaUUID), returnTo, now.Add(s.options.TTL).UnixMilli()); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *Service) PruneExpired(ctx context.Context) error {
+	_, err := s.writer.ExecContext(ctx, `DELETE FROM registration_requests WHERE expires_at_ms<=?`, s.options.Now().UnixMilli())
+	return err
+}
+
+// Complete 先用读池检查请求，仅 approved 进入 IMMEDIATE 写事务复查并绑定上报端。
+func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id string) (Result, error) {
+	if !validToken(id) {
+		return Result{}, ErrInvalidRequest
+	}
+	var now time.Time
+	var expiry int64
+	var stage, cpaUUID string
+	var githubID sql.NullInt64
+	var name sql.NullString
+	checkRequest := func(queryRow func(context.Context, string, ...any) *sql.Row) (Result, error) {
+		var savedHash []byte
+		var clientID sql.NullInt64
+		err := queryRow(ctx, `SELECT token_hash,expires_at_ms,stage,cpa_uuid,github_id,display_name,client_id
+			FROM registration_requests WHERE id=?`, id).Scan(&savedHash, &expiry, &stage, &cpaUUID, &githubID, &name, &clientID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// 过期清理后的编号与未签发编号不可区分，也没有额外的找回入口。
+			return Result{}, ErrExpired
+		}
 		if err != nil {
 			return Result{}, err
 		}
-		return existing(client)
+		if subtle.ConstantTimeCompare(savedHash, hash[:]) != 1 {
+			return Result{}, ErrWrongCredential
+		}
+		now = s.options.Now()
+		if expiry <= now.UnixMilli() {
+			return Result{}, ErrExpired
+		}
+		switch stage {
+		case "denied":
+			return Result{}, ErrDenied
+		case "failed":
+			return Result{}, ErrGitHub
+		case "completed":
+			seat, err := readSeat(queryRow(ctx, seatFields+` WHERE id=?`, clientID.Int64))
+			if err == nil && expiry <= s.options.Now().UnixMilli() {
+				return Result{}, ErrExpired
+			}
+			return Result{Client: seat}, err
+		case "approved":
+			return Result{}, nil
+		default:
+			return Result{}, ErrPending
+		}
 	}
+	if result, err := checkRequest(s.reader.QueryRowContext); err != nil || stage != "approved" {
+		return result, err
+	}
+	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return Result{}, err
 	}
-	// 只对真正成功的新建记账；失败和摘要冲突不消耗创建额度。
-	s.creations[source] = append(s.creations[source], s.now())
-	return Result{Client: client, Created: true}, nil
+	defer tx.Rollback()
+	if result, err := checkRequest(tx.QueryRowContext); err != nil || stage != "approved" {
+		return result, err
+	}
+
+	var boundID int64
+	err = tx.QueryRowContext(ctx, `SELECT client_id FROM client_writers WHERE token_hash=?`, hash[:]).Scan(&boundID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Result{}, err
+	}
+	seat, err := readSeat(tx.QueryRowContext(ctx, seatFields+` WHERE github_id=? AND cpa_uuid=?`, githubID.Int64, cpaUUID))
+	newSeat := errors.Is(err, sql.ErrNoRows)
+	if boundID != 0 && (newSeat || (seat.ID != 0 && seat.ID != boundID)) {
+		return Result{}, ErrWrongCredential
+	}
+	if err != nil && !newSeat {
+		return Result{}, err
+	}
+	if boundID == 0 && !s.options.Enabled {
+		return Result{}, ErrRegistrationClosed
+	}
+	if newSeat {
+		seat = clients.Client{DisplayName: name.String, AvatarID: s.avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
+		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
+			VALUES(?,?,?,?,?) RETURNING id`, githubID.Int64, cpaUUID, seat.DisplayName, seat.AvatarID, now.UnixMilli()).Scan(&seat.ID)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if boundID == 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO client_writers(client_id,token_hash) VALUES(?,?)`, seat.ID, hash[:]); err != nil {
+			return Result{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE registration_requests SET stage='completed',client_id=?,github_id=NULL,display_name=NULL WHERE id=?`, seat.ID, id); err != nil {
+		return Result{}, err
+	}
+	if expiry <= s.options.Now().UnixMilli() {
+		return Result{}, ErrExpired
+	}
+	if err := tx.Commit(); err != nil {
+		return Result{}, err
+	}
+	return Result{Client: seat, Created: newSeat}, nil
 }
 
-func existing(client clients.Client) (Result, error) {
-	if client.Disabled {
-		return Result{}, ErrDisabled
+const seatFields = `SELECT id,display_name,avatar_id,disabled,withdrawn,ranking_hidden,created_at_ms FROM clients`
+
+func readSeat(row *sql.Row) (clients.Client, error) {
+	var c clients.Client
+	var created int64
+	if err := row.Scan(&c.ID, &c.DisplayName, &c.AvatarID, &c.Disabled, &c.Withdrawn, &c.RankingHidden, &created); err != nil {
+		return clients.Client{}, err
 	}
-	return Result{Client: client}, nil
+	c.CreatedAt = time.UnixMilli(created).UTC()
+	if c.Withdrawn {
+		return c, clients.ErrWithdrawn
+	}
+	if c.Disabled {
+		return c, clients.ErrDisabled
+	}
+	return c, nil
 }

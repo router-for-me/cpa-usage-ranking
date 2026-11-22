@@ -30,36 +30,12 @@ func sustainedFixture(t *testing.T, clients int) (capacity.Fixture, []string) {
 func TestSustainedOpenInputCancelAndResume(t *testing.T) {
 	f, names := sustainedFixture(t, 20)
 	// Fix a seed that actually exercises new identities within the first debt.
-	var seed uint64
-	for candidate := uint64(1); candidate < 100; candidate++ {
-		m, err := capacity.NewSustainedModel(f.Day, names, f.Clients, candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; i < 100; i++ {
-			task, err := m.Next()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if task.New {
-				seed = candidate
-				break
-			}
-		}
-		if seed != 0 {
-			break
-		}
-	}
-	if seed == 0 {
-		t.Fatal("no seed exercises registration")
-	}
+	const seed uint64 = 1
 	var release atomic.Bool
-	var violation atomic.Int64
+	var violation atomic.Int32
 	var mu sync.Mutex
 	active := map[string]int{}
-	registrations := map[string]int64{}
 	bodyHashes := map[string][32]byte{}
-	nextID := int64(f.Clients)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secret := r.Header.Get("Authorization")
 		body, err := io.ReadAll(r.Body)
@@ -74,7 +50,7 @@ func TestSustainedOpenInputCancelAndResume(t *testing.T) {
 		}
 		mu.Unlock()
 		defer func() { mu.Lock(); active[secret]--; mu.Unlock() }()
-		if r.Method == http.MethodPut {
+		if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v1/clients/report/") {
 			var report struct {
 				Revision string `json:"revision"`
 			}
@@ -98,31 +74,8 @@ func TestSustainedOpenInputCancelAndResume(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"revision": report.Revision})
 			return
 		}
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/clients/register" {
-			violation.Add(1)
-			w.WriteHeader(400)
-			return
-		}
-		var profile map[string]any
-		if json.Unmarshal(body, &profile) != nil || profile["display_name"] == nil {
-			violation.Add(1)
-			w.WriteHeader(400)
-			return
-		}
-		if !release.Load() {
-			<-r.Context().Done()
-			return
-		}
-		mu.Lock()
-		id, ok := registrations[secret]
-		if !ok {
-			nextID++
-			id = nextID
-			registrations[secret] = id
-		}
-		mu.Unlock()
-		w.WriteHeader(201)
-		_ = json.NewEncoder(w).Encode(map[string]int64{"client_id": id})
+		violation.Add(1)
+		w.WriteHeader(400)
 	}))
 	defer server.Close()
 	journal := filepath.Join(t.TempDir(), "journal.jsonl")
@@ -143,7 +96,7 @@ func TestSustainedOpenInputCancelAndResume(t *testing.T) {
 	commands <- capacity.SustainedCommand{Operation: "stage", Stage: "slow", Rate: 20}
 	var first capacity.SustainedSample
 	deadline := time.After(5 * time.Second)
-	for first.Produced < 100 || first.DebtRemaining != 0 || first.RegistrationDependent == 0 {
+	for first.Produced < 100 || first.DebtRemaining != 0 {
 		select {
 		case first = <-samples:
 		case done := <-finished:
@@ -191,7 +144,7 @@ drained:
 	case <-time.After(5 * time.Second):
 		t.Fatal("stop did not finish")
 	}
-	if stopped.err != nil || stopped.result.Sample.Produced-stopped.result.Sample.Confirmed != stopped.result.Sample.Pending || stopped.result.Sample.Registrations == 0 || violation.Load() != 0 {
+	if stopped.err != nil || stopped.result.Sample.Produced-stopped.result.Sample.Confirmed != stopped.result.Sample.Pending || violation.Load() != 0 {
 		t.Fatalf("resume mismatch: %+v %v violations=%d", stopped.result, stopped.err, violation.Load())
 	}
 	data, err := os.ReadFile(journal)
@@ -235,9 +188,8 @@ func TestSustainedRetriesKeepVersionBodyAndRetryAfter(t *testing.T) {
 	var firstHash [32]byte
 	var mismatch bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			w.WriteHeader(201)
-			fmt.Fprint(w, `{"client_id":2}`)
+		if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/v1/clients/report/") {
+			w.WriteHeader(405)
 			return
 		}
 		body, _ := io.ReadAll(r.Body)

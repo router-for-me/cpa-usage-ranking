@@ -21,7 +21,7 @@ func seedClosedReports(t *testing.T, db *storage.DB, n int) []int64 {
 	for range n {
 		id := createReportClient(t, db)
 		ids = append(ids, id)
-		if _, err := db.Writer.Exec(`INSERT INTO daily_reports VALUES('2026-11-01',?,1,zeroblob(32),0);
+		if _, err := db.Writer.Exec(`INSERT INTO daily_reports VALUES('2026-11-01',?,0);
 			INSERT INTO daily_stats VALUES('2026-11-01',?,0,4,4,0,0,0,0,1,1,1,1,0,0);
 			INSERT INTO daily_stats VALUES('2026-11-01',?,1,4,4,0,0,0,0,1,1,1,1,0,0)`, id, id, id); err != nil {
 			t.Fatal(err)

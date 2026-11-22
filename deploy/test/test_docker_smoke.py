@@ -22,10 +22,13 @@ class SmokeSafetyTests(unittest.TestCase):
         db = sqlite3.connect(":memory:")
         self.addCleanup(db.close)
         db.executescript("""
-            CREATE TABLE clients(id INTEGER PRIMARY KEY, ranking_hidden INTEGER);
+            CREATE TABLE clients(id INTEGER PRIMARY KEY, github_id INTEGER, cpa_uuid TEXT, withdrawn INTEGER, ranking_hidden INTEGER);
+            CREATE TABLE client_writers(id INTEGER);
+            CREATE TABLE registration_requests(id TEXT);
             CREATE TABLE models(id INTEGER);
             CREATE TABLE report_window(id INTEGER);
             CREATE TABLE daily_reports(day TEXT);
+            CREATE TABLE daily_writer_versions(day TEXT);
             CREATE TABLE daily_stats(day TEXT);
             CREATE TABLE period_stats(kind TEXT);
             CREATE TABLE admin_accounts(id INTEGER);

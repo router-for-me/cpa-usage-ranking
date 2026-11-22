@@ -1,13 +1,10 @@
-import { randomBytes } from 'node:crypto'
 import { expect, test } from '@playwright/test'
+import { seedReportingSeat } from './database-fixtures'
 
 test('shows real submitted data across approved boards and periods', async ({ page, request }, info) => {
-  const secret = randomBytes(32).toString('base64url')
-  const headers = { Authorization: `Bearer ${secret}` }
-  const registration = await request.post('/v1/clients/register', { headers, data: { display_name: '真实测试参与者', avatar_id: 2 } })
-  expect(registration.status()).toBe(201)
+  const { headers } = seedReportingSeat('真实测试参与者', 2)
   const day = new Date().toISOString().slice(0, 10)
-  const report = await request.put(`/v1/reports/${day}`, { headers, data: {
+  const report = await request.put(`/v1/clients/report/${day}`, { headers, data: {
     schema_version: 1, revision: '1', items: [{ model: 'claude-fable-5', total_tokens: '9007199254740993', input_tokens: '10', output_tokens: '0', cache_read_tokens: '5', cache_write_tokens: '0', reasoning_tokens: '0', request_count: '2', success_count: '1', ttft_avg_ms: 12, ttft_samples: '1', latency_avg_ms: null, latency_samples: '0' }],
   } })
   expect(report.status()).toBe(200)

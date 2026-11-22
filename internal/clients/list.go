@@ -74,12 +74,10 @@ func (r *Repository) List(ctx context.Context, query ListQuery) (Page, error) {
 	defer rows.Close()
 	page := Page{Clients: make([]Client, 0, query.Limit)}
 	for rows.Next() {
-		var client Client
-		var created int64
-		if err := rows.Scan(&client.ID, &client.DisplayName, &client.AvatarID, &client.Disabled, &created, &client.RankingHidden); err != nil {
+		client, err := scanClient(rows)
+		if err != nil {
 			return Page{}, err
 		}
-		client.CreatedAt = time.UnixMilli(created).UTC()
 		page.Clients = append(page.Clients, client)
 	}
 	if err := rows.Err(); err != nil {

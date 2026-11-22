@@ -156,17 +156,35 @@ func run(logger *slog.Logger) (err error) {
 	if err := httpserver.MountReports(router, auth.NewAuthenticator(repository), reportAdmission, reportWriter, int64(cfg.ReportIngestion.MaxBodyBytes)); err != nil {
 		return err
 	}
-	registrationService, err := registration.NewService(repository, catalog, registration.Options{
-		CreationLimits: cfg.RegistrationCreations, NewIdentitiesEnabled: cfg.RegistrationEnabled,
-	})
+	httpserver.MountWithdraw(router, repository, cacheService.RequestRefresh)
+	var github *registration.GitHub
+	if cfg.GitHub != nil {
+		github, err = registration.NewGitHub(*cfg.GitHub, nil)
+		if err != nil {
+			return err
+		}
+	}
+	registrationOptions := registration.DefaultOptions()
+	registrationOptions.Enabled = cfg.RegistrationEnabled && github != nil
+	registrationService, err := registration.NewService(db, catalog.DefaultID(), registrationOptions)
 	if err != nil {
 		return err
 	}
+	if err := registrationService.PruneExpired(ctx); err != nil {
+		return fmt.Errorf("prune expired registrations: %w", err)
+	}
+	registrationCtx, stopRegistrations := context.WithCancel(context.Background())
+	registrationDone := make(chan struct{})
+	go func() {
+		defer close(registrationDone)
+		watchRegistrationExpiry(registrationCtx, registrationService, logger)
+	}()
+	defer func() { stopRegistrations(); <-registrationDone }()
 	requestLimiter, err := registration.NewRequestLimiter(cfg.RegistrationRequests, nil)
 	if err != nil {
 		return err
 	}
-	if err := httpserver.MountRegistration(router, registrationService, requestLimiter, httpserver.RegistrationHTTPOptions{
+	if err := httpserver.MountRegistration(router, registrationService, github, requestLimiter, httpserver.RegistrationHTTPOptions{
 		GroupIPv6By64: cfg.RegistrationIPv6By64, MaxBodyBytes: int64(cfg.RegistrationMaxBodyBytes),
 	}); err != nil {
 		return err
@@ -177,6 +195,21 @@ func run(logger *slog.Logger) (err error) {
 	}
 	logger.Info("http listener opened", "address", listener.Addr().String())
 	return httpserver.Serve(ctx, listener, router, cfg.ShutdownTimeout)
+}
+
+func watchRegistrationExpiry(ctx context.Context, registrationService *registration.Service, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := registrationService.PruneExpired(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("registration expiry cleanup failed")
+			}
+		}
+	}
 }
 
 // Observe midnight even without incoming reports. A one-minute maximum wait

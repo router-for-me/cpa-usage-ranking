@@ -156,8 +156,9 @@ model names. It seeds variable-size today/yesterday snapshots and the same
 synthetic historical shape/closed-day backlog. Save the stopped seed database
 unchanged for later reconstruction; use a separate copy for the test service.
 The manifest is private and contains the seed of the synthetic bearer secrets.
-The synthetic population starts with `--clients` stock identities; it is not a
-limit on later registrations.
+The fixed synthetic population is `--clients` offline-created seats, one writer
+per seat. Use the current tool to create fresh seeds/journals; earlier mixed
+registration workloads and their artifacts require their original tool version.
 
 Start `sustained` with a private new `--journal`, `--fixture`, formal
 `--models`, matching `--model-seed`, fixed `--arrival-seed`, and a numeric
@@ -206,9 +207,9 @@ observation. Sample output failure cancels the driver. A different new sample
 path is required on each invocation.
 
 Each task is a frozen full snapshot and independently reconstructible per-row
-delta. Approximately 1% of tasks introduce a new identity through real
-registration; that task is counted as pending while registration is outstanding.
-About 10% of identities are hot and receive half of existing-identity selections.
+delta. Tasks only call `PUT /v1/clients/report/{utc_day}` for pre-seeded seats;
+there is no OAuth registration in the workload. About 10% of seats are hot and
+receive half of selections when the hot group is present.
 Client classes are 60/30/10 percent light/medium/heavy. Their per-client model
 row limits are drawn from 1–4/5–16/17–48 respectively; actual daily snapshots
 can contain fewer rows and grow with updates. Task days are approximately 90/10 today/yesterday;
@@ -220,7 +221,7 @@ The private JSONL journal contains stage commands, planned/created tasks,
 complete synthetic bodies and delta records, attempt starts and finishes,
 sanitized error codes, and one-second cumulative samples. It contains no
 bearer secret or Authorization header, but still reveals detailed test data.
-`produced - confirmed` includes unsent, registration-dependent, retrying and
+`produced - confirmed` includes unsent, retrying and
 in-flight tasks; only a correct matching acknowledgement counts as confirmed.
 Retries preserve identity, day, revision and body and respect `Retry-After`.
 The default local bounds are 200,000 pending tasks, 4,096 in-flight attempts,
@@ -253,7 +254,7 @@ with no nonempty WAL, retain the closed seed database and journal, and use a
 
 This mode independently accumulates journal deltas and compares versions,
 digests and all twelve daily and period metrics against the stopped database;
-ambiguous commits and registrations are counted separately. Its result does
+ambiguous report commits are counted separately. Its result does
 not establish capacity or replace independent inspection of the raw evidence.
 
 After full verification, `summarize-sustained --journal ... --models ...` reads

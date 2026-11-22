@@ -23,9 +23,7 @@ type SustainedVerification struct {
 	Produced               int64  `json:"produced"`
 	Confirmed              int64  `json:"confirmed"`
 	Pending                int64  `json:"pending"`
-	Registrations          int64  `json:"registrations"`
 	UnconfirmedCommits     int64  `json:"unconfirmed_commits"`
-	AmbiguousRegistrations int64  `json:"ambiguous_registrations"`
 	CheckedClients         int64  `json:"checked_clients"`
 	CheckedDays            int64  `json:"checked_days"`
 	CheckedDailyRows       int64  `json:"checked_daily_rows"`
@@ -48,10 +46,6 @@ type verificationJob struct {
 	ambiguous bool
 }
 type verificationActor struct {
-	registered         bool
-	serverID           int64
-	regAttempts        int
-	regAmbiguous       bool
 	queue              []*verificationJob
 	inFlight           bool
 	action             string
@@ -70,22 +64,21 @@ type verifySnapshot struct {
 }
 
 type verificationState struct {
-	fixture                                                Fixture
-	modelIDs                                               map[string]int64
-	days                                                   map[verificationKey]*verificationDay
-	actors                                                 map[int]*verificationActor
-	acks                                                   map[verificationKey]verifySnapshot
-	created, arrivals, debt, confirmed, registered         int64
-	stage                                                  string
-	rate                                                   float64
-	debtRemaining                                          int
-	activeSince                                            int64
-	activeElapsed                                          time.Duration
-	sequence                                               int64
-	nextClient                                             int
-	maxAttempts                                            int
-	reportAttempts, regAttempts, reportRetries, regRetries int64
-	reportStatus, regStatus, reportCodes, regCodes         map[string]int64
+	fixture                            Fixture
+	modelIDs                           map[string]int64
+	days                               map[verificationKey]*verificationDay
+	actors                             map[int]*verificationActor
+	acks                               map[verificationKey]verifySnapshot
+	created, arrivals, debt, confirmed int64
+	stage                              string
+	rate                               float64
+	debtRemaining                      int
+	activeSince                        int64
+	activeElapsed                      time.Duration
+	sequence                           int64
+	maxAttempts                        int
+	reportAttempts, reportRetries      int64
+	reportStatus, reportCodes          map[string]int64
 }
 
 func verificationAdd(a, b reports.Metrics) (reports.Metrics, error) {
@@ -144,7 +137,7 @@ func snapshotRows(body []byte, ids map[string]int64) (verifySnapshot, map[report
 }
 
 func newVerificationState(ctx context.Context, fixture Fixture, seed *sql.DB) (*verificationState, error) {
-	s := &verificationState{fixture: fixture, modelIDs: map[string]int64{}, days: map[verificationKey]*verificationDay{}, actors: map[int]*verificationActor{}, acks: map[verificationKey]verifySnapshot{}, nextClient: fixture.Clients + 1, maxAttempts: 30, reportStatus: map[string]int64{}, regStatus: map[string]int64{}, reportCodes: map[string]int64{}, regCodes: map[string]int64{}}
+	s := &verificationState{fixture: fixture, modelIDs: map[string]int64{}, days: map[verificationKey]*verificationDay{}, actors: map[int]*verificationActor{}, acks: map[verificationKey]verifySnapshot{}, maxAttempts: 30, reportStatus: map[string]int64{}, reportCodes: map[string]int64{}}
 	rows, err := seed.QueryContext(ctx, "SELECT id,model_name FROM models")
 	if err != nil {
 		return nil, err
@@ -165,7 +158,7 @@ func newVerificationState(ctx context.Context, fixture Fixture, seed *sql.DB) (*
 	rows.Close()
 	day, _ := time.Parse(time.DateOnly, fixture.Day)
 	yesterday := day.AddDate(0, 0, -1).Format(time.DateOnly)
-	rows, err = seed.QueryContext(ctx, "SELECT day,client_id,revision FROM daily_reports WHERE day IN (?,?)", fixture.Day, yesterday)
+	rows, err = seed.QueryContext(ctx, "SELECT day,client_id,revision FROM daily_writer_versions WHERE day IN (?,?)", fixture.Day, yesterday)
 	if err != nil {
 		return nil, err
 	}
@@ -220,10 +213,7 @@ func (s *verificationState) actor(id int) *verificationActor {
 	if a := s.actors[id]; a != nil {
 		return a
 	}
-	a := &verificationActor{registered: id <= s.fixture.Clients}
-	if a.registered {
-		a.serverID = int64(id)
-	}
+	a := &verificationActor{}
 	s.actors[id] = a
 	return a
 }
@@ -233,12 +223,7 @@ func (s *verificationState) createdTask(r sustainedRecord) error {
 	if t == nil || (r.Source != "arrival" && r.Source != "debt") || t.Sequence != s.sequence+1 || r.PlannedUnixNS == 0 || r.TimeUnixNS == 0 {
 		return errors.New("invalid task creation")
 	}
-	if t.New {
-		if t.Client != s.nextClient {
-			return errors.New("new synthetic identity sequence mismatch")
-		}
-		s.nextClient++
-	} else if t.Client < 1 || t.Client >= s.nextClient {
+	if t.Client < 1 || t.Client > s.fixture.Clients {
 		return errors.New("task refers to unknown synthetic identity")
 	}
 	a := s.actor(t.Client)
@@ -329,20 +314,13 @@ func (s *verificationState) start(r sustainedRecord) error {
 	if a == nil || a.inFlight || len(a.queue) == 0 || a.queue[0].task.Sequence != r.Sequence || r.TimeUnixNS < a.notBefore {
 		return errors.New("invalid or premature attempt start")
 	}
-	if r.Action == "register" && !a.registered && r.Attempt == a.regAttempts+1 {
-		a.regAttempts++
-		s.regAttempts++
-		if r.Attempt > 1 {
-			s.regRetries++
-		}
-	} else if r.Action == "report" && a.registered && r.Attempt == a.queue[0].attempts+1 {
-		a.queue[0].attempts++
-		s.reportAttempts++
-		if r.Attempt > 1 {
-			s.reportRetries++
-		}
-	} else {
+	if r.Action != "report" || r.Attempt != a.queue[0].attempts+1 {
 		return errors.New("attempt action/order mismatch")
+	}
+	a.queue[0].attempts++
+	s.reportAttempts++
+	if r.Attempt > 1 {
+		s.reportRetries++
 	}
 	if r.Attempt < 1 || r.Attempt > s.maxAttempts {
 		return errors.New("attempt limit exceeded")
@@ -366,44 +344,25 @@ func (s *verificationState) finish(r sustainedRecord) error {
 	if r.Confirmed && r.RetryAtUnixNS != 0 {
 		return errors.New("confirmed attempt scheduled a retry")
 	}
-	if r.Action == "register" {
-		s.regStatus[strconv.Itoa(r.Status)]++
-		if r.ErrorCode != "" {
-			s.regCodes[r.ErrorCode]++
+	s.reportStatus[strconv.Itoa(r.Status)]++
+	if r.ErrorCode != "" {
+		s.reportCodes[r.ErrorCode]++
+	}
+	job := a.queue[0]
+	if r.Confirmed {
+		if r.Status != 200 || r.AckRevision != strconv.FormatInt(job.task.Revision, 10) {
+			return errors.New("invalid report confirmation")
 		}
-		if r.Confirmed {
-			if r.Status != 200 && r.Status != 201 || r.ServerClientID <= int64(s.fixture.Clients) {
-				return errors.New("invalid registration confirmation")
-			}
-			a.registered = true
-			a.serverID = r.ServerClientID
-			s.registered++
-		} else if ambiguousStatus(r) {
-			a.regAmbiguous = true
+		snapshot, _, err := snapshotRows(job.task.Body, s.modelIDs)
+		if err != nil {
+			return err
 		}
-	} else if r.Action == "report" {
-		s.reportStatus[strconv.Itoa(r.Status)]++
-		if r.ErrorCode != "" {
-			s.reportCodes[r.ErrorCode]++
-		}
-		job := a.queue[0]
-		if r.Confirmed {
-			if r.Status != 200 || r.AckRevision != strconv.FormatInt(job.task.Revision, 10) {
-				return errors.New("invalid report confirmation")
-			}
-			snapshot, _, err := snapshotRows(job.task.Body, s.modelIDs)
-			if err != nil {
-				return err
-			}
-			s.acks[verificationKey{client: r.Client, day: job.task.Day}] = snapshot
-			a.queue[0] = nil
-			a.queue = a.queue[1:]
-			s.confirmed++
-		} else if ambiguousStatus(r) {
-			job.ambiguous = true
-		}
-	} else {
-		return errors.New("unknown attempt action")
+		s.acks[verificationKey{client: r.Client, day: job.task.Day}] = snapshot
+		a.queue[0] = nil
+		a.queue = a.queue[1:]
+		s.confirmed++
+	} else if ambiguousStatus(r) {
+		job.ambiguous = true
 	}
 	a.inFlight = false
 	a.notBefore = r.RetryAtUnixNS
@@ -411,7 +370,7 @@ func (s *verificationState) finish(r sustainedRecord) error {
 }
 
 func (s *verificationState) verifySample(v *SustainedSample) error {
-	if v == nil || v.Produced != s.created || v.ArrivalProduced != s.arrivals || v.DebtProduced != s.debt || v.Stage != s.stage || v.TargetRate != s.rate || v.DebtRemaining != s.debtRemaining || v.Confirmed != s.confirmed || v.Pending != s.created-s.confirmed || v.ReportAttempts != s.reportAttempts || v.RegistrationAttempts != s.regAttempts || v.ReportRetries != s.reportRetries || v.RegistrationRetries != s.regRetries || v.Registrations != s.registered || !reflect.DeepEqual(v.ReportStatuses, s.reportStatus) || !reflect.DeepEqual(v.RegistrationStatuses, s.regStatus) || !reflect.DeepEqual(v.ReportErrorCodes, s.reportCodes) || !reflect.DeepEqual(v.RegistrationErrorCodes, s.regCodes) {
+	if v == nil || v.Produced != s.created || v.ArrivalProduced != s.arrivals || v.DebtProduced != s.debt || v.Stage != s.stage || v.TargetRate != s.rate || v.DebtRemaining != s.debtRemaining || v.Confirmed != s.confirmed || v.Pending != s.created-s.confirmed || v.ReportAttempts != s.reportAttempts || v.ReportRetries != s.reportRetries || !reflect.DeepEqual(v.ReportStatuses, s.reportStatus) || !reflect.DeepEqual(v.ReportErrorCodes, s.reportCodes) {
 		return errors.New("sample is inconsistent with task/attempt ledger")
 	}
 	inFlight := 0

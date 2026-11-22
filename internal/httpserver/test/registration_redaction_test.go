@@ -35,17 +35,25 @@ func TestRegistrationHTTPResponsesAndLogsRedactSecrets(t *testing.T) {
 	if err := f.repo.SetDisabled(context.Background(), seeded.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	r := f.send(t, `{}`, secret, nil)
+	id := f.start(t, secret, cpaUUID, returnURL)
+	f.approve(t, id, 1, "Name", "name", returnURL)
+	r := f.complete(t, secret, id)
 	requireHTTPError(t, r, 403, "client_disabled")
 	responses.Write(r.body)
-	if _, err := f.db.Writer.Exec(fmt.Sprintf(`CREATE TRIGGER sensitive_failure BEFORE INSERT ON clients BEGIN SELECT RAISE(ABORT, '%s'); END`, otherSecret)); err != nil {
+	otherID := f.start(t, otherSecret, cpaUUID, returnURL)
+	f.approve(t, otherID, 2, "Name", "name", returnURL)
+	if _, err := f.db.Writer.Exec(fmt.Sprintf(`CREATE TRIGGER sensitive_failure BEFORE INSERT ON client_writers BEGIN SELECT RAISE(ABORT, '%s'); END`, otherSecret)); err != nil {
 		t.Fatal(err)
 	}
-	r = f.send(t, `{"display_name":"Name"}`, otherSecret, nil)
+	r = f.complete(t, otherSecret, otherID)
 	requireHTTPError(t, r, 500, "internal_error")
 	responses.Write(r.body)
+	var seats int
+	if err := f.db.Reader.QueryRow("SELECT count(*) FROM clients").Scan(&seats); err != nil || seats != 1 {
+		t.Fatalf("failed writer insert leaked a seat: %d %v", seats, err)
+	}
 	// 重复 Authorization 头必须拒绝，不任选其一。
-	request, err := http.NewRequest("POST", f.server.URL+"/v1/clients/register", strings.NewReader(`{}`))
+	request, err := http.NewRequest("POST", f.server.URL+startPath, strings.NewReader(validStartBody))
 	if err != nil {
 		t.Fatal(err)
 	}

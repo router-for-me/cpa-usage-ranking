@@ -62,7 +62,7 @@ func TestSyntheticFixtureIsExclusiveAndSettlementConservesTotals(t *testing.T) {
 	}
 	defer db.Close()
 	var hash []byte
-	if err = db.Reader.QueryRow("SELECT token_hash FROM clients WHERE id=1").Scan(&hash); err != nil {
+	if err = db.Reader.QueryRow("SELECT token_hash FROM client_writers WHERE id=1").Scan(&hash); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := base64.RawURLEncoding.DecodeString(f.Secret(1))

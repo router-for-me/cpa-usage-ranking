@@ -17,9 +17,10 @@ func ClientAuthentication(authenticator *auth.Authenticator) gin.HandlerFunc {
 		client, err := authenticator.Authenticate(c.Request.Context(), c.Request.Header)
 		switch {
 		case errors.Is(err, auth.ErrInvalidCredential):
-			c.Header("WWW-Authenticate", "Bearer")
-			writeError(c, http.StatusUnauthorized, "invalid_credential", "Invalid client credential")
-		case errors.Is(err, auth.ErrClientDisabled):
+			writeInvalidCredential(c)
+		case errors.Is(err, clients.ErrWithdrawn):
+			writeError(c, http.StatusForbidden, "client_withdrawn", "Client has withdrawn")
+		case errors.Is(err, clients.ErrDisabled):
 			writeError(c, http.StatusForbidden, "client_disabled", "Client is disabled")
 		case err != nil:
 			writeError(c, http.StatusInternalServerError, "internal_error", "Internal server error")
@@ -30,12 +31,14 @@ func ClientAuthentication(authenticator *auth.Authenticator) gin.HandlerFunc {
 	}
 }
 
-// AuthenticatedClient reads only middleware-established identity, never input IDs.
-func AuthenticatedClient(c *gin.Context) (clients.Client, bool) {
-	value, ok := c.Get(authenticatedClientKey)
-	if !ok {
-		return clients.Client{}, false
-	}
-	client, ok := value.(clients.Client)
-	return client, ok
+// AuthenticatedClient reads only middleware-established writer and seat, never input IDs.
+func AuthenticatedClient(c *gin.Context) (clients.Writer, bool) {
+	value, _ := c.Get(authenticatedClientKey)
+	writer, ok := value.(clients.Writer)
+	return writer, ok
+}
+
+func writeInvalidCredential(c *gin.Context) {
+	c.Header("WWW-Authenticate", "Bearer")
+	writeError(c, http.StatusUnauthorized, "invalid_credential", "Invalid client credential")
 }

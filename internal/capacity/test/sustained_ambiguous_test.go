@@ -20,21 +20,7 @@ func TestSustainedVerifierRecognizesAmbiguousCommit(t *testing.T) {
 	ctx := context.Background()
 	catalogPath, names := sustainedCatalog(t)
 	day := time.Now().UTC().Format(time.DateOnly)
-	var seed uint64
-	for candidate := uint64(1); candidate < 100; candidate++ {
-		m, e := capacity.NewSustainedModel(day, names, 1, candidate)
-		if e != nil {
-			t.Fatal(e)
-		}
-		task, e := m.Next()
-		if e != nil {
-			t.Fatal(e)
-		}
-		if !task.New {
-			seed = candidate
-			break
-		}
-	}
+	const seed uint64 = 1
 	path := filepath.Join(t.TempDir(), "service.sqlite")
 	f, err := capacity.SeedSustained(ctx, path, catalogPath, 1, 2, 0, day, seed)
 	if err != nil {
@@ -89,7 +75,7 @@ func TestSustainedVerifierRecognizesAmbiguousCommit(t *testing.T) {
 			w.WriteHeader(422)
 			return
 		}
-		if _, e = store.Apply(r.Context(), 1, r.URL.Path[len("/v1/reports/"):], prepared); e != nil {
+		if _, e = store.Apply(r.Context(), 1, r.URL.Path[len("/v1/clients/report/"):], prepared); e != nil {
 			w.WriteHeader(500)
 			return
 		}

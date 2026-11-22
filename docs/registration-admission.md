@@ -1,41 +1,14 @@
-# Registration request admission
+# Registration start admission
 
-Registration has its own source and global request budgets. These are distinct
-from new-identity creation quotas: **every admitted attempt** is counted before
-credential or body validation, including failed requests and safe retries, while
-requests already rejected by per-source or source-capacity limits do not consume
-remaining global slots. A globally exhausted gate stops immediately. This does
-not apply registration budgets to health, readiness, frontend or avatar routes.
-
-The internal `registration.RequestLimiter` and Gin `RegistrationAdmission`
-middleware use fixed windows, starting at the first request for a source (and
-independently for the global window), not calendar-minute buckets. Configuration
-is read at startup; all values must be positive:
+Only `POST /v1/clients/register/start` uses the source/global request gate. Admitted attempts count **before** Bearer and body validation, including malformed input. Attempts refused by per-source or source-state capacity do not consume remaining global slots; an exhausted global gate stops immediately. Source resolution follows [trusted-proxy rules](registration-sources.md).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `RANKING_REGISTRATION_SOURCE_REQUESTS` | `20` | Attempts per source per window |
 | `RANKING_REGISTRATION_GLOBAL_REQUESTS` | `200` | Attempts across all sources per window |
-| `RANKING_REGISTRATION_REQUEST_WINDOW` | `1m` | Fixed request-window duration |
-| `RANKING_REGISTRATION_REQUEST_MAX_SOURCES` | `10000` | Maximum live source records |
+| `RANKING_REGISTRATION_REQUEST_WINDOW` | `1m` | Fixed window duration from the first attempt |
+| `RANKING_REGISTRATION_REQUEST_MAX_SOURCES` | `10000` | Maximum live source-rate entries |
 
-Source resolution follows [trusted-proxy rules](registration-sources.md).
-A mutex arbitrates concurrent requests. Source records expire at the end of
-their window and are reclaimed on admission; repeated attempts cannot extend a
-window indefinitely. The expiration list and map each hold at most the configured
-number of sources. When full, new sources are rejected instead of evicting
-active sources. Existing sources retain their counters. No permanent IP history,
-Redis, distributed locks or background scheduler is used.
+The in-memory fixed-window state is per process and resets on restart. Expired sources are reclaimed on admission; new sources cannot evict active ones. `registration_rate_limited` indicates the source or global budget is exhausted. `registration_capacity` indicates the source-state or outstanding-request limit was reached. Both are HTTP `429` with `Retry-After` seconds rounded up, minimum one. Wait and add jitter; a subsequent attempt is not guaranteed admission.
 
-Rejections are JSON 429 with `registration_rate_limited` or
-`registration_capacity`. `Retry-After` is a positive integer number of seconds,
-rounded up to the relevant window expiry (or earliest capacity expiry).
-Clients should wait and add retry jitter; passing a rate gate is not a guarantee
-of passing later validation/quota gates. Fixed windows may allow bursts across
-adjacent windows; these defaults are deployment controls, not a rolling request
-rate promise.
-
-State is local to one process and resets on restart; it is not shared across
-instances and does not prove one-human-one-identity. The gates are attached only
-to the protected [registration POST endpoint](registration-api.md), before Bearer
-and bounded JSON validation. Health and static resources are unaffected.
+An admitted valid start can allocate an opaque request ID. At most 2,000 unexpired transactions (including retained completion results) exist at once; each has a ten-minute lifetime. SQLite holds this bounded state across restarts; expiry is enforced on use and expired rows are removed on startup, periodically and as needed on start. No still-valid result is evicted. The control limits allocation, not the number of successful seats a source or GitHub account may register. Complete never spends another start slot. Reports have separate rate limits keyed by seat; health, avatars, and public reads are unaffected. See the [registration API](registration-api.md).

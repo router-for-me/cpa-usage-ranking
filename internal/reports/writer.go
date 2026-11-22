@@ -34,7 +34,7 @@ type WriteResult struct {
 
 type writeRequest struct {
 	ctx               context.Context
-	clientID          int64
+	writerID          int64
 	day               string
 	prepared          Prepared
 	result            chan WriteResult
@@ -69,7 +69,7 @@ func NewWriter(processor SnapshotProcessor, options WriterOptions) (*Writer, err
 
 // Enqueue returns immediately on admission or full queue. The result channel is
 // buffered: a caller that disconnects never blocks the single worker.
-func (w *Writer) Enqueue(ctx context.Context, clientID int64, day string, prepared Prepared) (<-chan WriteResult, error) {
+func (w *Writer) Enqueue(ctx context.Context, writerID int64, day string, prepared Prepared) (<-chan WriteResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -78,7 +78,7 @@ func (w *Writer) Enqueue(ctx context.Context, clientID int64, day string, prepar
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	req := writeRequest{ctx: ctx, clientID: clientID, day: day, prepared: prepared, result: make(chan WriteResult, 1)}
+	req := writeRequest{ctx: ctx, writerID: writerID, day: day, prepared: prepared, result: make(chan WriteResult, 1)}
 	select {
 	case w.queue <- req:
 		return req.result, nil
@@ -173,7 +173,7 @@ func (w *Writer) execute(req writeRequest) {
 		req.result <- WriteResult{Err: err}
 		return
 	}
-	revision, err := w.processor.Apply(ctx, req.clientID, req.day, req.prepared)
+	revision, err := w.processor.Apply(ctx, req.writerID, req.day, req.prepared)
 	req.result <- WriteResult{Revision: revision, Err: err}
 }
 

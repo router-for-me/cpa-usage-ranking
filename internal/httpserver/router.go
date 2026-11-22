@@ -58,6 +58,16 @@ func NewRouterWithReadiness(logger *slog.Logger, ready func(context.Context) boo
 	return router
 }
 
+// mountExact keeps Gin's usual redirects for existing routes, but never
+// redirects a credential-bearing protocol request (including OAuth queries).
+func mountExact(router *gin.Engine, method, path string, handlers ...gin.HandlerFunc) {
+	router.Handle(method, path, handlers...)
+	router.Handle(method, path+"/", func(c *gin.Context) {
+		c.Header("Referrer-Policy", "no-referrer")
+		writeError(c, http.StatusNotFound, "not_found", "Not found")
+	})
+}
+
 func writeError(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"code": code, "message": message}})
 }

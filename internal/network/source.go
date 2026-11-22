@@ -1,4 +1,4 @@
-// Package network derives registration quota sources, never client identities.
+// Package network derives registration rate-limit sources, never client identities.
 package network
 
 import (

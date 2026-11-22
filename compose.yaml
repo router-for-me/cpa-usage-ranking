@@ -6,6 +6,11 @@ services:
       context: .
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      - RANKING_PUBLIC_ORIGIN
+      - RANKING_GITHUB_CLIENT_ID
+      - RANKING_GITHUB_CLIENT_SECRET
+      - RANKING_REGISTRATION_ENABLED
     volumes:
       - ranking-data:/data
     stop_grace_period: 30s

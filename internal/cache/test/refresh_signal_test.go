@@ -58,6 +58,9 @@ func TestManagementRefreshCoalescesAndRetainsChangesDuringBuild(t *testing.T) {
 	}
 	permits <- struct{}{}
 	getRound(2)
+	if _, err := c.Current(); !errors.Is(err, cache.ErrUnavailable) {
+		t.Fatal("superseded pre-change build was published")
+	}
 	// Signal while the follow-up build is in progress: it must not be discarded
 	// with old timer ticks, and a burst must still produce only one later round.
 	for range 100 {
@@ -65,6 +68,9 @@ func TestManagementRefreshCoalescesAndRetainsChangesDuringBuild(t *testing.T) {
 	}
 	permits <- struct{}{}
 	getRound(3)
+	if _, err := c.Current(); !errors.Is(err, cache.ErrUnavailable) {
+		t.Fatal("second superseded build was published")
+	}
 	permits <- struct{}{}
 	waitFor(t, func() bool {
 		snapshot, err := c.Current()

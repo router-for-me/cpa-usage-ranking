@@ -132,7 +132,7 @@ func Load(ctx context.Context, f Fixture, o LoadOptions) (Summary, error) {
 					results <- r
 					continue
 				}
-				req, e := http.NewRequestWithContext(ctx, http.MethodPut, u.Scheme+"://"+u.Host+"/v1/reports/"+date, bytes.NewReader(body))
+				req, e := http.NewRequestWithContext(ctx, http.MethodPut, u.Scheme+"://"+u.Host+"/v1/clients/report/"+date, bytes.NewReader(body))
 				if e != nil {
 					results <- r
 					continue
@@ -390,7 +390,7 @@ func Verify(ctx context.Context, f Fixture, path string, ledgers []string) (map[
 	for k, versions := range attempts {
 		var revision int64
 		var digest []byte
-		if err = db.QueryRowContext(ctx, `SELECT revision,digest FROM daily_reports WHERE day=? AND client_id=?`, k.day, k.id).Scan(&revision, &digest); err != nil {
+		if err = db.QueryRowContext(ctx, `SELECT revision,digest FROM daily_writer_versions WHERE day=? AND writer_id=?`, k.day, k.id).Scan(&revision, &digest); err != nil {
 			return nil, err
 		}
 		if revision < confirmed[k] {

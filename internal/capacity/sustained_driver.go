@@ -50,38 +50,32 @@ type SustainedOptions struct {
 // SustainedSample is cumulative, including work retained across pauses and
 // resumes. Pending is always Produced-Confirmed, not a server queue gauge.
 type SustainedSample struct {
-	TimeUnixNS             int64            `json:"time_unix_ns"`
-	Stage                  string           `json:"stage"`
-	StageStartUnixNS       int64            `json:"stage_start_unix_ns,omitempty"`
-	Boundary               string           `json:"boundary,omitempty"`
-	TargetRate             float64          `json:"target_rate"`
-	Produced               int64            `json:"produced"`
-	ArrivalProduced        int64            `json:"arrival_produced"`
-	DebtProduced           int64            `json:"debt_produced"`
-	Confirmed              int64            `json:"confirmed"`
-	Pending                int64            `json:"pending"`
-	OldestPendingMS        float64          `json:"oldest_pending_ms"`
-	ReportAttempts         int64            `json:"report_attempts"`
-	RegistrationAttempts   int64            `json:"registration_attempts"`
-	Registrations          int64            `json:"registrations"`
-	ReportRetries          int64            `json:"report_retries"`
-	RegistrationRetries    int64            `json:"registration_retries"`
-	InFlight               int              `json:"in_flight"`
-	WrittenUnfinished      int64            `json:"written_unfinished"`
-	WrittenPeak            int64            `json:"written_peak"`
-	LateTraceCallbacks     int64            `json:"late_trace_callbacks"`
-	ActiveSeconds          float64          `json:"active_seconds"`
-	ReadyActors            int              `json:"ready_actors"`
-	RegistrationDependent  int              `json:"registration_dependent"`
-	RetryingActors         int              `json:"retrying_actors"`
-	DebtRemaining          int              `json:"debt_remaining"`
-	MaxArrivalLagMS        float64          `json:"max_arrival_lag_ms"`
-	MaxJournalLagMS        float64          `json:"max_journal_lag_ms"`
-	JournalBytes           int64            `json:"journal_bytes"`
-	ReportStatuses         map[string]int64 `json:"report_statuses"`
-	RegistrationStatuses   map[string]int64 `json:"registration_statuses"`
-	ReportErrorCodes       map[string]int64 `json:"report_error_codes"`
-	RegistrationErrorCodes map[string]int64 `json:"registration_error_codes"`
+	TimeUnixNS         int64            `json:"time_unix_ns"`
+	Stage              string           `json:"stage"`
+	StageStartUnixNS   int64            `json:"stage_start_unix_ns,omitempty"`
+	Boundary           string           `json:"boundary,omitempty"`
+	TargetRate         float64          `json:"target_rate"`
+	Produced           int64            `json:"produced"`
+	ArrivalProduced    int64            `json:"arrival_produced"`
+	DebtProduced       int64            `json:"debt_produced"`
+	Confirmed          int64            `json:"confirmed"`
+	Pending            int64            `json:"pending"`
+	OldestPendingMS    float64          `json:"oldest_pending_ms"`
+	ReportAttempts     int64            `json:"report_attempts"`
+	ReportRetries      int64            `json:"report_retries"`
+	InFlight           int              `json:"in_flight"`
+	WrittenUnfinished  int64            `json:"written_unfinished"`
+	WrittenPeak        int64            `json:"written_peak"`
+	LateTraceCallbacks int64            `json:"late_trace_callbacks"`
+	ActiveSeconds      float64          `json:"active_seconds"`
+	ReadyActors        int              `json:"ready_actors"`
+	RetryingActors     int              `json:"retrying_actors"`
+	DebtRemaining      int              `json:"debt_remaining"`
+	MaxArrivalLagMS    float64          `json:"max_arrival_lag_ms"`
+	MaxJournalLagMS    float64          `json:"max_journal_lag_ms"`
+	JournalBytes       int64            `json:"journal_bytes"`
+	ReportStatuses     map[string]int64 `json:"report_statuses"`
+	ReportErrorCodes   map[string]int64 `json:"report_error_codes"`
 }
 
 type sustainedHeader struct {
@@ -110,7 +104,6 @@ type sustainedRecord struct {
 	Attempt          int                        `json:"attempt,omitempty"`
 	Status           int                        `json:"status,omitempty"`
 	Confirmed        bool                       `json:"confirmed,omitempty"`
-	ServerClientID   int64                      `json:"server_client_id,omitempty"`
 	AckRevision      string                     `json:"ack_revision,omitempty"`
 	Error            string                     `json:"error,omitempty"`
 	ErrorCode        string                     `json:"error_code,omitempty"`
@@ -237,13 +230,10 @@ type sustainedJob struct {
 }
 
 type sustainedActor struct {
-	id                   int
-	serverID             int64
-	registered           bool
-	registrationAttempts int
-	queue                []*sustainedJob
-	inFlight, enqueued   bool
-	retryAt              time.Time
+	id                 int
+	queue              []*sustainedJob
+	inFlight, enqueued bool
+	retryAt            time.Time
 }
 
 type oldestJobs []*sustainedJob
@@ -279,41 +269,36 @@ func (h *retryHeap) Pop() any {
 }
 
 type sustainedState struct {
-	model                                                                 *SustainedModel
-	actors                                                                map[int]*sustainedActor
-	owners                                                                map[int64]int
-	oldest                                                                oldestJobs
-	retries                                                               retryHeap
-	ready                                                                 []int
-	produced, arrivals, debt, confirmed                                   int64
-	reportAttempts, regAttempts, reportRetries, regRetries, registrations int64
-	reportStatus, regStatus, reportCodes, regCodes                        map[string]int64
-	inFlight                                                              int
-	stage                                                                 string
-	stageStart                                                            int64
-	rate, lastRate                                                        float64
-	activeFrom                                                            time.Time
-	activeElapsed                                                         time.Duration
-	debtRemaining                                                         int
-	debtPlanned                                                           int64
-	nextArrival                                                           time.Time
-	arrivalRNG                                                            splitMix
-	maxArrivalLag                                                         time.Duration
+	model                               *SustainedModel
+	actors                              map[int]*sustainedActor
+	oldest                              oldestJobs
+	retries                             retryHeap
+	ready                               []int
+	produced, arrivals, debt, confirmed int64
+	reportAttempts, reportRetries       int64
+	reportStatus, reportCodes           map[string]int64
+	inFlight                            int
+	stage                               string
+	stageStart                          int64
+	rate, lastRate                      float64
+	activeFrom                          time.Time
+	activeElapsed                       time.Duration
+	debtRemaining                       int
+	debtPlanned                         int64
+	nextArrival                         time.Time
+	arrivalRNG                          splitMix
+	maxArrivalLag                       time.Duration
 }
 
 func newSustainedState(model *SustainedModel, seed uint64) *sustainedState {
-	return &sustainedState{model: model, actors: map[int]*sustainedActor{}, owners: map[int64]int{}, reportStatus: map[string]int64{}, regStatus: map[string]int64{}, reportCodes: map[string]int64{}, regCodes: map[string]int64{}, arrivalRNG: splitMix{state: seed}}
+	return &sustainedState{model: model, actors: map[int]*sustainedActor{}, reportStatus: map[string]int64{}, reportCodes: map[string]int64{}, arrivalRNG: splitMix{state: seed}}
 }
 
-func (s *sustainedState) actor(id, stock int) *sustainedActor {
+func (s *sustainedState) actor(id int) *sustainedActor {
 	if a := s.actors[id]; a != nil {
 		return a
 	}
-	a := &sustainedActor{id: id, registered: id <= stock}
-	if a.registered {
-		a.serverID = int64(id)
-		s.owners[a.serverID] = id
-	}
+	a := &sustainedActor{id: id}
 	s.actors[id] = a
 	return a
 }
@@ -326,8 +311,8 @@ func (s *sustainedState) enqueue(a *sustainedActor, now time.Time) {
 	s.ready = append(s.ready, a.id)
 }
 
-func (s *sustainedState) addTask(t SustainedTask, source string, created, planned int64, stock int) {
-	a := s.actor(t.Client, stock)
+func (s *sustainedState) addTask(t SustainedTask, source string, created, planned int64) {
+	a := s.actor(t.Client)
 	j := &sustainedJob{task: t, source: source, created: created, planned: planned}
 	a.queue = append(a.queue, j)
 	heap.Push(&s.oldest, j)
@@ -350,11 +335,8 @@ func (s *sustainedState) sample(j *sustainedJournal, trace *sustainedTraceCounts
 			age = 0
 		}
 	}
-	regDep, retrying := 0, 0
+	retrying := 0
 	for _, a := range s.actors {
-		if len(a.queue) > 0 && !a.registered {
-			regDep += len(a.queue)
-		}
 		if len(a.queue) > 0 && now.Before(a.retryAt) {
 			retrying++
 		}
@@ -370,7 +352,7 @@ func (s *sustainedState) sample(j *sustainedJournal, trace *sustainedTraceCounts
 	if !s.activeFrom.IsZero() {
 		active += now.Sub(s.activeFrom)
 	}
-	return SustainedSample{TimeUnixNS: now.UnixNano(), Stage: s.stage, StageStartUnixNS: s.stageStart, TargetRate: s.rate, Produced: s.produced, ArrivalProduced: s.arrivals, DebtProduced: s.debt, Confirmed: s.confirmed, Pending: s.produced - s.confirmed, OldestPendingMS: age, ReportAttempts: s.reportAttempts, RegistrationAttempts: s.regAttempts, Registrations: s.registrations, ReportRetries: s.reportRetries, RegistrationRetries: s.regRetries, InFlight: s.inFlight, WrittenUnfinished: trace.written.Load(), WrittenPeak: trace.peak.Load(), LateTraceCallbacks: trace.late.Load(), ActiveSeconds: active.Seconds(), ReadyActors: len(s.ready), RegistrationDependent: regDep, RetryingActors: retrying, DebtRemaining: s.debtRemaining, MaxArrivalLagMS: float64(s.maxArrivalLag) / float64(time.Millisecond), MaxJournalLagMS: float64(j.lag) / float64(time.Millisecond), JournalBytes: j.bytes, ReportStatuses: copyMap(s.reportStatus), RegistrationStatuses: copyMap(s.regStatus), ReportErrorCodes: copyMap(s.reportCodes), RegistrationErrorCodes: copyMap(s.regCodes)}
+	return SustainedSample{TimeUnixNS: now.UnixNano(), Stage: s.stage, StageStartUnixNS: s.stageStart, TargetRate: s.rate, Produced: s.produced, ArrivalProduced: s.arrivals, DebtProduced: s.debt, Confirmed: s.confirmed, Pending: s.produced - s.confirmed, OldestPendingMS: age, ReportAttempts: s.reportAttempts, ReportRetries: s.reportRetries, InFlight: s.inFlight, WrittenUnfinished: trace.written.Load(), WrittenPeak: trace.peak.Load(), LateTraceCallbacks: trace.late.Load(), ActiveSeconds: active.Seconds(), ReadyActors: len(s.ready), RetryingActors: retrying, DebtRemaining: s.debtRemaining, MaxArrivalLagMS: float64(s.maxArrivalLag) / float64(time.Millisecond), MaxJournalLagMS: float64(j.lag) / float64(time.Millisecond), JournalBytes: j.bytes, ReportStatuses: copyMap(s.reportStatus), ReportErrorCodes: copyMap(s.reportCodes)}
 }
 
 func sustainedHeaderFor(f Fixture, o SustainedOptions) sustainedHeader {
@@ -480,7 +462,7 @@ func restoreSustained(file *os.File, header sustainedHeader, state *sustainedSta
 			if e != nil || !reflect.DeepEqual(want, *r.Task) {
 				return fmt.Errorf("non-reproducible task at line %d", lineNo)
 			}
-			state.addTask(*r.Task, r.Source, r.TimeUnixNS, r.PlannedUnixNS, header.Stock)
+			state.addTask(*r.Task, r.Source, r.TimeUnixNS, r.PlannedUnixNS)
 			if r.Source == "debt" {
 				state.debtRemaining--
 				if state.debtRemaining < 0 {
@@ -497,20 +479,13 @@ func restoreSustained(file *os.File, header sustainedHeader, state *sustainedSta
 				(!a.retryAt.IsZero() && r.TimeUnixNS < a.retryAt.UnixNano()) {
 				return fmt.Errorf("bad or premature start at line %d", lineNo)
 			}
-			if r.Action == "register" && !a.registered && r.Attempt == a.registrationAttempts+1 {
-				a.registrationAttempts++
-				state.regAttempts++
-				if r.Attempt > 1 {
-					state.regRetries++
-				}
-			} else if r.Action == "report" && a.registered && r.Attempt == a.queue[0].attempts+1 {
-				a.queue[0].attempts++
-				state.reportAttempts++
-				if r.Attempt > 1 {
-					state.reportRetries++
-				}
-			} else {
+			if r.Action != "report" || r.Attempt != a.queue[0].attempts+1 {
 				return fmt.Errorf("bad attempt at line %d", lineNo)
+			}
+			a.queue[0].attempts++
+			state.reportAttempts++
+			if r.Attempt > 1 {
+				state.reportRetries++
 			}
 			a.inFlight = true
 		case "finish":
@@ -651,49 +626,24 @@ func (s *sustainedState) replayFinish(r sustainedRecord) error {
 	if a == nil || !a.inFlight || len(a.queue) == 0 || a.queue[0].task.Sequence != r.Sequence {
 		return errors.New("finish has no matching start")
 	}
-	if r.Action == "register" {
-		if a.registered || r.Attempt != a.registrationAttempts {
-			return errors.New("mismatched registration finish")
-		}
-		s.regStatus[strconv.Itoa(r.Status)]++
-		if r.ErrorCode != "" {
-			s.regCodes[r.ErrorCode]++
-		}
-		if r.Confirmed {
-			if r.Status != 200 && r.Status != 201 {
-				return errors.New("invalid registration confirmation status")
-			}
-			if r.ServerClientID <= int64(s.model.stock) {
-				return errors.New("invalid registration ID")
-			}
-			if owner, ok := s.owners[r.ServerClientID]; ok && owner != a.id {
-				return errors.New("duplicate server identity")
-			}
-			a.registered, a.serverID = true, r.ServerClientID
-			s.owners[a.serverID] = a.id
-			s.registrations++
-		}
-	} else if r.Action == "report" {
-		if !a.registered || r.Attempt != a.queue[0].attempts {
-			return errors.New("mismatched report finish")
-		}
-		s.reportStatus[strconv.Itoa(r.Status)]++
-		if r.ErrorCode != "" {
-			s.reportCodes[r.ErrorCode]++
-		}
-		if r.Confirmed {
-			if r.Status != 200 || r.AckRevision != strconv.FormatInt(a.queue[0].task.Revision, 10) {
-				return errors.New("invalid report confirmation")
-			}
-			a.queue[0].done = true
-			heap.Remove(&s.oldest, a.queue[0].heapIndex)
-			a.queue[0] = nil
-			a.queue = a.queue[1:]
-			s.confirmed++
-		}
-	} else {
-		return errors.New("unknown finish action")
+	if r.Action != "report" || r.Attempt != a.queue[0].attempts {
+		return errors.New("mismatched report finish")
 	}
+	s.reportStatus[strconv.Itoa(r.Status)]++
+	if r.ErrorCode != "" {
+		s.reportCodes[r.ErrorCode]++
+	}
+	if r.Confirmed {
+		if r.Status != 200 || r.AckRevision != strconv.FormatInt(a.queue[0].task.Revision, 10) {
+			return errors.New("invalid report confirmation")
+		}
+		a.queue[0].done = true
+		heap.Remove(&s.oldest, a.queue[0].heapIndex)
+		a.queue[0] = nil
+		a.queue = a.queue[1:]
+		s.confirmed++
+	}
+
 	a.inFlight = false
 	if r.RetryAtUnixNS > 0 {
 		a.retryAt = time.Unix(0, r.RetryAtUnixNS)

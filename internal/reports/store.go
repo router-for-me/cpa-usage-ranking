@@ -8,11 +8,9 @@ import (
 	"sort"
 	"time"
 
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/models"
 )
-
-var ErrClientDisabled = errors.New("client disabled")
-var ErrClientMissing = errors.New("client missing")
 
 type RevisionConflict struct{ Current int64 }
 
@@ -35,8 +33,8 @@ func NewStore(writer *sql.DB, registry *models.Registry, now func() time.Time) *
 
 // Apply confirms only after commit, or after reading an identical committed
 // version. Watermark advancement is intentionally a separate committed write.
-func (s *Store) Apply(ctx context.Context, clientID int64, day string, prepared Prepared) (int64, error) {
-	if !prepared.valid || clientID <= 0 {
+func (s *Store) Apply(ctx context.Context, writerID int64, day string, prepared Prepared) (int64, error) {
+	if !prepared.valid || writerID <= 0 {
 		return 0, ErrInvalid
 	}
 	var revision int64
@@ -45,36 +43,42 @@ func (s *Store) Apply(ctx context.Context, clientID int64, day string, prepared 
 			return fmt.Errorf("advance report window: %w", err)
 		}
 		var err error
-		revision, err = s.applyOnce(ctx, conn, clientID, day, prepared)
+		revision, err = s.applyOnce(ctx, conn, writerID, day, prepared)
 		return err
 	})
 	return revision, err
 }
 
-func (s *Store) applyOnce(ctx context.Context, conn *sql.Conn, clientID int64, day string, prepared Prepared) (int64, error) {
+func (s *Store) applyOnce(ctx context.Context, conn *sql.Conn, writerID int64, day string, prepared Prepared) (int64, error) {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin report: %w", err)
 	}
 	defer tx.Rollback()
-	if err := CheckWindow(ctx, tx, day, s.now()); err != nil {
-		return 0, err
-	}
-	var disabled bool
-	err = tx.QueryRowContext(ctx, "SELECT disabled FROM clients WHERE id=?", clientID).Scan(&disabled)
+	// 写锁内重新查席位状态；退出之后连旧版本的幂等确认也不再允许。
+	var clientID int64
+	var disabled, withdrawn bool
+	err = tx.QueryRowContext(ctx, `SELECT c.id,c.disabled,c.withdrawn FROM client_writers w JOIN clients c ON c.id=w.client_id WHERE w.id=?`, writerID).
+		Scan(&clientID, &disabled, &withdrawn)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrClientMissing
+		return 0, clients.ErrNotFound
 	}
 	if err != nil {
 		return 0, fmt.Errorf("read client state: %w", err)
 	}
+	if withdrawn {
+		return 0, clients.ErrWithdrawn
+	}
 	if disabled {
-		return 0, ErrClientDisabled
+		return 0, clients.ErrDisabled
+	}
+	if err := CheckWindow(ctx, tx, day, s.now()); err != nil {
+		return 0, err
 	}
 
 	var current Version
 	var digest []byte
-	err = tx.QueryRowContext(ctx, "SELECT revision,digest FROM daily_reports WHERE day=? AND client_id=?", day, clientID).Scan(&current.Revision, &digest)
+	err = tx.QueryRowContext(ctx, "SELECT revision,digest FROM daily_writer_versions WHERE day=? AND writer_id=?", day, writerID).Scan(&current.Revision, &digest)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("read report version: %w", err)
@@ -115,12 +119,13 @@ func (s *Store) applyOnce(ctx context.Context, conn *sql.Conn, clientID int64, d
 	if err != nil {
 		return 0, err
 	}
-	if exists {
-		_, err = tx.ExecContext(ctx, `UPDATE daily_reports SET revision=?,digest=?,received_at_ms=? WHERE day=? AND client_id=?`, prepared.revision, prepared.digest[:], s.now().UTC().UnixMilli(), day, clientID)
-	} else {
-		_, err = tx.ExecContext(ctx, `INSERT INTO daily_reports(day,client_id,revision,digest,received_at_ms) VALUES(?,?,?,?,?)`, day, clientID, prepared.revision, prepared.digest[:], s.now().UTC().UnixMilli())
+	// 修订号只在同一上报端之间比较，但整日数据始终按席位替换。
+	if _, err := tx.ExecContext(ctx, `INSERT INTO daily_reports(day,client_id,received_at_ms) VALUES(?,?,?)
+		ON CONFLICT(day,client_id) DO UPDATE SET received_at_ms=excluded.received_at_ms`, day, clientID, s.now().UnixMilli()); err != nil {
+		return 0, fmt.Errorf("write daily report: %w", err)
 	}
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO daily_writer_versions(day,writer_id,client_id,revision,digest) VALUES(?,?,?,?,?)
+		ON CONFLICT(day,writer_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest`, day, writerID, clientID, prepared.revision, prepared.digest[:]); err != nil {
 		return 0, fmt.Errorf("write report version: %w", err)
 	}
 	for _, key := range sortedKeys(old) {

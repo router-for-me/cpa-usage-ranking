@@ -147,6 +147,32 @@ registration/report limits, are listed in the [README](../README.md#configuratio
 [registration API](registration-api.md) and [report API](report-snapshots.md).
 Explicit empty/invalid settings and missing required files fail startup.
 
+## GitHub OAuth App
+
+1. Create a GitHub OAuth App. Its authorization callback URL must be the
+   public Ranking origin followed by `/auth/github/callback`, for example
+   `https://ranking.example.com/auth/github/callback`. This is **not** the
+   user's `return_to` URL. Do not configure repository or email scopes.
+2. Pass `RANKING_PUBLIC_ORIGIN=https://ranking.example.com`,
+   `RANKING_GITHUB_CLIENT_ID`, and `RANKING_GITHUB_CLIENT_SECRET` together when
+   starting the container. `compose.yaml` passes these variables (and the
+   optional `RANKING_REGISTRATION_ENABLED`) through from the deployment
+   environment. For `docker run`, use the corresponding `-e` options or a
+   protected runtime env file. Do not commit secrets, put them in images,
+   or print resolved service settings that contain them.
+3. Route public HTTPS requests for `/auth/github/*` and the API to the same
+   Ranking instance. Exclude Authorization, cookies, bodies and full OAuth
+   query strings from proxy and application observability (log the path only
+   on `/auth/github/*`). Allow the service to reach `github.com` and
+   `api.github.com` over HTTPS. The Ranking process does not contact client
+   `return_to` URLs.
+
+With the OAuth variables unset or `RANKING_REGISTRATION_ENABLED=false`, new
+registrations are closed; public reads, existing writer reports and withdrawal
+continue. Partial OAuth configuration fails startup. Use a **fresh data volume**
+when replacing a build with the former registration schema; there is no upgrade
+or writer backfill. Preserve the original volume separately as needed.
+
 ## Offline backup and restore
 
 Before upgrading, stop the service cleanly and verify that it exited
@@ -223,5 +249,6 @@ provide `--qemu /absolute/path/to/qemu-aarch64-static`; the script explicitly
 invokes it and disables Docker's in-container health check for that emulated run
 while checking `/readyz` over HTTP. It does not install or register an emulator.
 The checks cover schema initialization, UI and avatar assets, real
-registration/reporting, recreation and persistence, permissions, clean SIGTERM,
+registration (with offline approval, no GitHub traffic), reporting and withdrawal,
+recreation and persistence, permissions, clean SIGTERM,
 and startup failures; they are not a load or capacity test.

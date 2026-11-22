@@ -65,6 +65,7 @@ func finalizeOnce(ctx context.Context, conn *sql.Conn, bounds periods.Boundaries
 	if _, err := tx.ExecContext(ctx, `DELETE FROM daily_stats WHERE day=? AND client_id=?`, bounds.Day, clientID); err != nil {
 		return false, fmt.Errorf("delete settled stats: %w", err)
 	}
+	// 删除整日快照时一起清除该席位各端的日修订水位。
 	if _, err := tx.ExecContext(ctx, `DELETE FROM daily_reports WHERE day=? AND client_id=?`, bounds.Day, clientID); err != nil {
 		return false, fmt.Errorf("delete settled report: %w", err)
 	}

@@ -10,10 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const registrationSourceKey = "cpa-usage-ranking.registration-source"
-
-// RegistrationAdmission applies only to the registration route, before parsing
-// credentials or JSON; health checks and static resources have separate budgets.
+// RegistrationAdmission applies only to start, before parsing credentials or JSON.
 func RegistrationAdmission(limiter *registration.RequestLimiter, groupIPv6By64 bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		source, err := network.RegistrationSource(c, groupIPv6By64)
@@ -25,7 +22,6 @@ func RegistrationAdmission(limiter *registration.RequestLimiter, groupIPv6By64 b
 			writeRegistrationLimit(c, err)
 			return
 		}
-		c.Set(registrationSourceKey, source)
 		c.Next()
 	}
 }

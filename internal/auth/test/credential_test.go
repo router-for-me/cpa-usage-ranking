@@ -15,6 +15,7 @@ import (
 	"cpa-usage-ranking/internal/auth"
 	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/storage"
+	"cpa-usage-ranking/internal/testfixture"
 )
 
 func TestCredentialEncodingAndDigest(t *testing.T) {
@@ -77,12 +78,12 @@ func TestStorageContainsOnly32ByteDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := clients.NewRepository(db)
-	client, err := repo.Create(ctx, clients.NewClient{CredentialHash: hash, DisplayName: "public", AvatarID: 1})
+	writer, err := testfixture.Seat(ctx, db.Writer, hash, "public", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var stored []byte
-	if err := db.Reader.QueryRowContext(ctx, "SELECT token_hash FROM clients WHERE id = ?", client.ID).Scan(&stored); err != nil {
+	if err := db.Reader.QueryRowContext(ctx, "SELECT token_hash FROM client_writers WHERE id = ?", writer.WriterID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if len(stored) != 32 || !bytes.Equal(stored, hash[:]) || bytes.Equal(stored, []byte(text)) {

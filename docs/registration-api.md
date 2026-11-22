@@ -1,155 +1,93 @@
-# Registration HTTP API
+# GitHub registration and withdrawal API
 
-## Transport and credential ownership
+Use the deployment's HTTPS origin for Ranking requests. Before starting, generate and persist one [32-byte random Bearer secret](client-credentials.md) for this reporting installation. Ranking stores only SHA-256 of the decoded bytes. Both registration POSTs accept a single UTF-8 JSON object with exactly the listed fields, without duplicates or trailing JSON. Use uncompressed `application/json` (charset parameters are accepted); default maximum body size is 4096 bytes.
 
-Expose the service through **HTTPS**. The backend's default loopback HTTP
-listener is for local testing or a private TLS-terminating reverse proxy, not
-public cleartext credential transport. Restrict direct access to that listener.
-Exclude Authorization, bodies and secret-bearing URLs from proxy/access/error
-logs. The service's request errors are generic and do not log these values.
-
-Before its first attempt, the client generates **32 CSPRNG bytes**, encodes them
-as canonical **unpadded base64url** (43 ASCII characters), and durably saves the
-secret locally. Send exactly one `Authorization: Bearer <secret>` header; the
-scheme is case-insensitive with one separating space. The server hashes the
-**decoded 32 bytes** with SHA-256 and stores only the unique 32-byte digest.
-It does not issue, return, recover or rotate credentials. Format validation
-cannot prove the client's entropy source. See [credential rules](client-credentials.md).
-
-## Request
+## 1. Start a request
 
 ```http
-POST /v1/clients/register
-Authorization: Bearer <locally-persisted-secret>
+POST /v1/clients/register/start
+Authorization: Bearer <secret>
 Content-Type: application/json
 
-{"display_name":"  Ａlice 🙂  ","avatar_id":66}
+{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:8080/settings?tab=ranking#status"}
 ```
 
-- A single UTF-8 JSON object; no trailing JSON or unknown fields. There are only
-  `display_name` (string; omission/null is invalid for a new identity) and
-  optional `avatar_id` (int64 JSON integer).
-- The body is bounded to 4096 bytes by default, including unknown/chunked length
-  requests. No decompression is supported. Send `application/json` (charset
-  parameters are allowed), without Content-Encoding or with `identity`.
-- A **new** identity requires a [valid public display name](display-names.md).
-  The server applies NFKC and trims outer whitespace, then checks 1–32 Unicode
-  code points, at most 128 bytes, visible content and disallowed controls.
-- For a **new** identity, absent `avatar_id` uses the catalog default (currently
-  1). An explicit zero, negative, unknown ID or `null` is invalid (422), never
-  defaulted. Read [the catalog](avatar-catalog.md) at `/avatars/catalog.json`;
-  resolve relative image paths against `/avatars/`. IDs have no 66/255 limit.
-- `client_id`, source/IP, credential/body tokens and nickname-based ownership
-  claims are not request fields. Unknown fields are rejected, not used to select
-  an identity. Query parameters are not registration inputs.
+- `cpa_uuid` is the persistent, nonzero UUID supplied by the CPA instance, in `8-4-4-4-12` hex format (case-insensitive). This is an identifier, not a secret or verified CPA ownership. Ranking never connects to CPA. The UUID above is illustrative, not an integration default.
+- `return_to` is an absolute HTTP or HTTPS URL without user information. Loopback, LAN, public IPs and DNS names are allowed; ports, paths, query strings and fragments are preserved. `localhost` is the browser's device. No preregistration or matching of the initiating site is required. Never put secrets in this URL.
 
-## Response and safe retries
+`200 OK` returns `{"request_id":"…","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=…"}`. Save the opaque ID (default lifetime: ten minutes) and open the returned `authorize_url` in the user's browser without adding parameters. This step does not create a ranking seat or grant write access. A lost start response can be recovered by starting again with the same saved secret.
 
-New identity: **201 Created**. Active existing credential: **200 OK**. Both return
-only these public fields, with no credential, digest, disabled flag or timestamp:
+## 2. Browser authorization
+
+The browser follows Ranking's `/auth/github/authorize` redirect to GitHub. GitHub returns to Ranking's fixed `/auth/github/callback`. Ranking binds authorization to the browser with a Secure, HttpOnly, SameSite=Lax cookie, validates a one-time state and uses S256 PKCE. Ranking exchanges the code server-side and reads the authenticated GitHub user; it requests no repository or email scopes and does not retain the GitHub token. A repeated browser opening or callback does not start another exchange for the same ID.
+
+After recording approval or user denial, Ranking redirects to the exact saved `return_to` without appending parameters or making any server request to it. Invalid/unverifiable callbacks do not redirect or authorize a request. Browser redirects and errors are not cached and set `Referrer-Policy: no-referrer`. The return page need not implement a specific path or send any notification to Ranking. API and browser flows are separate; a return page visit is not proof of registration.
+
+## 3. Complete the registration
+
+```http
+POST /v1/clients/register/complete
+Authorization: Bearer <same-secret-as-start>
+Content-Type: application/json
+
+{"request_id":"<original-request-id>"}
+```
+
+Call after authorization. If the valid transaction is still waiting, the response is `202 Accepted` with `Retry-After` (seconds) and no body; retry the same ID and Bearer after that delay. Do not use a browser callback or a leaderboard as write confirmation. Successful completion returns:
 
 ```json
-{"client_id":1,"display_name":"Alice 🙂","avatar_id":66}
+{"client_id":"42","display_name":"Alice 🙂","avatar_id":"1"}
 ```
 
-`client_id` is the service's unique positive signed-64-bit identity, not a user
-name or source address. Preserve it without numeric truncation in client code.
-The server returns the normalized name and selected avatar; use those values.
-Equal names and avatars do not merge identities.
+- `201 Created` means a new ranking seat was created. `200 OK` means an existing seat was reused or a committed result was recovered. IDs are positive signed-64-bit values encoded as decimal **strings**.
+- A seat is unique per **GitHub numeric user ID + CPA UUID**. Each installation has its own writer credential; the server never rebinds a credential to another seat. A seat's initial display name comes from GitHub `name` under the [existing rules](display-names.md), falling back to the GitHub `login` (truncated to fit). New seats use the [default catalog avatar](avatar-catalog.md); this is not GitHub avatar sync. Additional writers do not change the profile.
+- A timeout or lost completion response may hide a committed result. Until the original ID expires, retry with the original **ID and secret**; the stored result returns the same `client_id` and its current profile, without creating another writer or extending the deadline. After expiry, keep the original secret and start and authorize again with the same GitHub account and CPA UUID. If the earlier attempt succeeded, completion reuses that writer and seat. No lookup, token issuance, lost-secret recovery, or retry-only endpoint is provided.
+- Disabled or withdrawn seats cannot be restored by retries or authorization with another secret. Revoking GitHub access does not itself change an existing seat. Established reports do not depend on GitHub availability.
 
-Retry with the **same saved secret** after a lost response/client ID. The
-server returns the same identity and **current stored profile** without
-modification; profile parameters need not match the first request. For example,
-`{}` or a syntactically/type-correct object with an invalid new name/avatar still
-recovers an active existing identity. JSON syntax/types, body/transport bounds
-and request limits apply to all attempts; semantic profile validation applies
-only to new identities. A changed secret is a different identity, not recovery.
-Disabled identities return 403 and cannot be re-enabled through registration.
-No lost-secret recovery is provided.
+## Withdraw the entire seat
 
-SQLite digest uniqueness protects concurrent retries. Only a successful atomic
-new INSERT spends creation quota; failures and retries do not. A request timeout
-can hide a committed success: keep the secret and retry, never auto-register
-using a new secret. Registration never edits an existing profile.
+```http
+POST /v1/clients/withdraw
+Authorization: Bearer <registered-writer-secret>
+```
 
-## Admission and shutdown of new creation
-
-After successful source resolution, every registration POST passes the
-source/global request gate **before** credential and body validation, including
-malformed inputs and idempotent retries. Source resolution failure returns
-400 `invalid_source` without consuming request quota. Sources default
-to canonical RemoteAddr IPs, with IPv4-mapped IPv6 unmapped and native IPv6 /64
-grouping enabled. Forwarded headers are ignored unless the peer is explicitly
-trusted; see [proxy deployment](registration-sources.md).
-
-New identities have rolling source quotas: default **3 in 1 hour**, **10 in
-24 hours**. The service serializes admission through insertion/accounting so
-concurrent different secrets cannot exceed a quota. Active existing retries
-are resolved before creation quotas and creation-state capacity checks. They
-remain subject to request budgets and request-state capacity.
-
-`RANKING_REGISTRATION_ENABLED=false` (restart required) closes only **new**
-identities with 503 `registration_closed`. Existing active retries still return
-200; disabled identities remain 403. Credential authentication, health, avatars
-and the frontend remain independent. This is not whole-site maintenance mode.
-There is no hot-reload/configuration UI. Existing clients can still use the [daily report API](report-snapshots.md) while new registration is closed.
-
-Both request and creation state are bounded, **single-process, in-memory** and
-reset on restart; they are not shared across processes. Expired records are
-reclaimed on demand. Full state rejects new sources, not active-history eviction.
-Source quotas do not prove one-human-one-identity; shared exits may be affected
-and proxy pools can evade source controls. No Redis, OTP, CAPTCHA or account
-system is included. See [request admission](registration-admission.md) and
-[creation accounting](registration.md).
+No body, query, or supplied `client_id`. `204 No Content` means the seat is marked withdrawn in SQLite. Repeating from any of its writers is safe. This does not delete data or change administrator flags, but **every writer** of this seat stops reporting (even previously accepted retries). Other seats, including another CPA UUID for the same GitHub account, are unaffected. All public boards and scoring references exclude the seat in the next successful cache publication; `204` does not imply that the new cache is already live. There is no automatic or public rejoin operation.
 
 ## Error contract
 
-```json
-{"error":{"code":"invalid_avatar","message":"Invalid avatar selection"}}
-```
-
-Errors do not echo request values or internal database failures.
+Read `error.code` from `{"error":{"code":"invalid_request","message":"…"}}`; messages are not a protocol. Responses do not echo credential or upstream details.
 
 | Status | Code | Meaning |
 | --- | --- | --- |
-| 400 | `invalid_request` | Invalid JSON, UTF-8, field types, unknown fields or trailing data |
-| 400 | `invalid_source` | No valid source address could be resolved |
-| 401 | `invalid_credential` | Missing, duplicate or malformed Bearer credential; includes `WWW-Authenticate: Bearer` |
-| 403 | `client_disabled` | Credential belongs to a disabled identity |
+| 400 | `invalid_request` | Invalid input, including missing/malformed UUID or return URL |
+| 400 | `invalid_source` | No valid source could be resolved for start |
+| 401 | `invalid_credential` | Invalid/missing Bearer, wrong Bearer for this request, credential already bound to another seat, or unknown withdrawal credential; includes `WWW-Authenticate: Bearer` |
+| 403 | `github_authorization_denied` | The user denied this request; do not start another authorization automatically |
+| 403 | `client_disabled` | The seat is disabled by an administrator |
+| 403 | `client_withdrawn` | The seat has withdrawn; stop attempting to register or send reports |
+| 410 | `registration_request_expired` | The request ID is expired or no longer exists; use the original secret and start again if still wanted |
 | 413 | `request_too_large` | Body exceeds the configured bound |
 | 415 | `unsupported_media_type` | Not uncompressed application/json |
-| 422 | `invalid_display_name` | New-identity name fails public-name rules |
-| 422 | `invalid_avatar` | New-identity avatar selection is not in the catalog (including null/zero) |
-| 429 | `registration_rate_limited` | Source or global request window exhausted |
-| 429 | `creation_quota_exceeded` | Successful-creation rolling quota exhausted |
-| 429 | `registration_capacity` | Request or creation source-state capacity full |
-| 503 | `registration_closed` | New-identity creation is disabled |
-| 500 | `internal_error` | Storage/internal failure, no successful acknowledgment |
+| 429 | `registration_rate_limited` / `registration_capacity` | Start rejected by the request rate or capacity gates; retry after the specified seconds, with jitter |
+| 503 | `registration_closed` | New registration is closed |
+| 500 | `internal_error` | Storage, GitHub exchange, or another internal failure; no confirmed registration |
 
-429 includes integer **Retry-After seconds**, rounded up to the relevant window
-or earliest capacity expiry, minimum 1. Wait and add jitter; a later attempt
-must still pass every gate. Responses are `Cache-Control: no-store`. Validation
-order means rate limiting may take precedence over other errors. Unsupported
-methods retain JSON 405; unknown routes retain JSON 404.
+An upstream exchange failure invalidates that authorization; after the failure has been resolved, start another request if still wanted. `POST /v1/clients/register` and `PUT /v1/reports/{utc_day}` are not served. Use [the report API](report-snapshots.md) for existing credentials.
 
 ## Startup configuration
 
-All numeric counts/bounds and durations must be positive. Explicit empty or
-invalid values fail startup. No configuration file is loaded automatically.
+Register a **GitHub OAuth App** with callback `https://<public-ranking-origin>/auth/github/callback`. Supply the following as private runtime environment variables, not in source or in the image:
 
-| Variable | Default |
+| Variable | Default / meaning |
 | --- | --- |
-| `RANKING_REGISTRATION_ENABLED` | `true` |
-| `RANKING_REGISTRATION_MAX_BODY_BYTES` | `4096` |
-| `RANKING_REGISTRATION_SOURCE_REQUESTS` | `20` |
-| `RANKING_REGISTRATION_GLOBAL_REQUESTS` | `200` |
-| `RANKING_REGISTRATION_REQUEST_WINDOW` | `1m` (fixed window from first attempt) |
-| `RANKING_REGISTRATION_REQUEST_MAX_SOURCES` | `10000` |
-| `RANKING_REGISTRATION_HOURLY_CREATIONS` | `3` (rolling 1 hour) |
-| `RANKING_REGISTRATION_DAILY_CREATIONS` | `10` (rolling 24 hours) |
-| `RANKING_REGISTRATION_CREATION_MAX_SOURCES` | `10000` |
-| `RANKING_REGISTRATION_IPV6_64` | `true` |
-| `RANKING_TRUSTED_PROXIES` | unset, trust none; otherwise comma-separated proxy IPs/CIDRs |
+| `RANKING_PUBLIC_ORIGIN` | Unset; public HTTPS origin, optional port, no path, query, or fragment |
+| `RANKING_GITHUB_CLIENT_ID` | Unset; OAuth App client ID |
+| `RANKING_GITHUB_CLIENT_SECRET` | Unset; OAuth App client secret |
+| `RANKING_REGISTRATION_ENABLED` | `true`; `false` prevents starts and new writer bindings |
+| `RANKING_REGISTRATION_MAX_BODY_BYTES` | `4096` for both registration POSTs |
+| `RANKING_REGISTRATION_SOURCE_REQUESTS` | `20` start attempts per source per window |
+| `RANKING_REGISTRATION_GLOBAL_REQUESTS` | `200` start attempts across all sources per window |
+| `RANKING_REGISTRATION_REQUEST_WINDOW` | `1m` fixed window |
+| `RANKING_REGISTRATION_REQUEST_MAX_SOURCES` | `10000` live source-rate entries |
 
-Tune for shared exits and measured deployment load. This API does not establish
-100,000-client capacity. `/healthz` is process liveness; `/readyz` requires the database, catalogs and a complete real leaderboard cache round. Authenticated daily reporting is available; see the [daily report API](report-snapshots.md). There is no client login/registration webpage, production `/me`, or profile edit API (optional operator moderation is separate; see [admin.md](admin.md)).
+Set all three OAuth variables or none. If unconfigured, new registration is closed; reports, withdrawal, committed unexpired completion retries, and public reads still work. Partial or invalid configuration fails startup. The fixed `authorize_url` origin is not derived from request or proxy headers. Terminate TLS at a trusted reverse proxy, forward `/auth/github/*`, and keep Authorization, cookies, bodies and OAuth query strings out of proxy logs. See [deployment](docker.md#github-oauth-app) and [start admission](registration-admission.md).

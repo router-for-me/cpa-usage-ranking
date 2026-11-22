@@ -26,10 +26,10 @@ The server is decoupled from any specific client codebase, SDK, or upstream even
 
 ## Highlights
 
-- **Open Client Protocol**: Clients generate and hold their own 32-byte random secret (`base64url` Bearer); the server stores only its `SHA-256` digest. Integration takes two write calls: register once, then `PUT` daily snapshots.
-- **Privacy-Minimal & Idempotent**: Accepts only aggregated per-model token counts, request counts, success counts, and mean latencies. Monotonic `revision` numbers make retries safe and idempotent across network timeouts.
+- **Open Client Protocol**: Clients generate and hold their own 32-byte random secret (`base64url` Bearer); the server stores only its `SHA-256` digest. GitHub authorization pairs a numeric account ID and CPA UUID into one seat that can have multiple writers.
+- **Privacy-Minimal & Idempotent**: Accepts only aggregated per-model token counts, request counts, success counts, and mean latencies. Writer-specific `revision` numbers make retries safe; only the last committed replacement counts for the seat/day.
 - **Five Boards & Complete UTC Periods**: Ships **Overall, Usage, Cache Reuse, Reliability (Wilson), and TTFT** leaderboards across **Today, Yesterday, Weekly (previous complete UTC week), and Monthly (previous complete UTC month)** views, preserving exact 64-bit integer precision end-to-end.
-- **Lightweight High-Throughput SQLite Engine**: Built with Go and SQLite (`WAL`, `FULL` sync, serialized write queue), featuring automatic window closure, background settlement/retention, and atomic in-memory cache snapshots—validated at [500 sustained report TPS](docs/benchmark.md) under a 2 vCPU / 1 GiB limit.
+- **Lightweight High-Throughput SQLite Engine**: Built with Go and SQLite (`WAL`, `FULL` sync, serialized write queue), featuring automatic window closure, background settlement/retention, and atomic in-memory cache snapshots—a historical build reached [500 sustained report TPS](docs/benchmark.md) under a 2 vCPU / 1 GiB limit; this is not a current protocol capacity claim.
 - **Built-in Web UI & Optional Admin Console**: Serves a fast, minimal responsive leaderboard UI (desktop, tablet, and mobile, with 66 built-in WebP avatars) on the same origin, plus an opt-in administrator console for user search, bans, and independent leaderboard exclusion.
 
 ## Client Integration
@@ -41,27 +41,37 @@ Designed for `keeper`, `cpamp`, `oh-my-cpa`, and any collector or dashboard that
 | Step | Endpoint | Auth | Purpose |
 | --- | --- | --- | --- |
 | 1. Generate secret | Local to client | — | Generate 32 CSPRNG bytes, encode as 43-char unpadded `base64url`, and persist locally |
-| 2. Register / recover | `POST /v1/clients/register` | `Bearer <secret>` | Submit `display_name` and optional `avatar_id` (`1`–`66`); returns `201` on creation or `200` idempotently on retry |
-| 3. Push daily snapshot | `PUT /v1/reports/{utc_day}` | `Bearer <secret>` | Open for UTC **today and yesterday**; merge per-model totals for the day and increment `revision` |
-| 4. Read leaderboards | `GET /v1/leaderboards/{board}/{period}` | None | Fetch the latest published top-100 cached leaderboard (avatars via `/avatars/catalog.json`) |
+| 2. Start registration | `POST /v1/clients/register/start` | `Bearer <secret>` | Send the persistent CPA UUID and `return_to`; open the returned authorization URL in the browser |
+| 3. Complete registration | `POST /v1/clients/register/complete` | Same Bearer | Send `request_id`; `201` creates a seat, `200` reuses or recovers one, `202` awaits authorization |
+| 4. Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | `Bearer <secret>` | UTC **today and yesterday**; revisions are per writer, the full snapshot replaces seat/day data |
+| 5. Withdraw (optional) | `POST /v1/clients/withdraw` | `Bearer <secret>` | No body; `204` means the whole seat is withdrawn and all writers stop |
+| Read leaderboards | `GET /v1/leaderboards/{board}/{period}` | None | Fetch the latest published top-100 cache |
 
 > **Aggregation rule**: Clients merge daily usage into one item per canonical model before uploading (no `service_tier` field is accepted). Weight `ttft_avg_ms` and `latency_avg_ms` by their respective sample counts (`null` with `"0"` samples when unmeasured). Unrecognized model names are accepted and ignored from totals; matched [canonical models and aliases](docs/model-catalog.md) feed the rankings.
 
 ### Minimal cURL Example
 
+Use an [OAuth-configured Ranking HTTPS deployment](docs/docker.md#github-oauth-app). The CPA UUID here is illustrative; use the persistent UUID supplied by your CPA instance and your desired browser return page.
+
 ```sh
 # 1. Generate and persist a 43-char unpadded base64url secret (32 random bytes)
 SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
 
-# 2. Register the client identity (safe to retry with the same SECRET)
-curl -sS -X POST http://127.0.0.1:8080/v1/clients/register \
-  -H "Authorization: Bearer $SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "CPA-Keeper-Node", "avatar_id": 1}'
+# 2. Save the returned request_id, and open authorize_url in a browser
+BASE=https://ranking.example.com
+curl -sS -X POST "$BASE/v1/clients/register/start" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d '{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:3001/settings?tab=ranking#status"}'
 
-# 3. Upload the full cumulative snapshot for the current UTC day
+# 3. After GitHub authorization, complete with the original ID and secret
+REQUEST_ID='replace with returned request_id'
+curl -sS -X POST "$BASE/v1/clients/register/complete" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d "{\"request_id\":\"$REQUEST_ID\"}"
+
+# 4. After 200 or 201, upload the full cumulative snapshot for the UTC day
 TODAY=$(date -u +%F)
-curl -sS -X PUT "http://127.0.0.1:8080/v1/reports/$TODAY" \
+curl -sS -X PUT "$BASE/v1/clients/report/$TODAY" \
   -H "Authorization: Bearer $SECRET" \
   -H "Content-Type: application/json" \
   -d '{
@@ -84,8 +94,8 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/reports/$TODAY" \
     }]
   }'
 
-# 4. Query the public Overall leaderboard
-curl -sS http://127.0.0.1:8080/v1/leaderboards/overall/today
+# Read the public Overall leaderboard without a credential
+curl -sS "$BASE/v1/leaderboards/overall/today"
 ```
 
 ## Leaderboards & Scoring
@@ -136,7 +146,9 @@ docker compose -p cpa-ranking up -d --no-build
 
 ### Production Reverse-Proxy Notes
 
-- **Terminate HTTPS in front of the service**: Registration and reporting send Bearer secrets. `compose.yaml` binds loopback `127.0.0.1:8080:8080` by default; place Nginx, Caddy, or Traefik in front to serve TLS before accepting remote traffic.
+- **Enable GitHub registration**: Create a GitHub OAuth App with `/auth/github/callback` on the public HTTPS origin and supply the app settings at runtime. With none configured, new registrations stay closed; existing writers and public reads still work. See [GitHub OAuth App](docs/docker.md#github-oauth-app).
+
+- **Terminate HTTPS in front of the service**: Registration and reporting send Bearer secrets. `compose.yaml` binds loopback `127.0.0.1:8080:8080` by default; place Nginx, Caddy, or Traefik in front to serve TLS before accepting remote traffic. Omit credentials, cookies and complete OAuth query strings from logs.
 - **Configure trusted proxies**: Forwarded IP headers are ignored by default. Set `RANKING_TRUSTED_PROXIES` to your reverse proxy IPs/CIDRs so per-source rate limits see real client addresses (see [Registration Sources](docs/registration-sources.md)).
 - **Single instance on local storage**: The container runs as non-root `10001:10001` with SQLite persisted in `/data` (`cpa-ranking_ranking-data`). Run a single instance on local disk—do not share SQLite across replicas or NFS.
 
@@ -173,12 +185,15 @@ Core startup and admin settings are listed below (both source defaults and [Dock
 | `RANKING_CACHE_REFRESH_INTERVAL` | `5m` | Periodic leaderboard cache refresh interval |
 | `RANKING_SHUTDOWN_TIMEOUT` | `10s` | Graceful drain deadline per shutdown stage |
 | `RANKING_TRUSTED_PROXIES` | unset (none) | Comma-separated trusted reverse-proxy IPs or CIDRs |
-| `RANKING_REGISTRATION_ENABLED` | `true` | Allow new identity creation (`false` keeps existing credentials & idempotent retries active) |
+| `RANKING_PUBLIC_ORIGIN` | unset | Public HTTPS origin; configure together with both GitHub variables |
+| `RANKING_GITHUB_CLIENT_ID` | unset | GitHub OAuth App client ID |
+| `RANKING_GITHUB_CLIENT_SECRET` | unset | GitHub OAuth App secret; configure at runtime only |
+| `RANKING_REGISTRATION_ENABLED` | `true` | Permit starts and new writer bindings when OAuth is configured; existing writers are unaffected |
 | `RANKING_REGISTRATION_IPV6_64` | `true` | Group native IPv6 sources by `/64` prefix for admission rate limits |
 | `RANKING_SETTLED_DAY_RETENTION_DAYS` | `31` | Retention window (`1`–`36500` days) for finalized daily total summaries |
 | `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Path to private owner credentials JSON outside `RANKING_WEB_DIR` |
 
-Fine-grained registration request/creation quotas and report concurrency/bucket settings are documented in **[Registration API Configuration](docs/registration-api.md#startup-configuration)**, **[Registration Admission](docs/registration-admission.md)**, and **[Daily Report Snapshots](docs/report-snapshots.md)**.
+Registration start budgets and report concurrency/bucket settings are documented in **[Registration API Configuration](docs/registration-api.md#startup-configuration)**, **[Registration Admission](docs/registration-admission.md)**, and **[Daily Report Snapshots](docs/report-snapshots.md)**.
 
 ### Health & Readiness Probes
 
@@ -187,7 +202,7 @@ Fine-grained registration request/creation quotas and report concurrency/bucket 
 
 ## Benchmark
 
-Under a cgroup limit of 2 vCPU and 1 GiB RAM (zero swap) with 20,000+ registered identities and injected backlog, the server sustained **~500 logical daily-snapshot updates/sec** over a 20-minute continuous run while draining backlog. Hardware details, workload distributions, latency percentiles, and scope caveats are documented in the **[500 TPS Sustained Benchmark Report (中文)](docs/benchmark.md)** and **[Capacity Tool Guide](docs/capacity-tool.md)**.
+In a historical test with a cgroup limit of 2 vCPU and 1 GiB RAM (zero swap), 20,000+ legacy identities and injected backlog, the tested build sustained **~500 logical daily-snapshot updates/sec** over a 20-minute continuous run while draining backlog. Hardware details, workload distributions, latency percentiles, and scope caveats are documented in the **[500 TPS Sustained Benchmark Report (中文)](docs/benchmark.md)** and **[Capacity Tool Guide](docs/capacity-tool.md)**.
 
 ## Documentation
 
@@ -216,7 +231,7 @@ internal/
   leaderboard/         5-board scoring, Wilson lower bound, positive-median TTFT, Top 100
   models/              Startup catalog validation and canonical/alias resolution
   periods/             UTC day/week/month/year boundary helpers
-  registration/        Idempotent registration, fixed-window rate limits, rolling creation quotas
+  registration/        GitHub registration transactions and fixed-window start rate limits
   reports/             Strict JSON decoder, digest, serialized SQLite writer, settlement & pruning
   statistics/          Consistent read-only snapshot merging finalized periods and pending days
   storage/             SQLite connection pools and direct current-schema initialization

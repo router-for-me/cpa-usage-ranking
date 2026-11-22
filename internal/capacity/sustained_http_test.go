@@ -25,7 +25,7 @@ func TestSustainedRetryClassificationForAmbiguousServerErrors(t *testing.T) {
 		retryable bool
 	}{{408, true}, {429, true}, {500, true}, {501, true}, {502, true}, {503, true}, {504, true}, {599, true}, {400, false}, {422, false}} {
 		status.Store(int32(tt.status))
-		result := sustainedRequest(context.Background(), server.Client(), server.URL, f, task, "report", 1, time.Second, &sustainedTraceCounts{})
+		result := sustainedRequest(context.Background(), server.Client(), server.URL, f, task, 1, time.Second, &sustainedTraceCounts{})
 		if result.retryable != tt.retryable || result.record.Status != tt.status || result.record.ErrorCode != "report_overloaded" {
 			t.Fatalf("status %d: %+v", tt.status, result)
 		}

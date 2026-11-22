@@ -25,7 +25,6 @@ import (
 	"cpa-usage-ranking/internal/leaderboard"
 	"cpa-usage-ranking/internal/models"
 	"cpa-usage-ranking/internal/readiness"
-	"cpa-usage-ranking/internal/registration"
 	"cpa-usage-ranking/internal/reports"
 	"cpa-usage-ranking/internal/statistics"
 	"cpa-usage-ranking/internal/storage"
@@ -80,16 +79,8 @@ func startLifecycle(t *testing.T, dbPath, catalogPath string, clock *atomic.Int6
 		t.Fatal(err)
 	}
 	settings := defaultRegistrationSettings()
-	settings.service.NewIdentitiesEnabled = registrationEnabled
+	settings.service.Enabled = registrationEnabled
 	settings.service.Now = now
-	service, err := registration.NewService(f.repo, avatarCatalog, settings.service)
-	if err != nil {
-		t.Fatal(err)
-	}
-	limiter, err := registration.NewRequestLimiter(settings.requests, now)
-	if err != nil {
-		t.Fatal(err)
-	}
 	f.store = reports.NewStore(f.db.Writer, registry, now)
 	f.writer, err = reports.NewWriter(f.store, reports.DefaultWriterOptions())
 	if err != nil {
@@ -116,9 +107,8 @@ func startLifecycle(t *testing.T, dbPath, catalogPath string, clock *atomic.Int6
 	if err := f.router.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := httpserver.MountRegistration(f.router, service, limiter, httpserver.RegistrationHTTPOptions{GroupIPv6By64: true, MaxBodyBytes: settings.bodyBytes}); err != nil {
-		t.Fatal(err)
-	}
+	f.mountRegistration(t, settings, avatarCatalog.DefaultID())
+	httpserver.MountWithdraw(f.router, f.repo, f.cache.RequestRefresh)
 	if err := httpserver.MountReports(f.router, auth.NewAuthenticator(f.repo), admission, f.writer, int64(limits.MaxBodyBytes)); err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +212,7 @@ type lifecycleVersion struct {
 func (f *lifecycleRuntime) version(t *testing.T, day string, id int64) lifecycleVersion {
 	t.Helper()
 	var v lifecycleVersion
-	if err := f.db.Reader.QueryRow(`SELECT revision,received_at_ms,digest FROM daily_reports WHERE day=? AND client_id=?`, day, id).Scan(&v.revision, &v.received, &v.digest); err != nil {
+	if err := f.db.Reader.QueryRow(`SELECT revision,received_at_ms,digest FROM daily_writer_versions JOIN daily_reports USING(day,client_id) WHERE day=? AND client_id=?`, day, id).Scan(&v.revision, &v.received, &v.digest); err != nil {
 		t.Fatal(err)
 	}
 	return v
@@ -267,7 +257,7 @@ type lifecycleBoard struct {
 	Entries     []leaderboard.Entry `json:"entries"`
 }
 
-func (f *lifecycleRuntime) assertBoard(t *testing.T, board, period, start, end string, when time.Time, entries []leaderboard.Entry) {
+func (f *lifecycleRuntime) readBoard(t *testing.T, board, period string) lifecycleBoard {
 	t.Helper()
 	response, err := f.server.Client().Get(f.server.URL + "/v1/leaderboards/" + board + "/" + period)
 	if err != nil {
@@ -278,8 +268,17 @@ func (f *lifecycleRuntime) assertBoard(t *testing.T, board, period, start, end s
 	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || got.Board != board || got.Period != period || got.Start != start || got.GeneratedAt != when.Format(time.RFC3339Nano) || (end == "" && got.End != nil) || (end != "" && (got.End == nil || *got.End != end)) || !reflect.DeepEqual(got.Entries, entries) {
-		t.Fatalf("%s/%s: status=%d got=%+v want start=%s end=%s generated=%s entries=%+v", board, period, response.StatusCode, got, start, end, when, entries)
+	if response.StatusCode != http.StatusOK || got.Board != board || got.Period != period {
+		t.Fatalf("%s/%s: status=%d %+v", board, period, response.StatusCode, got)
+	}
+	return got
+}
+
+func (f *lifecycleRuntime) assertBoard(t *testing.T, board, period, start, end string, when time.Time, entries []leaderboard.Entry) {
+	t.Helper()
+	got := f.readBoard(t, board, period)
+	if got.Start != start || got.GeneratedAt != when.Format(time.RFC3339Nano) || (end == "" && got.End != nil) || (end != "" && (got.End == nil || *got.End != end)) || !reflect.DeepEqual(got.Entries, entries) {
+		t.Fatalf("%s/%s: got=%+v want start=%s end=%s generated=%s entries=%+v", board, period, got, start, end, when, entries)
 	}
 }
 
@@ -325,10 +324,13 @@ func TestCompleteIngestionLifecycle(t *testing.T) {
 	f := startLifecycle(t, dbPath, catalogPath, &clock, true)
 	f.assertBoard(t, "usage", "today", "2026-11-02", "2026-11-03", firstDay, []leaderboard.Entry{})
 	aSecret, bSecret := testSecret(1), testSecret(2)
-	aResponse := f.send(t, `{"display_name":"Alice"}`, aSecret, nil)
-	bResponse := f.send(t, `{"display_name":"Bob","avatar_id":2}`, bSecret, nil)
-	alice, bob := identity(t, aResponse), identity(t, bResponse)
-	if aResponse.status != 201 || bResponse.status != 201 || alice.ID == bob.ID || alice.Name != "Alice" || alice.AvatarID != 1 || bob.Name != "Bob" || bob.AvatarID != 2 {
+	alice := f.register(t, aSecret, 1, "Alice")
+	bob := f.register(t, bSecret, 2, "Bob")
+	if err := f.repo.UpdateProfile(ctx, bob.ID, "Bob", 2); err != nil {
+		t.Fatal(err)
+	}
+	bob.AvatarID = 2
+	if alice.ID == bob.ID || alice.Name != "Alice" || alice.AvatarID != 1 || bob.Name != "Bob" {
 		t.Fatalf("registration: %+v %+v", alice, bob)
 	}
 	expectRevision(t, f.report(t, "2026-11-02", aSecret, lifecycleFirst, nil), 200, "1")
@@ -449,8 +451,8 @@ func TestCompleteWeekAndMonthReadSettledAndPendingReports(t *testing.T) {
 	setTime("2026-12-30T12:00:00Z")
 	f := startLifecycle(t, filepath.Join(dir, "periods.db"), catalogPath, &clock, true)
 	aSecret, bSecret := testSecret(11), testSecret(12)
-	alice := identity(t, f.send(t, `{"display_name":"Alice"}`, aSecret, nil))
-	bob := identity(t, f.send(t, `{"display_name":"Bob"}`, bSecret, nil))
+	alice := f.register(t, aSecret, 1, "Alice")
+	bob := f.register(t, bSecret, 2, "Bob")
 	expectRevision(t, f.report(t, "2026-12-30", aSecret, lifecycleNext, nil), 200, "1")
 	setTime("2026-12-31T12:00:00Z")
 	expectRevision(t, f.report(t, "2026-12-31", bSecret, lifecycleOtherFirst, nil), 200, "1")

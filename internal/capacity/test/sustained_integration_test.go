@@ -19,12 +19,10 @@ import (
 	"time"
 
 	"cpa-usage-ranking/internal/auth"
-	"cpa-usage-ranking/internal/avatars"
 	"cpa-usage-ranking/internal/capacity"
 	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/httpserver"
 	"cpa-usage-ranking/internal/models"
-	"cpa-usage-ranking/internal/registration"
 	"cpa-usage-ranking/internal/reports"
 	"cpa-usage-ranking/internal/storage"
 )
@@ -51,29 +49,7 @@ func sustainedActualHTTPAndSQLiteConservation(t *testing.T, suffix string) {
 	catalogPath, names := sustainedCatalog(t)
 	day := time.Now().UTC().Format(time.DateOnly)
 	const stock = 20
-	var seed uint64
-	for candidate := uint64(1); candidate < 100; candidate++ {
-		m, err := capacity.NewSustainedModel(day, names, stock, candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for n := 0; n < 100; n++ {
-			x, err := m.Next()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if x.New {
-				seed = candidate
-				break
-			}
-		}
-		if seed != 0 {
-			break
-		}
-	}
-	if seed == 0 {
-		t.Fatal("could not find registration seed")
-	}
+	const seed uint64 = 1
 	path := filepath.Join(t.TempDir(), "actual.sqlite")
 	f, err := capacity.SeedSustained(ctx, path, catalogPath, stock, 90, stock, day, seed)
 	if err != nil {
@@ -112,22 +88,6 @@ func sustainedActualHTTPAndSQLiteConservation(t *testing.T, suffix string) {
 	}
 	before := totalSustainedMetrics(t, db.Reader)
 	repo := clients.NewRepository(db)
-	avatarCatalog, err := avatars.Load(avatars.BuiltinFS())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ro := registration.DefaultOptions()
-	ro.CreationLimits.Hourly, ro.CreationLimits.Daily = 1000000, 1000000
-	reg, err := registration.NewService(repo, avatarCatalog, ro)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rl := registration.DefaultRequestLimits()
-	rl.SourceRequests, rl.GlobalRequests = 60000, 60000
-	limiter, err := registration.NewRequestLimiter(rl, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	limits := reports.DefaultIngestionLimits()
 	limits.GlobalInterval, limits.GlobalBurst = 10*time.Microsecond, 100000
 	limits.ClientInterval, limits.ClientBurst = 100*time.Microsecond, 1000
@@ -142,14 +102,11 @@ func sustainedActualHTTPAndSQLiteConservation(t *testing.T, suffix string) {
 	}
 	defer writer.Close(ctx)
 	router := httpserver.NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err = httpserver.MountRegistration(router, reg, limiter, httpserver.RegistrationHTTPOptions{GroupIPv6By64: true, MaxBodyBytes: 4096}); err != nil {
-		t.Fatal(err)
-	}
 	if err = httpserver.MountReports(router, auth.NewAuthenticator(repo), admission, writer, int64(limits.MaxBodyBytes)); err != nil {
 		t.Fatal(err)
 	}
 	// Hold real report requests on the first process so cancellation retains
-	// a nonempty logical debt; registration still uses the real router.
+	// a nonempty logical debt.
 	var blockReports atomic.Bool
 	blockReports.Store(true)
 	blocked := make(chan struct{})
@@ -229,7 +186,7 @@ func sustainedActualHTTPAndSQLiteConservation(t *testing.T, suffix string) {
 complete:
 	commands <- capacity.SustainedCommand{Operation: "stop"}
 	finished := <-done
-	if finished.err != nil || finished.result.Sample.Pending != 0 || finished.result.Sample.Registrations == 0 {
+	if finished.err != nil || finished.result.Sample.Pending != 0 {
 		t.Fatalf("invalid local result: %+v %v", finished.result, finished.err)
 	}
 
@@ -252,10 +209,6 @@ complete:
 			}
 			want[key{id, d}] = body
 		}
-	}
-	ids := map[int]int64{}
-	for id := 1; id <= stock; id++ {
-		ids[id] = int64(id)
 	}
 	produced := map[int64]capacity.SustainedTask{}
 	confirmed := map[int64]bool{}
@@ -283,7 +236,6 @@ complete:
 			Sequence     int64
 			Client       int
 			Confirmed    bool
-			ServerID     int64 `json:"server_client_id"`
 		}
 		if err = json.Unmarshal(scanner.Bytes(), &rec); err != nil {
 			t.Fatal(err)
@@ -306,16 +258,16 @@ complete:
 			}
 		}
 		if rec.Kind == "finish" && rec.Confirmed {
-			if rec.Action == "register" {
-				ids[rec.Client] = rec.ServerID
+			if rec.Action != "report" {
+				t.Fatal("unexpected non-report HTTP attempt")
 			}
 			if rec.Action == "report" {
 				task, ok := produced[rec.Sequence]
 				if !ok || confirmed[rec.Sequence] {
 					t.Fatal("missing or duplicate confirmed task")
 				}
-				if ids[task.Client] == 0 {
-					t.Fatal("report confirmed before registration")
+				if task.Client < 1 || task.Client > stock {
+					t.Fatal("report used an unseeded synthetic seat")
 				}
 				confirmed[rec.Sequence] = true
 				want[key{task.Client, task.Day}] = task.Body
@@ -347,10 +299,7 @@ complete:
 		t.Fatalf("unexpected open-day version count: %d != %d", count, len(want))
 	}
 	for k, body := range want {
-		id := ids[k.id]
-		if id == 0 {
-			t.Fatalf("missing ID for %d", k.id)
-		}
+		id := k.id
 		r, e := reports.Decode(body)
 		if e != nil {
 			t.Fatal(e)
@@ -361,7 +310,7 @@ complete:
 		}
 		var revision int64
 		var digest []byte
-		if e = db.Reader.QueryRow("SELECT revision,digest FROM daily_reports WHERE client_id=? AND day=?", id, k.day).Scan(&revision, &digest); e != nil {
+		if e = db.Reader.QueryRow("SELECT revision,digest FROM daily_writer_versions WHERE writer_id=? AND day=?", id, k.day).Scan(&revision, &digest); e != nil {
 			t.Fatal(e)
 		}
 		wantDigest := p.Digest()

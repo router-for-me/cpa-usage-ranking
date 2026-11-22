@@ -82,12 +82,10 @@ identity and lookup always use the explicit ID.
 - `avatars.Load(files fs.FS) (*avatars.Catalog, error)` reads and validates the
   whole catalog. Any failure returns a nil catalog. Filesystem errors remain
   inspectable with `errors.Is`, including `fs.ErrNotExist`.
-- `catalog.DefaultID() int64` returns the configured default. A caller uses it
-  only when an avatar selection is **omitted**.
+- `catalog.DefaultID() int64` returns the configured default. Registration
+  assigns it to a new seat; clients do not submit an avatar selection.
 - `catalog.Lookup(id int64) (avatars.Avatar, bool)` performs membership lookup.
-  An explicitly unknown ID, including zero or a negative value, returns false;
-  it does not fall back. The registration HTTP boundary maps invalid new-avatar
-  selections to 422.
+  An unknown ID, including zero or a negative value, returns false.
 - `catalog.List() []avatars.Avatar` returns a copy in catalog order. `Avatar`
   contains `ID` (`avatar_id`) and `Path` (`path`). The loaded catalog is read-only
   and can be shared by concurrent readers.
@@ -100,7 +98,7 @@ the same constrained root and an explicit resource allowlist; a local
 the catalog and files as a release unit, not resources to mutate while serving.
 
 The client repository remains independent of this loader and expects validated
-IDs. Registration and omitted-selection handling are separate from loading.
+IDs. Registration does not synchronize GitHub avatars.
 Tests in `internal/avatars/test/` cover sparse/large IDs, extension, default
 membership, duplicates, invalid paths, missing resources and copy-safe listing.
 HTTP tests cover serving/cache/path boundaries; `web/test/avatars.spec.ts`

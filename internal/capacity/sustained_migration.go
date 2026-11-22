@@ -157,8 +157,8 @@ func (m *sustainedRetryMigration) validate(file *os.File) error {
 
 func verifyReviewedRetryTask(m *sustainedRetryMigration, state *sustainedState) error {
 	a := state.actors[m.TaskClient]
-	if a == nil || !a.registered || a.inFlight || len(a.queue) == 0 {
-		return errors.New("reviewed retry task is not an idle registered queue head")
+	if a == nil || a.inFlight || len(a.queue) == 0 {
+		return errors.New("reviewed retry task is not an idle report queue head")
 	}
 	job := a.queue[0]
 	if job.task.Sequence != m.TaskSequence || job.task.Revision != m.TaskRevision || job.task.Day != m.TaskDay ||

@@ -16,7 +16,7 @@ import (
 
 // SustainedModelVersion identifies the fixed synthetic distribution. Changing
 // any draw or its order requires a new version, not an in-place retuning.
-const SustainedModelVersion = "synthetic-sustained-v2"
+const SustainedModelVersion = "synthetic-sustained-v3"
 
 // splitMix is specified here rather than depending on a runtime RNG's future
 // implementation. It is for reproducible synthetic data, not credentials.
@@ -79,12 +79,11 @@ type SustainedDelta struct {
 }
 
 // SustainedTask contains an immutable full snapshot and the corresponding
-// increments. Client is a logical synthetic ID, not necessarily the ID
-// returned by registration. Callers must persist the task before sending it.
+// increments. Client is a pre-seeded synthetic seat with one writer.
+// Callers must persist the task before sending it.
 type SustainedTask struct {
 	Sequence int64            `json:"sequence"`
 	Client   int              `json:"client"`
-	New      bool             `json:"new"`
 	Hot      bool             `json:"hot"`
 	Class    string           `json:"class"`
 	Limit    int              `json:"limit"`
@@ -109,7 +108,7 @@ type SustainedModel struct {
 
 // NewSustainedModel creates the deterministic stock population. Models must
 // be the ordered, unique formal catalog names (at least 48). Stock clients have
-// revision-1 snapshots on both open days; new identities start empty instead.
+// revision-1 snapshots on both open days.
 func NewSustainedModel(day string, models []string, stock int, seed uint64) (*SustainedModel, error) {
 	date, err := time.Parse(time.DateOnly, day)
 	if err != nil || date.Format(time.DateOnly) != day || stock < 1 || stock > 100000 || len(models) < 48 {
@@ -124,12 +123,12 @@ func NewSustainedModel(day string, models []string, stock int, seed uint64) (*Su
 	}
 	m := &SustainedModel{day: [2]string{day, date.AddDate(0, 0, -1).Format(time.DateOnly)}, models: append([]string(nil), models...), rng: splitMix{state: seed}, stock: stock}
 	for i := 0; i < stock; i++ {
-		m.addClient(true)
+		m.addClient()
 	}
 	return m, nil
 }
 
-func (m *SustainedModel) addClient(stock bool) int {
+func (m *SustainedModel) addClient() {
 	c := syntheticClient{hot: m.rng.intn(10) == 0}
 	switch n := m.rng.intn(100); {
 	case n < 60:
@@ -139,23 +138,21 @@ func (m *SustainedModel) addClient(stock bool) int {
 	default:
 		c.class, c.limit = "heavy", 17+m.rng.intn(32)
 	}
-	if stock {
-		for d := range c.days {
-			day := &c.days[d]
-			day.revision = 1
-			count := 1 + m.rng.intn(c.limit)
-			for j := 0; j < count; j++ {
-				m.appendRow(day)
-				row := &day.rows[len(day.rows)-1]
-				for n := m.calls(); n > 0; n-- {
-					addSynthetic(&row.syntheticMetric, m.call())
-				}
+	for d := range c.days {
+		day := &c.days[d]
+		day.revision = 1
+		count := 1 + m.rng.intn(c.limit)
+		for j := 0; j < count; j++ {
+			m.appendRow(day)
+			row := &day.rows[len(day.rows)-1]
+			for n := m.calls(); n > 0; n-- {
+				addSynthetic(&row.syntheticMetric, m.call())
 			}
-			var err error
-			c.initial[d], err = m.body(day)
-			if err != nil {
-				panic(err) // the fixed JSON struct contains no unsupported values
-			}
+		}
+		var err error
+		c.initial[d], err = m.body(day)
+		if err != nil {
+			panic(err) // the fixed JSON struct contains no unsupported values
 		}
 	}
 	index := len(m.clients)
@@ -165,7 +162,6 @@ func (m *SustainedModel) addClient(stock bool) int {
 	} else {
 		m.cold = append(m.cold, index)
 	}
-	return index
 }
 
 func (m *SustainedModel) calls() int {
@@ -276,26 +272,20 @@ func (m *SustainedModel) Initial(client int, day string) (json.RawMessage, error
 }
 
 // Next advances the deterministic content sequence. The caller must separately
-// persist and account for this task even if it cannot yet be sent or registered.
+// persist and account for this task even if it cannot yet be sent.
 func (m *SustainedModel) Next() (SustainedTask, error) {
 	var task SustainedTask
-	index := 0
-	isNew := m.rng.intn(100) == 0
-	if isNew {
-		index = m.addClient(false)
-	} else {
-		group := m.cold
-		if m.rng.intn(2) == 0 {
+	group := m.cold
+	if m.rng.intn(2) == 0 {
+		group = m.hot
+	}
+	if len(group) == 0 {
+		group = m.cold
+		if len(group) == 0 {
 			group = m.hot
 		}
-		if len(group) == 0 {
-			group = m.cold
-			if len(group) == 0 {
-				group = m.hot
-			}
-		}
-		index = group[m.rng.intn(len(group))]
 	}
+	index := group[m.rng.intn(len(group))]
 	c := &m.clients[index]
 	dateIndex := 0
 	if m.rng.intn(100) < 10 {
@@ -361,7 +351,7 @@ func (m *SustainedModel) Next() (SustainedTask, error) {
 	}
 	m.sequence++
 	sum := sha256.Sum256(body)
-	return SustainedTask{Sequence: m.sequence, Client: index + 1, New: isNew, Hot: c.hot, Class: c.class, Limit: c.limit, Day: m.day[dateIndex], Revision: d.revision, Deltas: changes, Body: body, BodyHash: hex.EncodeToString(sum[:])}, nil
+	return SustainedTask{Sequence: m.sequence, Client: index + 1, Hot: c.hot, Class: c.class, Limit: c.limit, Day: m.day[dateIndex], Revision: d.revision, Deltas: changes, Body: body, BodyHash: hex.EncodeToString(sum[:])}, nil
 }
 
 func (m *SustainedModel) weightedRow(day *syntheticDay, choices []int) int {

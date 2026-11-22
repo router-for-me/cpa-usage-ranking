@@ -224,16 +224,27 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 				return e
 			}
 			defer tx.Rollback()
-			cs, e := tx.PrepareContext(ctx, `INSERT INTO clients(id,token_hash,display_name,avatar_id,created_at_ms) VALUES(?,?,?,?,?)`)
+			cs, e := tx.PrepareContext(ctx, `INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
+				VALUES(?,?,'550e8400-e29b-41d4-a716-446655440000',?,1,?)`)
 			if e != nil {
 				return e
 			}
 			defer cs.Close()
-			rs, e := tx.PrepareContext(ctx, `INSERT INTO daily_reports(day,client_id,revision,digest,received_at_ms) VALUES(?,?,1,?,?)`)
+			ws, e := tx.PrepareContext(ctx, `INSERT INTO client_writers(id,client_id,token_hash) VALUES(?,?,?)`)
+			if e != nil {
+				return e
+			}
+			defer ws.Close()
+			rs, e := tx.PrepareContext(ctx, `INSERT INTO daily_reports(day,client_id,received_at_ms) VALUES(?,?,?)`)
 			if e != nil {
 				return e
 			}
 			defer rs.Close()
+			vs, e := tx.PrepareContext(ctx, `INSERT INTO daily_writer_versions(day,writer_id,client_id,revision,digest) VALUES(?,?,?,1,?)`)
+			if e != nil {
+				return e
+			}
+			defer vs.Close()
 			ds, e := tx.PrepareContext(ctx, `INSERT INTO daily_stats(day,client_id,model_id,`+metricColumns+`) VALUES(?,?,?,`+metricPlaceholders+`)`)
 			if e != nil {
 				return e
@@ -247,7 +258,10 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 			for id := first; id < first+250 && id <= clients; id++ {
 				secret, _ := base64.RawURLEncoding.DecodeString(f.Secret(id))
 				hash := sha256.Sum256(secret)
-				if _, e = cs.ExecContext(ctx, id, hash[:], fmt.Sprintf("capacity-%06d", id), 1, now.UnixMilli()); e != nil {
+				if _, e = cs.ExecContext(ctx, id, id, fmt.Sprintf("capacity-%06d", id), now.UnixMilli()); e != nil {
+					return e
+				}
+				if _, e = ws.ExecContext(ctx, id, id, hash[:]); e != nil {
 					return e
 				}
 				days := 2
@@ -281,7 +295,10 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 						}
 						sort.Slice(dayKeys, func(i, j int) bool { return dayKeys[i].ModelID < dayKeys[j].ModelID })
 					}
-					if _, e = rs.ExecContext(ctx, date, id, dayDigest[:], now.UnixMilli()); e != nil {
+					if _, e = rs.ExecContext(ctx, date, id, now.UnixMilli()); e != nil {
+						return e
+					}
+					if _, e = vs.ExecContext(ctx, date, id, id, dayDigest[:]); e != nil {
 						return e
 					}
 					for _, k := range dayKeys {
@@ -330,7 +347,7 @@ func Inspect(ctx context.Context, path string) (map[string]any, error) {
 	}
 	defer db.Close()
 	result := map[string]any{}
-	for name, q := range map[string]string{"clients": "SELECT count(*) FROM clients", "daily_reports": "SELECT count(*) FROM daily_reports", "daily_rows": "SELECT count(*) FROM daily_stats", "period_rows": "SELECT count(*) FROM period_stats", "pending_tokens": "SELECT coalesce(sum(total_tokens),0) FROM daily_stats WHERE model_id=0", "settled_tokens": "SELECT coalesce(sum(total_tokens),0) FROM period_stats WHERE kind='all' AND model_id=0", "pending_revision_sum": "SELECT coalesce(sum(revision),0) FROM daily_reports", "closed_backlog": "SELECT count(*) FROM daily_reports WHERE day<(SELECT closed_before_day FROM report_window WHERE id=1)"} {
+	for name, q := range map[string]string{"clients": "SELECT count(*) FROM clients", "daily_reports": "SELECT count(*) FROM daily_reports", "daily_rows": "SELECT count(*) FROM daily_stats", "period_rows": "SELECT count(*) FROM period_stats", "pending_tokens": "SELECT coalesce(sum(total_tokens),0) FROM daily_stats WHERE model_id=0", "settled_tokens": "SELECT coalesce(sum(total_tokens),0) FROM period_stats WHERE kind='all' AND model_id=0", "pending_revision_sum": "SELECT coalesce(sum(revision),0) FROM daily_writer_versions", "closed_backlog": "SELECT count(*) FROM daily_reports WHERE day<(SELECT closed_before_day FROM report_window WHERE id=1)"} {
 		var n int64
 		if err = db.QueryRowContext(ctx, q).Scan(&n); err != nil {
 			return nil, err

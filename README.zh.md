@@ -26,10 +26,10 @@
 
 ## 核心特性
 
-- **开放的 CPA 客户端接入协议**：客户端自行生成并保管 32 字节随机凭据（服务端仅存 `SHA-256` 摘要），无需预发账号，仅需“注册身份 → 提交 UTC 日累计快照”两步即可接入。
-- **隐私最小化与协议幂等**：仅上报模型级 Token、请求数、成功率与延迟统计；支持 `revision` 版本控制与幂等重试，网络超时重发不会重复累加数据。
+- **开放的 CPA 客户端接入协议**：客户端自行生成并保管 32 字节随机凭据（服务端仅存 `SHA-256` 摘要），不预发账号。经 GitHub 授权后，同一 GitHub 账号与 CPA UUID 的多个上报端共用排名席位。
+- **隐私最小化与协议幂等**：仅上报模型级 Token、请求数、成功率与延迟统计；各端独立维护 `revision`；同席每天只保留一份完整快照，网络重发不会覆盖其他端的新快照。
 - **五维榜单与完整自然周期**：内置**综合总榜、用量榜、缓存复用榜、成功率榜、首字响应榜**，支持**今日、昨日、周榜（上一完整 UTC 自然周）、月榜（上一完整 UTC 自然月）**切换，64 位大整数全程十进制字符串传输与无损格式化。
-- **轻量单机高吞吐架构**：基于 Go + SQLite（`WAL`、`FULL` 同步、单写串行队列），后台自动完成封窗日结与历史裁剪，内存原子缓存秒级响应公开读请求；2 vCPU / 1 GiB 内存限制下实测可持续处理 [500 TPS 日快照上报](docs/benchmark.md)。
+- **轻量单机高吞吐架构**：基于 Go + SQLite（`WAL`、`FULL` 同步、单写串行队列），后台自动完成封窗日结与历史裁剪，内存原子缓存秒级响应公开读请求；历史构建在 2 vCPU / 1 GiB 下实测 [500 TPS 日快照上报](docs/benchmark.md)，并非当前协议的容量声明。
 - **内嵌响应式前端与可选管理台**：同域托管极简 Web 榜单（桌面、平板、手机自适应，内置 66 款 WebP 头像）；按需挂载配置文件即可开启管理员控制台，支持用户检索、封禁与独立下榜管理。
 
 ## 客户端接入
@@ -41,27 +41,37 @@
 | 步骤 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
 | 1. 生成凭据 | 客户端本地生成 | — | 生成 32 字节密码学安全随机数，编码为 43 字符无填充 `base64url` 并本地持久化 |
-| 2. 注册/找回身份 | `POST /v1/clients/register` | `Bearer <secret>` | 提交 `display_name` 与可选 `avatar_id`（`1`–`66`）；首次返回 `201`，同凭据重试幂等返回 `200` |
-| 3. 上报日快照 | `PUT /v1/reports/{utc_day}` | `Bearer <secret>` | 开放窗口为 UTC **今日与昨日**；按标准模型合并当日累计值并递增 `revision` 原子替换 |
-| 4. 读取排行榜 | `GET /v1/leaderboards/{board}/{period}` | 无需凭据 | 读取最新发布的公开缓存榜单（最多前 100 名）；头像清单见 `/avatars/catalog.json` |
+| 2. 开始注册 | `POST /v1/clients/register/start` | `Bearer <secret>` | 提交持久 CPA UUID 与 `return_to`；在浏览器打开返回的授权链接 |
+| 3. 完成注册 | `POST /v1/clients/register/complete` | 原 `Bearer` | 提交 `request_id`；`201` 新席位，`200` 复用或恢复已办结结果，`202` 待授权 |
+| 4. 上报日快照 | `PUT /v1/clients/report/{utc_day}` | `Bearer <secret>` | UTC **今日/昨日**；各端独立维护修订号，最新提交的完整快照覆盖整席当日数据 |
+| 5. 退出席位（可选） | `POST /v1/clients/withdraw` | `Bearer <secret>` | 无正文；`204` 表示整席退出已落库，所有端停止上报 |
+| 读取排行榜 | `GET /v1/leaderboards/{board}/{period}` | 无需凭据 | 读取最新发布的公开缓存榜单（最多 100 名） |
 
 > **上报聚合约定**：客户端在提交前须将同一 UTC 日、同一标准模型的统计合并为单条记录（不含 `service_tier` 字段）；`ttft_avg_ms` 与 `latency_avg_ms` 须按各自真实样本数加权计算均值，无样本时传 `null` 且样本数传 `"0"`。未知模型不会报错，但仅纳入目录的[标准模型及别名](docs/model-catalog.md)计入榜单统计。
 
 ### 最小接入示例（cURL）
 
+使用已[配置 GitHub OAuth 的 HTTPS 服务](docs/docker.zh.md#github-oauth-app)。下方 UUID 仅为示例，正式接入读取 CPA 提供的持久 UUID；返回页按需替换。
+
 ```sh
 # 1. 生成并妥善保存 43 字符无填充 base64url 凭据（32 字节随机数）
 SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
 
-# 2. 注册客户端身份（相同 SECRET 重复调用幂等返回既有 client_id）
-curl -sS -X POST http://127.0.0.1:8080/v1/clients/register \
-  -H "Authorization: Bearer $SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "CPA-Keeper-Node", "avatar_id": 1}'
+# 2. 领号，保存返回的 request_id，并在浏览器打开 authorize_url
+BASE=https://ranking.example.com
+curl -sS -X POST "$BASE/v1/clients/register/start" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d '{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:3001/settings?tab=ranking#status"}'
 
-# 3. 提交当前 UTC 日的完整累计快照（每次更新递增 revision）
+# 3. GitHub 授权后，用原编号和同一凭据办结；收到 200 或 201 后再上报
+REQUEST_ID='替换为返回的 request_id'
+curl -sS -X POST "$BASE/v1/clients/register/complete" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d "{\"request_id\":\"$REQUEST_ID\"}"
+
+# 4. 上报当前 UTC 日的完整累计快照
 TODAY=$(date -u +%F)
-curl -sS -X PUT "http://127.0.0.1:8080/v1/reports/$TODAY" \
+curl -sS -X PUT "$BASE/v1/clients/report/$TODAY" \
   -H "Authorization: Bearer $SECRET" \
   -H "Content-Type: application/json" \
   -d '{
@@ -84,8 +94,8 @@ curl -sS -X PUT "http://127.0.0.1:8080/v1/reports/$TODAY" \
     }]
   }'
 
-# 4. 读取公开综合总榜
-curl -sS http://127.0.0.1:8080/v1/leaderboards/overall/today
+# 读取公开综合总榜无需注册
+curl -sS "$BASE/v1/leaderboards/overall/today"
 ```
 
 ## 排行榜与评分
@@ -136,7 +146,9 @@ docker compose -p cpa-ranking up -d --no-build
 
 ### 生产环境安全提示
 
-- **必须启用 HTTPS**：客户端注册与上报请求携带 Bearer 凭据。示例 `compose.yaml` 默认仅绑定宿主机回环 `127.0.0.1:8080:8080`，对公网提供服务时请前置 Nginx / Caddy / Traefik 等反向代理终止 TLS，切勿在公网明文暴露 HTTP。
+- **开启 GitHub 注册**：创建 GitHub OAuth App，将回调设为公开 HTTPS 入口下的 `/auth/github/callback`，在运行时传入 OAuth 配置。未配置时仍可读榜、接收已有上报端的写入。部署步骤见 [GitHub OAuth App](docs/docker.zh.md#github-oauth-app)。
+
+- **必须启用 HTTPS**：客户端注册与上报请求携带 Bearer 凭据。示例 `compose.yaml` 默认仅绑定宿主机回环 `127.0.0.1:8080:8080`，对公网提供服务时请前置 Nginx / Caddy / Traefik 等反向代理终止 TLS，切勿在公网明文暴露 HTTP，且不要记录凭据、Cookie 或 OAuth 完整查询串。
 - **可信代理配置**：服务端默认不信任 `X-Forwarded-For` 等转发头；前置反向代理后，请将代理 IP/网段填入 `RANKING_TRUSTED_PROXIES`，以确保按真实客户端来源执行注册与登录限流（详见[注册来源说明](docs/registration-sources.md)）。
 - **单实例与持久化卷**：容器以非特权 `10001:10001` 运行，SQLite 数据持久化于 `/data`（命名卷 `cpa-ranking_ranking-data`）。请保持单实例本地磁盘运行，勿在 NFS 或多副本间共享同一 SQLite 文件。
 
@@ -173,12 +185,15 @@ docker compose -p cpa-ranking up -d --no-build
 | `RANKING_CACHE_REFRESH_INTERVAL` | `5m` | 排行榜统一缓存定时刷新周期 |
 | `RANKING_SHUTDOWN_TIMEOUT` | `10s` | 优雅停机各阶段排空超时 |
 | `RANKING_TRUSTED_PROXIES` | 未设置（不信任任何转发头） | 逗号分隔的可信反向代理 IP 或 CIDR |
-| `RANKING_REGISTRATION_ENABLED` | `true` | 是否允许注册新客户端身份（设为 `false` 仍保留已有身份鉴权与幂等找回） |
+| `RANKING_PUBLIC_ORIGIN` | 未设置 | 公开 HTTPS 入口；注册须与以下两个变量同时配置 |
+| `RANKING_GITHUB_CLIENT_ID` | 未设置 | GitHub OAuth App Client ID |
+| `RANKING_GITHUB_CLIENT_SECRET` | 未设置 | GitHub OAuth App Client Secret，仅运行时注入 |
+| `RANKING_REGISTRATION_ENABLED` | `true` | 配置 OAuth 后允许领号及绑定新上报端；关闭不影响已有凭据上报 |
 | `RANKING_REGISTRATION_IPV6_64` | `true` | 原生 IPv6 来源按 `/64` 前缀归并计算注册/登录限流 |
 | `RANKING_SETTLED_DAY_RETENTION_DAYS` | `31` | 已日结的单日汇总保留天数（范围 `1`–`36500`） |
 | `RANKING_ADMIN_CONFIG_FILE` | 未设置（关闭管理后台） | 主管理员 JSON 配置文件路径（须位于 `RANKING_WEB_DIR` 之外） |
 
-注册请求窗口/创建配额与上报并发/速率桶等细粒度调优参数，详见 **[注册 API 配置](docs/registration-api.md#startup-configuration)**、**[注册准入限流](docs/registration-admission.md)** 与 **[日快照上报规范](docs/report-snapshots.md)**。
+领号请求窗口和容量与上报并发/速率桶等细粒度调优参数，详见 **[注册 API 配置](docs/registration-api.md#startup-configuration)**、**[注册准入限流](docs/registration-admission.md)** 与 **[日快照上报规范](docs/report-snapshots.md)**。
 
 ### 健康与就绪探针
 
@@ -187,7 +202,7 @@ docker compose -p cpa-ranking up -d --no-build
 
 ## 性能基准
 
-在 2 vCPU / 1 GiB 内存（无 Swap）的受限 cgroup 环境下，面对 20,000+ 注册客户端与起始积压负载，服务完成了连续 20 分钟、约 **500 TPS** 的日快照持续写入与积压恢复验证。完整硬件环境、负载模型、延迟分布与适用边界请参阅 **[500 TPS 持续上报基准测试报告](docs/benchmark.md)** 及 **[容量测试工具说明](docs/capacity-tool.md)**。
+历史基准中，在 2 vCPU / 1 GiB 内存（无 Swap）的 cgroup 环境下，原服务面对 20,000+ 旧版注册客户端与起始积压负载，完成了连续 20 分钟、约 **500 TPS** 的日快照持续写入与积压恢复验证。完整硬件环境、负载模型、延迟分布与适用边界请参阅 **[500 TPS 持续上报基准测试报告](docs/benchmark.md)** 及 **[容量测试工具说明](docs/capacity-tool.md)**。
 
 ## 文档导航
 
@@ -216,7 +231,7 @@ internal/
   leaderboard/         五维榜单评分、Wilson 下界、中位数参考与 Top 100 截断
   models/              模型目录校验与标准名称/别名解析
   periods/             UTC 自然日/周/月/年周期边界计算
-  registration/        注册幂等服务、来源固定窗口限流与滚动创建配额
+  registration/        GitHub OAuth 注册事务、来源及全局领号限流
   reports/             严格 JSON 解码、快照摘要、单写串行队列、后台日结与自然保留
   statistics/          只读事务合并已结周期表与未结日表候选快照
   storage/             SQLite 连接池与当前表结构初始化

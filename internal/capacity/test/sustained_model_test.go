@@ -79,7 +79,7 @@ func TestSustainedDeterministicIncrementLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	days := map[string]independentDay{}
-	newCount, yesterday := 0, 0
+	yesterday := 0
 	var firstBody []byte
 	for i := 0; i < 2500; i++ {
 		task, err := a.Next()
@@ -102,11 +102,8 @@ func TestSustainedDeterministicIncrementLedger(t *testing.T) {
 		if task.BodyHash != hex.EncodeToString(sum[:]) || task.Sequence != int64(i+1) || len(task.Deltas) < 1 || len(task.Deltas) > 4 {
 			t.Fatalf("invalid task: %+v", task)
 		}
-		if task.New {
-			newCount++
-			if task.Client <= stock {
-				t.Fatal("new identity overlaps stock")
-			}
+		if task.Client < 1 || task.Client > stock {
+			t.Fatal("unseeded synthetic seat")
 		}
 		if task.Day == "2026-11-12" {
 			yesterday++
@@ -116,14 +113,11 @@ func TestSustainedDeterministicIncrementLedger(t *testing.T) {
 		key := fmt.Sprintf("%d/%s", task.Client, task.Day)
 		prior, ok := days[key]
 		if !ok {
-			prior = independentDay{rows: make(map[string]independentRow)}
-			if task.Client <= stock {
-				initial, err := a.Initial(task.Client, task.Day)
-				if err != nil {
-					t.Fatal(err)
-				}
-				prior = decodeIndependent(t, initial)
+			initial, err := a.Initial(task.Client, task.Day)
+			if err != nil {
+				t.Fatal(err)
 			}
+			prior = decodeIndependent(t, initial)
 		}
 		if task.Revision != prior.revision+1 {
 			t.Fatalf("version did not advance by one for %s", key)
@@ -164,8 +158,8 @@ func TestSustainedDeterministicIncrementLedger(t *testing.T) {
 		}
 		days[key] = prior
 	}
-	if newCount < 10 || newCount > 45 || yesterday < 180 || yesterday > 320 {
-		t.Fatalf("unexpected basic proportions: new=%d yesterday=%d", newCount, yesterday)
+	if yesterday < 180 || yesterday > 320 {
+		t.Fatalf("unexpected basic proportions: yesterday=%d", yesterday)
 	}
 	if len(firstBody) == 0 {
 		t.Fatal("first body was lost")
@@ -281,7 +275,7 @@ func TestSustainedSeedAndRealSQLiteApply(t *testing.T) {
 			}
 			var rev int64
 			var digest []byte
-			if err = db.Reader.QueryRowContext(ctx, "SELECT revision,digest FROM daily_reports WHERE client_id=? AND day=?", id, date).Scan(&rev, &digest); err != nil {
+			if err = db.Reader.QueryRowContext(ctx, "SELECT revision,digest FROM daily_writer_versions WHERE writer_id=? AND day=?", id, date).Scan(&rev, &digest); err != nil {
 				t.Fatal(err)
 			}
 			want := p.Digest()
@@ -300,16 +294,11 @@ func TestSustainedSeedAndRealSQLiteApply(t *testing.T) {
 	}
 	at, _ := time.Parse(time.DateOnly, day)
 	store := reports.NewStore(db.Writer, registry, func() time.Time { return at.Add(12 * time.Hour) })
-	// Use only stock tasks in this test; new identity registration is tested by
-	// the full load driver and cannot be simulated by assigning a client ID.
 	applied := 0
 	for applied < 100 {
 		task, err := model.Next()
 		if err != nil {
 			t.Fatal(err)
-		}
-		if task.Client > stock {
-			continue
 		}
 		r, err := reports.Decode(task.Body)
 		if err != nil {
@@ -329,7 +318,7 @@ func TestSustainedSeedAndRealSQLiteApply(t *testing.T) {
 		}
 		var rev int64
 		var digest []byte
-		if err = db.Reader.QueryRowContext(ctx, "SELECT revision,digest FROM daily_reports WHERE client_id=? AND day=?", task.Client, task.Day).Scan(&rev, &digest); err != nil {
+		if err = db.Reader.QueryRowContext(ctx, "SELECT revision,digest FROM daily_writer_versions WHERE writer_id=? AND day=?", task.Client, task.Day).Scan(&rev, &digest); err != nil {
 			t.Fatal(err)
 		}
 		want := p.Digest()

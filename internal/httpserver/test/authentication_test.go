@@ -16,6 +16,7 @@ import (
 	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/httpserver"
 	"cpa-usage-ranking/internal/storage"
+	"cpa-usage-ranking/internal/testfixture"
 	"github.com/gin-gonic/gin"
 )
 
@@ -38,11 +39,11 @@ func TestClientAuthenticationIgnoresClaimedIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		client, err := repo.Create(ctx, clients.NewClient{CredentialHash: hash, DisplayName: "unchanged", AvatarID: 1})
+		writer, err := testfixture.Seat(ctx, db.Writer, hash, "unchanged", 1)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return client, secret
+		return writer.Client, secret
 	}
 	owner, secret := create(1)
 	other, otherSecret := create(2)

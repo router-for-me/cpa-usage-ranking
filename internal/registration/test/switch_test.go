@@ -5,59 +5,65 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"testing"
 
 	"cpa-usage-ranking/internal/auth"
-	"cpa-usage-ranking/internal/avatars"
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/registration"
 )
 
 func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
-	db, repo, open := setup(t)
+	path := filepath.Join(t.TempDir(), "registration.db")
+	db, service := open(t, path, registration.DefaultOptions())
 	ctx := context.Background()
 	secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	hash, err := auth.HashCredential(secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := open.Register(ctx, "source", hash, registration.Profile{DisplayName: "Original"})
+	id, err := service.Start(ctx, hash, uuid, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := avatars.Load(avatars.BuiltinFS())
+	approve(t, db, id)
+	first, err := service.Complete(ctx, hash, id)
+	if err != nil || !first.Created {
+		t.Fatal(first, err)
+	}
+	other, err := service.Start(ctx, digest(1), uuid, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
+	approve(t, db, other)
 	opts := registration.DefaultOptions()
-	opts.NewIdentitiesEnabled = false
-	closed, err := registration.NewService(repo, catalog, opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := closed.Register(ctx, "another source", hash, registration.Profile{DisplayName: "\x00", AvatarID: id(-1)})
-	if err != nil || r.Created || r.Client.ID != first.Client.ID || r.Client.DisplayName != "Original" {
+	opts.Enabled = false
+	_, closed := open(t, path, opts)
+	r, err := closed.Complete(ctx, hash, id)
+	if err != nil || r.Created || r.Client.ID != first.Client.ID {
 		t.Fatalf("closed retry: %+v %v", r, err)
 	}
-	for _, profile := range []registration.Profile{{}, {DisplayName: "new"}} {
-		if _, err := closed.Register(ctx, "source", digest(1), profile); !errors.Is(err, registration.ErrRegistrationClosed) {
-			t.Fatalf("new identity accepted when closed: %v", err)
-		}
+	if _, err := closed.Start(ctx, hash, uuid, returnTo); !errors.Is(err, registration.ErrRegistrationClosed) {
+		t.Fatalf("new start accepted when closed: %v", err)
 	}
+	if _, err := closed.Complete(ctx, digest(1), other); !errors.Is(err, registration.ErrRegistrationClosed) {
+		t.Fatalf("new writer accepted when closed: %v", err)
+	}
+	repo := clients.NewRepository(db)
 	authenticator := auth.NewAuthenticator(repo)
-	client, err := authenticator.Authenticate(ctx, http.Header{"Authorization": {"Bearer " + secret}})
+	headers := http.Header{"Authorization": {"Bearer " + secret}}
+	client, err := authenticator.Authenticate(ctx, headers)
 	if err != nil || client.ID != first.Client.ID {
 		t.Fatalf("switch broke authentication: %+v %v", client, err)
 	}
 	if err := repo.SetDisabled(ctx, first.Client.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := closed.Register(ctx, "source", hash, registration.Profile{}); !errors.Is(err, registration.ErrDisabled) {
+	if _, err := closed.Complete(ctx, hash, id); !errors.Is(err, clients.ErrDisabled) {
 		t.Fatalf("switch obscured disabled state: %v", err)
 	}
-	if _, err := authenticator.Authenticate(ctx, http.Header{"Authorization": {"Bearer " + secret}}); !errors.Is(err, auth.ErrClientDisabled) {
+	if _, err := authenticator.Authenticate(ctx, headers); !errors.Is(err, clients.ErrDisabled) {
 		t.Fatalf("disabled authentication: %v", err)
 	}
-	if count(t, db) != 1 {
-		t.Fatal("switch created an identity")
-	}
+	counts(t, db, 1, 1, 2)
 }

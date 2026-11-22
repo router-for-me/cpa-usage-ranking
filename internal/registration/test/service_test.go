@@ -3,192 +3,226 @@ package test
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"cpa-usage-ranking/internal/avatars"
 	"cpa-usage-ranking/internal/clients"
-	"cpa-usage-ranking/internal/profiles"
 	"cpa-usage-ranking/internal/registration"
 	"cpa-usage-ranking/internal/storage"
 )
 
-func setup(t *testing.T) (*storage.DB, *clients.Repository, *registration.Service) {
-	t.Helper()
-	return setupOptions(t, registration.DefaultOptions())
-}
+const uuid = "550e8400-e29b-41d4-a716-446655440000"
+const returnTo = "http://localhost:8080/settings"
 
-func setupOptions(t *testing.T, options registration.Options) (*storage.DB, *clients.Repository, *registration.Service) {
+func open(t *testing.T, path string, options registration.Options) (*storage.DB, *registration.Service) {
 	t.Helper()
-	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "registration.db"))
+	db, err := storage.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	t.Cleanup(func() { _ = db.Close() })
 	if err := storage.InitSchema(context.Background(), db.Writer); err != nil {
 		t.Fatal(err)
 	}
-	repo := clients.NewRepository(db)
-	catalog, err := avatars.Load(avatars.BuiltinFS())
+	service, err := registration.NewService(db, 1, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := registration.NewService(repo, catalog, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return db, repo, service
+	return db, service
 }
 
 func digest(i byte) clients.CredentialHash { return clients.CredentialHash{i} }
-func id(i int64) *int64                    { return &i }
 
-func count(t *testing.T, db *storage.DB) int {
+func approve(t *testing.T, db *storage.DB, id string) {
 	t.Helper()
-	var n int
-	if err := db.Reader.QueryRow("SELECT COUNT(*) FROM clients").Scan(&n); err != nil {
+	// 模拟已经过浏览器回调的状态；完整授权流程由 HTTP 测试覆盖。
+	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='GitHub User' WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
-	return n
 }
 
-func TestRegistrationAndCurrentProfileRetry(t *testing.T) {
-	db, repo, service := setup(t)
+func counts(t *testing.T, db *storage.DB, seats, writers, requests int) {
+	t.Helper()
+	var s, w, r int
+	if err := db.Reader.QueryRow(`SELECT (SELECT count(*) FROM clients),(SELECT count(*) FROM client_writers),(SELECT count(*) FROM registration_requests)`).Scan(&s, &w, &r); err != nil || s != seats || w != writers || r != requests {
+		t.Fatalf("counts: %d %d %d, want %d %d %d, err=%v", s, w, r, seats, writers, requests, err)
+	}
+}
+
+func TestConcurrentSafeRetriesAcrossIndependentSQLitePools(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registration.db")
+	db, one := open(t, path, registration.DefaultOptions())
+	_, two := open(t, path, registration.DefaultOptions())
 	ctx := context.Background()
-	first, err := service.Register(ctx, "source", digest(1), registration.Profile{DisplayName: "  Ａlice 🙂  "})
-	if err != nil || !first.Created || first.Client.ID <= 0 || first.Client.DisplayName != "Alice 🙂" || first.Client.AvatarID != 1 {
-		t.Fatalf("registration: %+v %v", first, err)
-	}
-	if err := repo.UpdateProfile(ctx, first.Client.ID, "Current profile", 66); err != nil {
-		t.Fatal(err)
-	}
-	// 已有身份忽略新建资料，不以参数未变为重试前提。
-	for _, profile := range []registration.Profile{{}, {DisplayName: "replacement", AvatarID: id(2)}, {DisplayName: "\x00", AvatarID: id(-1)}} {
-		retry, err := service.Register(ctx, "source", digest(1), profile)
-		if err != nil || retry.Created || retry.Client.ID != first.Client.ID || retry.Client.DisplayName != "Current profile" || retry.Client.AvatarID != 66 || !retry.Client.CreatedAt.Equal(first.Client.CreatedAt) {
-			t.Fatalf("retry changed identity/profile: %+v %v", retry, err)
+	ids := make([]string, 2)
+	services := []*registration.Service{one, two}
+	for i, service := range services {
+		var err error
+		ids[i], err = service.Start(ctx, digest(byte(i+1)), uuid, returnTo)
+		if err != nil {
+			t.Fatal(err)
 		}
+		approve(t, db, ids[i])
 	}
-	other, err := service.Register(ctx, "source", digest(2), registration.Profile{DisplayName: "Current profile", AvatarID: id(66)})
-	if err != nil || other.Client.ID == first.Client.ID || !other.Created || count(t, db) != 2 {
-		t.Fatalf("same profile claimed identity: %+v %v", other, err)
-	}
-}
-
-func TestNewIdentityValidationAndDisabledRetry(t *testing.T) {
-	db, repo, service := setup(t)
-	ctx := context.Background()
-	for _, c := range []struct {
-		profile registration.Profile
-		want    error
-	}{
-		{registration.Profile{}, profiles.ErrInvalidDisplayName},
-		{registration.Profile{DisplayName: "\x00"}, profiles.ErrInvalidDisplayName},
-		{registration.Profile{DisplayName: "name", AvatarID: id(0)}, registration.ErrInvalidAvatar},
-		{registration.Profile{DisplayName: "name", AvatarID: id(-1)}, registration.ErrInvalidAvatar},
-		{registration.Profile{DisplayName: "name", AvatarID: id(67)}, registration.ErrInvalidAvatar},
-	} {
-		_, err := service.Register(ctx, "source", digest(1), c.profile)
-		if !errors.Is(err, c.want) || count(t, db) != 0 {
-			t.Fatalf("validation: %v", err)
-		}
-	}
-	first, err := service.Register(ctx, "source", digest(1), registration.Profile{DisplayName: "name", AvatarID: id(66)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.SetDisabled(ctx, first.Client.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := service.Register(ctx, "source", digest(1), registration.Profile{DisplayName: "changed"}); !errors.Is(err, registration.ErrDisabled) {
-		t.Fatalf("disabled retry: %v", err)
-	}
-	stored, err := repo.ByID(ctx, first.Client.ID)
-	if err != nil || !stored.Disabled || stored.DisplayName != "name" || stored.AvatarID != 66 || count(t, db) != 1 {
-		t.Fatalf("disabled identity mutated: %+v %v", stored, err)
-	}
-}
-
-func TestConcurrentSafeRetriesAcrossServices(t *testing.T) {
-	db, repo, service := setup(t)
-	catalog, err := avatars.Load(avatars.BuiltinFS())
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := registration.NewService(repo, catalog, registration.DefaultOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	const n = 32
+	const n = 16
 	results := make(chan registration.Result, n)
-	failures := make(chan error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			s := service
-			if i%2 != 0 {
-				s = other
-			}
-			result, err := s.Register(context.Background(), "source", digest(1), registration.Profile{DisplayName: "same name"})
+	for i := range n {
+		wg.Go(func() {
+			r, err := services[i%2].Complete(ctx, digest(byte(i%2+1)), ids[i%2])
 			if err != nil {
-				failures <- err
+				t.Error(err)
 				return
 			}
-			results <- result
-		}(i)
+			results <- r
+		})
 	}
 	wg.Wait()
 	close(results)
-	close(failures)
-	for err := range failures {
-		t.Error(err)
-	}
-	var clientID int64
 	created := 0
-	received := 0
 	for r := range results {
-		received++
+		if r.Client.ID != 1 || r.Client.DisplayName != "GitHub User" || r.Client.AvatarID != 1 {
+			t.Fatalf("unexpected seat: %+v", r.Client)
+		}
 		if r.Created {
 			created++
 		}
-		if clientID == 0 {
-			clientID = r.Client.ID
-		}
-		if r.Client.ID != clientID {
-			t.Fatal("retry created another identity")
+	}
+	if created != 1 {
+		t.Fatalf("created %d seats", created)
+	}
+	counts(t, db, 1, 2, 2)
+}
+
+func TestReadOnlyRegistrationWhileWriterBusy(t *testing.T) {
+	db, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
+	hash := digest(1)
+	pending, err := s.Start(t.Context(), hash, uuid, returnTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := s.Start(t.Context(), hash, uuid, returnTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, db, completed)
+	created, err := s.Complete(t.Context(), hash, completed)
+	if err != nil || !created.Created {
+		t.Fatalf("complete fixture: %+v %v", created, err)
+	}
+	tx, err := db.Writer.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	unknown := strings.Repeat("A", 43) // 格式合法但未签发，确保查到数据库。
+	for _, tc := range []struct {
+		name, id string
+		wantID   int64
+		wantErr  error
+	}{
+		{"unknown", unknown, 0, registration.ErrExpired},
+		{"pending", pending, 0, registration.ErrPending},
+		{"completed", completed, created.Client.ID, nil},
+	} {
+		got, err := s.Complete(ctx, hash, tc.id)
+		if !errors.Is(err, tc.wantErr) || got.Client.ID != tc.wantID || got.Created {
+			t.Errorf("complete %s: client=%d created=%t err=%v; want client=%d created=false err=%v", tc.name, got.Client.ID, got.Created, err, tc.wantID, tc.wantErr)
 		}
 	}
-	if created != 1 || received != n || count(t, db) != 1 {
-		t.Fatalf("created=%d results=%d", created, received)
+	if _, err := s.Authorize(ctx, unknown); !errors.Is(err, registration.ErrInvalidRequest) {
+		t.Errorf("unknown authorize: %v", err)
+	}
+	if _, err := s.Callback(ctx, nil, unknown, unknown, ""); !errors.Is(err, registration.ErrInvalidRequest) {
+		t.Errorf("unknown callback: %v", err)
 	}
 }
 
-func TestDatabaseFailureLeavesNoPartialIdentity(t *testing.T) {
-	db, _, service := setup(t)
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return fn(r) }
+
+func TestCallbackDisconnectStillRecordsOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		verified bool
+	}{{"identity received", true}, {"identity not received", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
+			id, err := s.Start(t.Context(), digest(1), uuid, returnTo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := s.Authorize(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			browser, disconnect := context.WithCancel(t.Context())
+			defer disconnect()
+			github, err := registration.NewGitHub(registration.GitHubOptions{PublicOrigin: "https://ranking.example", ClientID: "test", ClientSecret: "test"}, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := `{"access_token":"test-token"}`
+				if r.URL.Path == "/user" {
+					disconnect()
+					if !errors.Is(r.Context().Err(), context.Canceled) {
+						t.Fatal("browser disconnect must still cancel the GitHub request")
+					}
+					if !tc.verified {
+						return nil, r.Context().Err()
+					}
+					body = `{"id":42,"login":"example"}` // response already received
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dest, callbackErr := s.Callback(browser, github, a.State, a.BrowserSession, "test-code")
+			seat, completeErr := s.Complete(t.Context(), digest(1), id)
+			if tc.verified {
+				if callbackErr != nil || dest != returnTo || completeErr != nil || !seat.Created {
+					t.Fatalf("verified identity not saved: callback=%v complete=%v created=%t", callbackErr, completeErr, seat.Created)
+				}
+			} else if !errors.Is(callbackErr, registration.ErrGitHub) || !errors.Is(completeErr, registration.ErrGitHub) {
+				t.Fatalf("unverified identity not recorded as failed: callback=%v complete=%v", callbackErr, completeErr)
+			}
+		})
+	}
+}
+
+func TestDatabaseFailureAndCancellationLeaveNoPartialIdentity(t *testing.T) {
+	db, service := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	ctx := context.Background()
-	if _, err := db.Writer.Exec(`CREATE TRIGGER reject_registration BEFORE INSERT ON clients BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+	id, err := service.Start(ctx, digest(1), uuid, returnTo)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Register(ctx, "source", digest(1), registration.Profile{DisplayName: "name"}); err == nil || count(t, db) != 0 {
-		t.Fatal("failed insert left identity")
+	approve(t, db, id)
+	if _, err := db.Writer.Exec(`CREATE TRIGGER reject_registration BEFORE UPDATE OF client_id ON registration_requests BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := service.Complete(ctx, digest(1), id); err == nil {
+		t.Fatal("failed result write confirmed")
+	}
+	counts(t, db, 0, 0, 1)
 	if _, err := db.Writer.Exec("DROP TRIGGER reject_registration"); err != nil {
 		t.Fatal(err)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := service.Register(cancelled, "source", digest(1), registration.Profile{DisplayName: "name"}); !errors.Is(err, context.Canceled) || count(t, db) != 0 {
+	if _, err := service.Complete(cancelled, digest(1), id); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled registration: %v", err)
 	}
-	r, err := service.Register(ctx, "source", digest(1), registration.Profile{DisplayName: "name"})
-	if err != nil || !r.Created || count(t, db) != 1 {
-		t.Fatalf("retry after failure: %+v %v", r, err)
+	counts(t, db, 0, 0, 1)
+	if result, err := service.Complete(ctx, digest(1), id); err != nil || !result.Created {
+		t.Fatalf("retry after rollback: %+v %v", result, err)
 	}
+	counts(t, db, 1, 1, 1)
 }

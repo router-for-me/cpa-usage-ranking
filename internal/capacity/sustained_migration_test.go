@@ -52,11 +52,11 @@ func TestReviewedRetryMigrationRealCLI(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		newClient, e := m.Next()
+		otherPending, e := m.Next()
 		if e != nil {
 			t.Fatal(e)
 		}
-		if !a.New && !b.New && a.Client != b.Client && newClient.New {
+		if a.Client != b.Client && otherPending.Client != a.Client && otherPending.Client != b.Client {
 			seed = i
 			break
 		}
@@ -86,33 +86,21 @@ func TestReviewedRetryMigrationRealCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newClient, err := model.Next()
-	if err != nil || !newClient.New {
-		t.Fatalf("missing synthetic new client: %+v %v", newClient, err)
+	otherPending, err := model.Next()
+	if err != nil {
+		t.Fatalf("missing second pending report: %+v %v", otherPending, err)
 	}
 	received := make(chan error, 1)
-	registered := make(chan error, 1)
+	retried := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, e := io.ReadAll(r.Body)
-		if r.Method == http.MethodPost {
-			if e == nil && r.Header.Get("Authorization") != "Bearer "+fixture.Secret(newClient.Client) {
-				e = fmt.Errorf("ambiguous registration did not reuse the same secret")
-			}
+		if e == nil && r.Method == http.MethodPut && bytes.Equal(body, otherPending.Body) &&
+			r.Header.Get("Authorization") == "Bearer "+fixture.Secret(otherPending.Client) {
 			select {
-			case registered <- e:
+			case retried <- nil:
 			default:
 			}
-			if e != nil {
-				w.WriteHeader(400)
-				return
-			}
-			w.WriteHeader(201)
-			_ = json.NewEncoder(w).Encode(map[string]int{"client_id": newClient.Client})
-			return
-		}
-		if e == nil && r.Method == http.MethodPut && bytes.Equal(body, newClient.Body) &&
-			r.Header.Get("Authorization") == "Bearer "+fixture.Secret(newClient.Client) {
-			_ = json.NewEncoder(w).Encode(map[string]string{"revision": fmt.Sprint(newClient.Revision)})
+			_ = json.NewEncoder(w).Encode(map[string]string{"revision": fmt.Sprint(otherPending.Revision)})
 			return
 		}
 		if e == nil && (r.Method != http.MethodPut || !bytes.Equal(body, retained.Body) || r.Header.Get("Authorization") != "Bearer "+fixture.Secret(retained.Client)) {
@@ -151,9 +139,9 @@ func TestReviewedRetryMigrationRealCLI(t *testing.T) {
 	write(sustainedRecord{Kind: "stage", TimeUnixNS: now, Command: &SustainedCommand{Operation: "stage", Stage: "old-1", Rate: 0.6}})
 	write(sustainedRecord{Kind: "created", TimeUnixNS: now, PlannedUnixNS: now, Source: "debt", Task: &first})
 	write(sustainedRecord{Kind: "created", TimeUnixNS: now, PlannedUnixNS: now, Source: "debt", Task: &retained})
-	write(sustainedRecord{Kind: "created", TimeUnixNS: now, PlannedUnixNS: now, Source: "debt", Task: &newClient})
-	write(sustainedRecord{Kind: "start", TimeUnixNS: now, Sequence: newClient.Sequence, Client: newClient.Client, Action: "register", Attempt: 1})
-	write(sustainedRecord{Kind: "finish", TimeUnixNS: now, Sequence: newClient.Sequence, Client: newClient.Client, Action: "register", Attempt: 1, Error: "canceled"})
+	write(sustainedRecord{Kind: "created", TimeUnixNS: now, PlannedUnixNS: now, Source: "debt", Task: &otherPending})
+	write(sustainedRecord{Kind: "start", TimeUnixNS: now, Sequence: otherPending.Sequence, Client: otherPending.Client, Action: "report", Attempt: 1})
+	write(sustainedRecord{Kind: "finish", TimeUnixNS: now, Sequence: otherPending.Sequence, Client: otherPending.Client, Action: "report", Attempt: 1, Error: "canceled"})
 	write(sustainedRecord{Kind: "start", TimeUnixNS: now, Sequence: first.Sequence, Client: first.Client, Action: "report", Attempt: 1})
 	write(sustainedRecord{Kind: "finish", TimeUnixNS: now, Sequence: first.Sequence, Client: first.Client, Action: "report", Attempt: 1, Status: 200, Confirmed: true, AckRevision: fmt.Sprint(first.Revision)})
 	var lastFinishNS int64
@@ -289,12 +277,12 @@ func TestReviewedRetryMigrationRealCLI(t *testing.T) {
 		t.Fatal("no 31st request")
 	}
 	select {
-	case e = <-registered:
+	case e = <-retried:
 		if e != nil {
 			t.Fatal(e)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("ambiguous registration was not retried with the same secret")
+		t.Fatal("ambiguous report was not retried with the same secret and body")
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -312,7 +300,7 @@ func TestReviewedRetryMigrationRealCLI(t *testing.T) {
 	if err = json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Sample.Produced != 3 || result.Sample.Confirmed != 3 || result.Sample.Pending != 0 || result.Sample.Registrations != 1 {
+	if result.Sample.Produced != 3 || result.Sample.Confirmed != 3 || result.Sample.Pending != 0 {
 		t.Fatalf("replay lost or duplicated ACK: %+v", result)
 	}
 	f, err := os.Open(journal)

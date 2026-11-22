@@ -79,7 +79,7 @@ func generousReportLimits() reports.IngestionLimits {
 
 func (f *reportFixture) report(t *testing.T, day, secret, body string, headers map[string]string) registrationResponse {
 	t.Helper()
-	r, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/reports/"+day, strings.NewReader(body))
+	r, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/clients/report/"+day, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,11 +117,12 @@ func expectRevision(t *testing.T, response registrationResponse, status int, rev
 
 func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 	settings := defaultRegistrationSettings()
-	settings.service.NewIdentitiesEnabled = false
+	settings.service.Enabled = false
 	f := reportSetup(t, settings, generousReportLimits(), nil)
 	first, second := f.seed(t, testSecret(1)), f.seed(t, testSecret(2))
 	a, b := testSecret(1), testSecret(2)
 	day := "2026-11-01"
+	requireHTTPError(t, f.api(t, "PUT", "/v1/reports/"+day, reportJSON, a, nil), 404, "not_found")
 	expectRevision(t, f.report(t, day, a, reportJSON, nil), 200, "1")
 	expectRevision(t, f.report(t, day, b, reportJSON, nil), 200, "1")
 	expectRevision(t, f.report(t, day, a, reportJSON, nil), 200, "1")
@@ -150,7 +151,7 @@ func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, f.report(t, day, b, reportJSON, nil), 403, "client_disabled")
-	requireHTTPError(t, f.send(t, `{"display_name":"new"}`, testSecret(3), nil), 503, "registration_closed")
+	requireHTTPError(t, f.send(t, validStartBody, testSecret(3), nil), 503, "registration_closed")
 	if strings.Contains(f.logs.String(), a) || strings.Contains(f.logs.String(), reportJSON) {
 		t.Fatal("sensitive report was logged")
 	}
@@ -201,7 +202,7 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 		requireHTTPError(t, f.report(t, day, secret, tc.body, tc.headers), tc.status, tc.code)
 	}
 	requireHTTPError(t, f.report(t, day, "", strings.Repeat("x", limits.MaxBodyBytes+100), nil), 401, "invalid_credential")
-	chunked, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/reports/"+day, strings.NewReader(reportJSON+strings.Repeat(" ", 17)))
+	chunked, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/clients/report/"+day, strings.NewReader(reportJSON+strings.Repeat(" ", 17)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +240,7 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 	if health.StatusCode != 200 {
 		t.Fatal("report limit affected health")
 	}
-	if got := g.send(t, `{"display_name":"new"}`, testSecret(2), nil); got.status != 201 {
+	if got := g.send(t, validStartBody, testSecret(2), nil); got.status != 200 {
 		t.Fatalf("report limit affected registration: %d %s", got.status, got.body)
 	}
 }
@@ -259,7 +260,7 @@ func TestReportHTTPDatabaseFailureNeverConfirms(t *testing.T) {
 		t.Fatal("database error leaked data")
 	}
 	var revision, sum int64
-	if err := f.db.Reader.QueryRow(`SELECT revision FROM daily_reports WHERE client_id=?`, client.ID).Scan(&revision); err != nil {
+	if err := f.db.Reader.QueryRow(`SELECT revision FROM daily_writer_versions WHERE client_id=?`, client.ID).Scan(&revision); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.db.Reader.QueryRow(`SELECT sum(total_tokens) FROM daily_stats WHERE client_id=?`, client.ID).Scan(&sum); err != nil {

@@ -11,7 +11,7 @@ import (
 func TestAdminBanHTTPAndRefreshNotification(t *testing.T) {
 	var notifications atomic.Int64
 	router, service, db := adminDatabaseRouter(t, httpserver.AdminHTTPOptions{RequestRefresh: func() { notifications.Add(1) }})
-	if _, err := db.Writer.Exec(`INSERT INTO clients(token_hash,display_name,avatar_id,created_at_ms) VALUES(randomblob(32),'one',1,123),(randomblob(32),'two',1,456)`); err != nil {
+	if _, err := db.Writer.Exec(`INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','one',1,123),(2,'550e8400-e29b-41d4-a716-446655440000','two',1,456)`); err != nil {
 		t.Fatal(err)
 	}
 	ownerCookie, owner := adminLoginCookie(t, service, "owner", "isolated-test-password")

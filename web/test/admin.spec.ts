@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { seedUsers } from './admin-fixtures'
+import { seedReportingSeat } from './database-fixtures'
 
 const config = process.env.RANKING_TEST_ADMIN_CONFIG
 const owner: { username: string; password: string } = config ? JSON.parse(readFileSync(config, 'utf8')) : { username: '', password: '' }
@@ -138,13 +139,10 @@ test('lists real registered users with bounded paging and unified search', async
 
 test('bans and unbans a reporting identity and refreshes the five-minute cache', async ({ page, request, baseURL }, info) => {
   const name = `ban-${randomBytes(4).toString('hex')}`
-  const headers = { Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }
-  const registered = await request.post('/v1/clients/register', { headers, data: { display_name: name, avatar_id: 1 } })
-  expect(registered.status()).toBe(201)
-  const id = String((await registered.json()).client_id)
+  const { id, headers } = seedReportingSeat(name, 1)
   const day = new Date().toISOString().slice(0, 10)
   const report = { schema_version: 1, revision: '1', items: [{ model: 'claude-fable-5', total_tokens: '1234567', input_tokens: '1000', output_tokens: '100', cache_read_tokens: '500', cache_write_tokens: '0', reasoning_tokens: '0', request_count: '10', success_count: '9', ttft_avg_ms: 12, ttft_samples: '10', latency_avg_ms: 20, latency_samples: '10' }] }
-  expect((await request.put(`/v1/reports/${day}`, { headers, data: report })).status()).toBe(200)
+  expect((await request.put(`/v1/clients/report/${day}`, { headers, data: report })).status()).toBe(200)
   await page.setViewportSize({ width: 375, height: 812 })
   await login(page)
   const session = await (await page.request.get('/v1/admin/session')).json()
@@ -176,25 +174,22 @@ test('bans and unbans a reporting identity and refreshes the five-minute cache',
   row = page.getByRole('row').filter({ hasText: name })
   await expect(page.locator('.admin-notice')).toHaveCount(0)
   await expect(row.getByText('Banned', { exact: true })).toBeVisible()
-  expect((await request.put(`/v1/reports/${day}`, { headers, data: report })).status()).toBe(403)
+  expect((await request.put(`/v1/clients/report/${day}`, { headers, data: report })).status()).toBe(403)
   await expect.poll(visible).toBe(false)
   await page.screenshot({ path: info.outputPath('banned-user-375.png'), fullPage: true })
   await row.getByRole('button', { name: 'Unban', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
   await expect(row.getByText('Active', { exact: true })).toBeVisible()
   await expect.poll(visible).toBe(true)
-  expect((await request.put(`/v1/reports/${day}`, { headers, data: report })).status()).toBe(200)
+  expect((await request.put(`/v1/clients/report/${day}`, { headers, data: report })).status()).toBe(200)
 })
 
 test('ordinary admin excludes and restores globally while ban remains independent', async ({ page, request, browser, baseURL }, info) => {
   const name = `hidden-${randomBytes(4).toString('hex')}`
-  const bearer = { Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }
-  const registered = await request.post('/v1/clients/register', { headers: bearer, data: { display_name: name, avatar_id: 2 } })
-  expect(registered.status()).toBe(201)
-  const id = String((await registered.json()).client_id)
+  const { id, headers: bearer } = seedReportingSeat(name, 2)
   const day = new Date().toISOString().slice(0, 10)
   const report = { schema_version: 1, revision: '1', items: [{ model: 'claude-fable-5', total_tokens: '1234567', input_tokens: '1000', output_tokens: '100', cache_read_tokens: '500', cache_write_tokens: '0', reasoning_tokens: '0', request_count: '10', success_count: '9', ttft_avg_ms: 12, ttft_samples: '10', latency_avg_ms: 20, latency_samples: '10' }] }
-  expect((await request.put(`/v1/reports/${day}`, { headers: bearer, data: report })).status()).toBe(200)
+  expect((await request.put(`/v1/clients/report/${day}`, { headers: bearer, data: report })).status()).toBe(200)
   await login(page)
   const ownerSession = await (await page.request.get('/v1/admin/session')).json()
   const ownerHeaders = { Origin: baseURL!, 'X-CSRF-Token': ownerSession.csrf_token }
@@ -251,7 +246,7 @@ test('ordinary admin excludes and restores globally while ban remains independen
     await expect(staff.locator('.admin-notice')).toHaveCount(0)
     await expect.poll(visible).toBe(false)
     report.revision = '2'; report.items[0].total_tokens = '7654321'
-    expect((await request.put(`/v1/reports/${day}`, { headers: bearer, data: report })).status()).toBe(200)
+    expect((await request.put(`/v1/clients/report/${day}`, { headers: bearer, data: report })).status()).toBe(200)
     await staff.getByRole('button', { name: 'Excluded Users', exact: true }).click()
     await expect(staff.getByRole('region', { name: 'Excluded Users', exact: true })).toBeVisible()
     await expect(staff.getByRole('heading', { name: 'Excluded Users' })).toHaveCount(0)

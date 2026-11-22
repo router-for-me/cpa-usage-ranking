@@ -71,6 +71,14 @@ Compose 示例未设置 CPU 或内存上限。请按主机预算配置 `cpus`、
 
 修改监听地址或端口时，同时调整 Compose 端口映射和可从容器本机访问的 `RANKING_HEALTHCHECK_URL`。镜像以 `/readyz` 检查数据库、目录和首轮真实缓存是否就绪；`/healthz` 只表示存活。后续缓存刷新失败时保留上次成功结果，因此就绪不承诺数据新鲜度。关停、生产默认注册/上报限流等其余配置见 [README](../README.zh.md#配置)、[注册 API](registration-api.md)和[上报 API](report-snapshots.md)。显式空值或非法配置，以及缺失的必需文件，会导致启动失败。
 
+## GitHub OAuth App
+
+1. 创建 GitHub OAuth App。Authorization callback URL 使用 Ranking 的公开 HTTPS 入口加固定路径，例如 `https://ranking.example.com/auth/github/callback`，**不是**客户端传入的 `return_to`。不需要仓库或邮箱权限。
+2. 启动时一起传入 `RANKING_PUBLIC_ORIGIN=https://ranking.example.com`、`RANKING_GITHUB_CLIENT_ID` 与 `RANKING_GITHUB_CLIENT_SECRET`。`compose.yaml` 从部署环境透传这三项及可选的 `RANKING_REGISTRATION_ENABLED`；`docker run` 可使用相应 `-e` 或受保护的运行时环境文件。不要把密钥提交到仓库、打入镜像或打印解析后的容器配置。
+3. 将公网 HTTPS 下的 `/auth/github/*` 和业务 API 路由到同一 Ranking 实例。代理访问日志在授权和回调路由只记路径，不记录完整查询串；各层均不记录 Authorization、Cookie 或请求体。允许 Ranking 经 HTTPS 访问 `github.com` 和 `api.github.com`；服务不会主动请求客户端的 `return_to`。
+
+未配置这三项或 `RANKING_REGISTRATION_ENABLED=false` 时，新注册关闭，已有上报端的上报、主动退出及公开读取仍可用。只配置部分 OAuth 变量会导致启动失败。从旧注册结构切换须使用**新数据卷**；没有迁移或补绑。按需另行保留原数据卷。
+
 ## 离线备份与恢复
 
 升级前先正常停止服务并确认退出成功。以下在仓库根目录执行，服务停止期间归档默认卷的**全部**内容；将归档安全保存到独立的持久位置，另行保存部署设置和自定义模型目录。客户端也必须自行保存凭据：服务端仅保存凭据摘要。
@@ -132,4 +140,4 @@ python3 deploy/test/docker_smoke.py --image cpa-usage-ranking:local \
   --arch amd64 --work-dir /path/to/test-work
 ```
 
-ARM64 镜像使用 `--arch arm64`。AMD64 主机未注册 ARM binfmt 时，可传入 `--qemu /静态/qemu-aarch64-static的绝对路径`；脚本显式调用该模拟器并在模拟运行中禁用 Docker 容器内健康检查，同时通过 HTTP 检查 `/readyz`。脚本不会安装或注册模拟器。检查覆盖结构初始化、页面和头像、真实注册/上报、重建后的持久化、权限、SIGTERM 正常退出及启动失败；不属于负载或容量测试。
+ARM64 镜像使用 `--arch arm64`。AMD64 主机未注册 ARM binfmt 时，可传入 `--qemu /静态/qemu-aarch64-static的绝对路径`；脚本显式调用该模拟器并在模拟运行中禁用 Docker 容器内健康检查，同时通过 HTTP 检查 `/readyz`。脚本不会安装或注册模拟器。检查覆盖结构初始化、页面和头像、注册（离线批准，不访问 GitHub）、上报与退出、重建后的持久化、权限、SIGTERM 正常退出及启动失败；不属于负载或容量测试。

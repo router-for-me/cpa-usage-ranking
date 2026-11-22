@@ -25,7 +25,7 @@ type Config struct {
 	TrustedProxies           []string
 	RegistrationIPv6By64     bool
 	RegistrationRequests     registration.RequestLimits
-	RegistrationCreations    registration.CreationLimits
+	GitHub                   *registration.GitHubOptions
 	RegistrationEnabled      bool
 	RegistrationMaxBodyBytes int
 	ReportIngestion          reports.IngestionLimits
@@ -41,9 +41,8 @@ func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr: "127.0.0.1:8080", ShutdownTimeout: 10 * time.Second, SQLitePath: "data/ranking.db", ModelsPath: "config/models.json",
 		RegistrationIPv6By64: true, RegistrationEnabled: true, RegistrationMaxBodyBytes: 4096,
-		RegistrationRequests:  registration.DefaultRequestLimits(),
-		RegistrationCreations: registration.DefaultCreationLimits(),
-		ReportIngestion:       reports.DefaultIngestionLimits(), ReportWriter: reports.DefaultWriterOptions(),
+		RegistrationRequests: registration.DefaultRequestLimits(),
+		ReportIngestion:      reports.DefaultIngestionLimits(), ReportWriter: reports.DefaultWriterOptions(),
 		DailyRetentionDays:   reports.DefaultMaintenanceOptions().DailyRetentionDays,
 		CacheRefreshInterval: cache.DefaultRefreshInterval,
 	}
@@ -119,9 +118,6 @@ func Load() (Config, error) {
 		{"RANKING_REGISTRATION_SOURCE_REQUESTS", &cfg.RegistrationRequests.SourceRequests},
 		{"RANKING_REGISTRATION_GLOBAL_REQUESTS", &cfg.RegistrationRequests.GlobalRequests},
 		{"RANKING_REGISTRATION_REQUEST_MAX_SOURCES", &cfg.RegistrationRequests.MaxSources},
-		{"RANKING_REGISTRATION_HOURLY_CREATIONS", &cfg.RegistrationCreations.Hourly},
-		{"RANKING_REGISTRATION_DAILY_CREATIONS", &cfg.RegistrationCreations.Daily},
-		{"RANKING_REGISTRATION_CREATION_MAX_SOURCES", &cfg.RegistrationCreations.MaxSources},
 		{"RANKING_REGISTRATION_MAX_BODY_BYTES", &cfg.RegistrationMaxBodyBytes},
 		{"RANKING_REPORT_MAX_BODY_BYTES", &cfg.ReportIngestion.MaxBodyBytes},
 		{"RANKING_REPORT_MAX_ITEMS", &cfg.ReportIngestion.MaxItems},
@@ -157,10 +153,28 @@ func Load() (Config, error) {
 	if err := cfg.ReportIngestion.Validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid report limits: %w", err)
 	}
+	if err := loadGitHub(&cfg); err != nil {
+		return Config{}, err
+	}
 	if err := loadAdmin(&cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func loadGitHub(cfg *Config) error {
+	origin, hasOrigin := os.LookupEnv("RANKING_PUBLIC_ORIGIN")
+	id, hasID := os.LookupEnv("RANKING_GITHUB_CLIENT_ID")
+	secret, hasSecret := os.LookupEnv("RANKING_GITHUB_CLIENT_SECRET")
+	if !hasOrigin && !hasID && !hasSecret {
+		return nil
+	}
+	options := registration.GitHubOptions{PublicOrigin: origin, ClientID: id, ClientSecret: secret}
+	if err := options.Validate(); err != nil {
+		return err
+	}
+	cfg.GitHub = &options
+	return nil
 }
 
 func positiveInt(key string, target *int) error {

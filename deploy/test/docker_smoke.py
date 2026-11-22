@@ -11,6 +11,7 @@ import base64
 from contextlib import closing
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -26,7 +28,15 @@ import urllib.request
 
 LABEL = "io.cpa-usage-ranking.docker-smoke"
 QEMU_IN_CONTAINER = "/usr/local/bin/qemu-aarch64-static"
-HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args):
+        return None
+
+
+HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+OAUTH_ORIGIN = "https://ranking.example"
+OAUTH_ENV = ("RANKING_PUBLIC_ORIGIN=" + OAUTH_ORIGIN, "RANKING_GITHUB_CLIENT_ID=smoke-fixture",
+             "RANKING_GITHUB_CLIENT_SECRET=smoke-fixture-not-a-secret")
 
 
 def docker(*args, check=True, data=None, timeout=120):
@@ -53,10 +63,12 @@ def require(condition, message):
 
 def require_current_schema(db):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
-    expected = {"clients", "models", "report_window", "daily_reports", "daily_stats", "period_stats", "admin_accounts"}
+    expected = {"clients", "client_writers", "registration_requests", "models", "report_window",
+                "daily_reports", "daily_writer_versions", "daily_stats", "period_stats", "admin_accounts"}
     require(expected <= tables and "schema_migrations" not in tables, f"unexpected database schema: {tables}")
     columns = {row[1] for row in db.execute("PRAGMA table_info(clients)")}
-    require("ranking_hidden" in columns, "missing ranking_hidden")
+    require({"github_id", "cpa_uuid", "withdrawn", "ranking_hidden"} <= columns and "token_hash" not in columns,
+            "unexpected seat columns")
 
 
 def request(base, path, method="GET", body=None, secret=None):
@@ -100,7 +112,7 @@ class Smoke:
     def image_command(self):
         return [self.args.image, "/app/ranking"] if self.args.qemu else [self.args.image]
 
-    def run(self, name):
+    def run(self, name, environment=()):
         self.containers.append(name)
         args = ["run", "-d", "--name", name, "--label", f"{LABEL}={self.run_id}",
                 "--cpus", "2", "--memory", "1g", "--memory-swap", "1g",
@@ -108,6 +120,8 @@ class Smoke:
         if not self.args.qemu:
             args += ["--health-interval", "2s", "--health-timeout", "5s",
                      "--health-start-period", "10s", "--health-retries", "3"]
+        for variable in environment:
+            args += ["--env", variable]
         text(*args, *self.image_args(), *self.image_command())
 
     def ready(self, name):
@@ -164,6 +178,26 @@ class Smoke:
                 "unexpected SQLite sidecars after graceful shutdown")
         return dest / "ranking.db"
 
+    def approve_offline(self, stopped, request_id):
+        # Only the disposable, stopped volume is touched. The callback itself is
+        # covered by fake RoundTripper in Go; never follow the GitHub redirect here.
+        path = self.database_copy(stopped, self.workdir / "before-complete")
+        with closing(sqlite3.connect(path)) as db:
+            changed = db.execute("UPDATE registration_requests SET stage='approved',github_id=42,"
+                                 "display_name='Docker Smoke',state=NULL,browser_hash=NULL,verifier=NULL "
+                                 "WHERE id=? AND stage='authorizing'", (request_id,)).rowcount
+            require(changed == 1, "failed to approve test transaction")
+            db.commit()
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            item = tar.gettarinfo(str(path), arcname="ranking.db")
+            item.uid, item.gid, item.mode = 10001, 10001, 0o600
+            item.uname = item.gname = ""
+            with path.open("rb") as file:
+                tar.addfile(item, file)
+        docker("cp", "-a", "-", f"{stopped}:/data", data=archive.getvalue())
+
     def cleanup(self):
         failures = []
         for name in reversed(self.containers):
@@ -215,7 +249,7 @@ class Smoke:
                 == self.run_id, "test volume ownership mismatch")
         self.volume_created = True
         first, second = self.prefix + "-first", self.prefix + "-second"
-        self.run(first)
+        self.run(first, OAUTH_ENV)
         base = self.ready(first)
         require(expect_json(base, "/healthz", 200) == {"status": "ok"}, "liveness response")
         require(expect_json(base, "/readyz", 200) == {"status": "ready"}, "readiness response")
@@ -240,18 +274,39 @@ class Smoke:
                           "test ! -e /usr/local/bin/node && test ! -e /usr/local/go/bin/go && "
                           "test ! -e /usr/bin/gcc && test ! -e /app/ranking-capacity && "
                           "test ! -e /plans && test ! -e /app/cmd && test ! -e /app/internal && "
-                          "test ! -e /app/web/node_modules && test ! -e /app/web/test")
+                          "test ! -e /app/web/node_modules && test ! -e /app/web/test && "
+                          "test -s /etc/ssl/certs/ca-certificates.crt")
         print("PASS: ready/liveness, image isolation, frontend/assets/notices, avatar, UID/data permissions "
               f"(/data={modes[0]}, database={modes[1]})", flush=True)
 
         raw_secret = secrets.token_bytes(32)
         secret = base64.urlsafe_b64encode(raw_secret).decode().rstrip("=")
-        registration = {"display_name": "Docker Smoke", "avatar_id": 1}
-        registered = expect_json(base, "/v1/clients/register", 201, "POST", registration, secret)
+        start, complete = "/v1/clients/register/start", "/v1/clients/register/complete"
+        registration = {"cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
+                        "return_to": "http://localhost:3001/settings?tab=ranking#status"}
+        ticket = expect_json(base, start, 200, "POST", registration, secret)
+        request_id = ticket["request_id"]
+        auth_path = "/auth/github/authorize?request_id=" + request_id
+        require(ticket["authorize_url"] == OAUTH_ORIGIN + auth_path, "configured authorize URL")
+        status, _, headers = request(base, auth_path)
+        require(status == 302 and headers.get("Referrer-Policy") == "no-referrer"
+                and headers.get("Location", "").startswith("https://github.com/login/oauth/authorize?"),
+                "fixed authorization redirect")
+        completion = {"request_id": request_id}
+        status, _, headers = request(base, complete, "POST", completion, secret)
+        require(status == 202 and headers.get("Retry-After", "").isdigit(), "unapproved registration")
+        self.stop(first)
+        self.approve_offline(first, request_id)
+        text("start", first)
+        base = self.ready(first)
+        registered = expect_json(base, complete, 201, "POST", completion, secret)
         client_id = registered["client_id"]
-        require(client_id > 0 and registered["display_name"] == "Docker Smoke", "registration")
+        require(client_id.isdecimal() and int(client_id) > 0 and registered["display_name"] == "Docker Smoke",
+                "registration completion")
+        require(request(base, "/v1/clients/register", "POST", {}, secret)[0] == 404, "old registration route")
         day = dt.datetime.now(dt.timezone.utc).date().isoformat()
-        report_path = "/v1/reports/" + day
+        report_path = "/v1/clients/report/" + day
+        require(request(base, "/v1/reports/" + day, "PUT", {}, secret)[0] == 404, "old report route")
         report = {"schema_version": 1, "revision": "7", "items": [{
             "model": "claude-fable-5", "total_tokens": "120",
             "input_tokens": "80", "output_tokens": "40", "cache_read_tokens": "60",
@@ -264,19 +319,23 @@ class Smoke:
         with closing(sqlite3.connect(first_db)) as db:
             require(db.execute("PRAGMA integrity_check").fetchone() == ("ok",), "SQLite integrity")
             require_current_schema(db)
-            client = db.execute("SELECT token_hash, display_name FROM clients WHERE id=?", (client_id,)).fetchone()
+            client = db.execute("SELECT token_hash,display_name FROM client_writers w JOIN clients c ON c.id=w.client_id "
+                                "WHERE client_id=?", (client_id,)).fetchone()
             require(client == (hashlib.sha256(raw_secret).digest(), "Docker Smoke"), "persisted credential hash")
-            revision = db.execute("SELECT revision, digest FROM daily_reports WHERE day=? AND client_id=?", (day, client_id)).fetchone()
+            revision = db.execute("SELECT revision,digest FROM daily_writer_versions WHERE day=? AND client_id=?",
+                                  (day, client_id)).fetchone()
             stats = db.execute("SELECT model_id,total_tokens,input_tokens,output_tokens,request_count "
                                "FROM daily_stats WHERE day=? AND client_id=? ORDER BY model_id", (day, client_id)).fetchall()
             require(revision is not None and revision[0] == 7 and len(revision[1]) == 32, "persisted revision")
             require(len(stats) == 2 and stats[0] == (0, 120, 80, 40, 2) and stats[1][0] > 0
                     and stats[1][1:] == (120, 80, 40, 2), "persisted metrics")
-        print("PASS: real registration/report, initialized schema, SQLite integrity and persisted credential/revision/metrics", flush=True)
+        print("PASS: registration with offline approval, report, current schema and persisted credential/revision/metrics", flush=True)
 
         self.run(second)
         base = self.ready(second)
-        retried = expect_json(base, "/v1/clients/register", 200, "POST", {}, secret)
+        require(expect_json(base, start, 503, "POST", registration, secret)["error"]["code"] == "registration_closed",
+                "partial operation without OAuth")
+        retried = expect_json(base, complete, 200, "POST", completion, secret)
         require(retried == registered, "credential retry changed identity after container recreation")
         require(expect_json(base, report_path, 200, "PUT", report, secret) == {"revision": "7"}, "report retry")
         older = dict(report, revision="6")
@@ -285,15 +344,20 @@ class Smoke:
         board = expect_json(base, "/v1/leaderboards/usage/all", 200)
         require(any(row["client_id"] == str(client_id) and row["metric"] == "120"
                     for row in board["entries"]), "recreated container lost usage metrics")
+        for _ in range(2):
+            require(request(base, "/v1/clients/withdraw", "POST", secret=secret)[0] == 204, "idempotent withdrawal")
+        require(expect_json(base, report_path, 403, "PUT", report, secret)["error"]["code"] == "client_withdrawn",
+                "withdrawal blocked original report retry")
         self.stop(second)
         second_db = self.database_copy(second, self.workdir / "after-restart")
         with closing(sqlite3.connect(second_db)) as db:
             require_current_schema(db)
             require(db.execute("SELECT count(*) FROM period_stats").fetchone() == (0,), "unexpected period data")
             require(db.execute("SELECT count(*) FROM admin_accounts").fetchone() == (0,), "unexpected admin data")
-            require(db.execute("SELECT ranking_hidden FROM clients WHERE id=?", (client_id,)).fetchone()
-                    == (0,), "visibility default changed")
-            require(db.execute("SELECT revision,digest FROM daily_reports WHERE day=? AND client_id=?", (day, client_id)).fetchone()
+            require(db.execute("SELECT withdrawn,ranking_hidden FROM clients WHERE id=?", (client_id,)).fetchone()
+                    == (1, 0), "withdrawal changed moderation flags or was not persisted")
+            require(db.execute("SELECT revision,digest FROM daily_writer_versions WHERE day=? AND client_id=?",
+                               (day, client_id)).fetchone()
                     == revision, "revision/digest changed after recreation")
             require(db.execute("SELECT model_id,total_tokens,input_tokens,output_tokens,request_count "
                                "FROM daily_stats WHERE day=? AND client_id=? ORDER BY model_id", (day, client_id)).fetchall()
@@ -302,6 +366,7 @@ class Smoke:
 
         self.invalid("empty", "RANKING_SQLITE_PATH=", "RANKING_SQLITE_PATH")
         self.invalid("address", "RANKING_HTTP_ADDR=not-a-host-port", "RANKING_HTTP_ADDR")
+        self.invalid("oauth-origin", "RANKING_PUBLIC_ORIGIN=http://ranking.example", "RANKING_PUBLIC_ORIGIN")
         self.invalid("models-missing", "RANKING_MODELS_PATH=/missing/models.json", "model")
         self.invalid("web-missing", "RANKING_WEB_DIR=/missing/web", "frontend")
         self.invalid("data-permissions", "RANKING_SQLITE_PATH=/not-writable/ranking.db", "create sqlite directory")

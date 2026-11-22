@@ -24,24 +24,22 @@ type SustainedQuantiles struct {
 }
 
 type SustainedStageStatistics struct {
-	Stage            string             `json:"stage"`
-	Rate             float64            `json:"target_rate"`
-	Created          int64              `json:"created"`
-	Confirmed        int64              `json:"confirmed"`
-	NewClients       int64              `json:"new_clients"`
-	TouchedClients   int64              `json:"touched_clients"`
-	TodayTasks       int64              `json:"today_tasks"`
-	YesterdayTasks   int64              `json:"yesterday_tasks"`
-	HotTasks         int64              `json:"hot_tasks"`
-	DebtTasks        int64              `json:"debt_tasks"`
-	ReportAttempts   int64              `json:"report_attempts"`
-	RegisterAttempts int64              `json:"registration_attempts"`
-	BodyBytes        SustainedQuantiles `json:"body_bytes"`
-	ModelRows        SustainedQuantiles `json:"model_rows"`
-	ChangedRows      SustainedQuantiles `json:"changed_rows"`
-	ConfirmDelayMS   SustainedQuantiles `json:"confirm_delay_ms"`
-	DelayOverHour    int64              `json:"delay_over_one_hour"`
-	ModelCalls       map[string]int64   `json:"model_calls"`
+	Stage          string             `json:"stage"`
+	Rate           float64            `json:"target_rate"`
+	Created        int64              `json:"created"`
+	Confirmed      int64              `json:"confirmed"`
+	TouchedClients int64              `json:"touched_clients"`
+	TodayTasks     int64              `json:"today_tasks"`
+	YesterdayTasks int64              `json:"yesterday_tasks"`
+	HotTasks       int64              `json:"hot_tasks"`
+	DebtTasks      int64              `json:"debt_tasks"`
+	ReportAttempts int64              `json:"report_attempts"`
+	BodyBytes      SustainedQuantiles `json:"body_bytes"`
+	ModelRows      SustainedQuantiles `json:"model_rows"`
+	ChangedRows    SustainedQuantiles `json:"changed_rows"`
+	ConfirmDelayMS SustainedQuantiles `json:"confirm_delay_ms"`
+	DelayOverHour  int64              `json:"delay_over_one_hour"`
+	ModelCalls     map[string]int64   `json:"model_calls"`
 }
 
 type SustainedStatistics struct {
@@ -241,9 +239,6 @@ func SummarizeSustained(path string, models []string, maxPending int, migrationP
 			}
 			s.result.Created++
 			out.Produced++
-			if r.Task.New {
-				s.result.NewClients++
-			}
 			if r.Task.Hot {
 				s.result.HotTasks++
 			}
@@ -270,13 +265,10 @@ func SummarizeSustained(path string, models []string, maxPending int, migrationP
 			if !ok {
 				return out, errors.New("summary attempt has no pending task")
 			}
-			if r.Action == "report" {
-				stages[job.stage].result.ReportAttempts++
-			} else if r.Action == "register" {
-				stages[job.stage].result.RegisterAttempts++
-			} else {
+			if r.Action != "report" {
 				return out, errors.New("unknown summary action")
 			}
+			stages[job.stage].result.ReportAttempts++
 		case "finish":
 			if r.Action == "report" && r.Confirmed {
 				job, ok := pending[r.Sequence]

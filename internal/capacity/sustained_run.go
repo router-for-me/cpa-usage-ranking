@@ -301,7 +301,7 @@ func RunSustained(ctx context.Context, f Fixture, o SustainedOptions, commands <
 			return e
 		}
 		now := time.Now()
-		state.addTask(task, source, now.UnixNano(), planned, f.Clients)
+		state.addTask(task, source, now.UnixNano(), planned)
 		if source == "debt" {
 			state.debtRemaining--
 		}
@@ -345,37 +345,24 @@ func RunSustained(ctx context.Context, f Fixture, o SustainedOptions, commands <
 				continue
 			}
 			job := a.queue[0]
-			action := "report"
 			attempt := job.attempts + 1
-			if !a.registered {
-				action = "register"
-				attempt = a.registrationAttempts + 1
-			}
 			if attempt > o.MaxAttempts {
 				return errors.New("retry attempt limit reached with retained debt")
 			}
-			r := sustainedRecord{Kind: "start", TimeUnixNS: time.Now().UnixNano(), Sequence: job.task.Sequence, Client: id, Action: action, Attempt: attempt}
+			r := sustainedRecord{Kind: "start", TimeUnixNS: time.Now().UnixNano(), Sequence: job.task.Sequence, Client: id, Action: "report", Attempt: attempt}
 			if e := journal.write(r); e != nil {
 				return e
 			}
-			if action == "register" {
-				a.registrationAttempts++
-				state.regAttempts++
-				if attempt > 1 {
-					state.regRetries++
-				}
-			} else {
-				job.attempts++
-				state.reportAttempts++
-				if attempt > 1 {
-					state.reportRetries++
-				}
+			job.attempts++
+			state.reportAttempts++
+			if attempt > 1 {
+				state.reportRetries++
 			}
 			a.inFlight = true
 			state.inFlight++
-			go func(t SustainedTask, action string, attempt int) {
-				responses <- sustainedRequest(requestCtx, client, o.URL, f, t, action, attempt, o.RequestTimeout, trace)
-			}(job.task, action, attempt)
+			go func(t SustainedTask, attempt int) {
+				responses <- sustainedRequest(requestCtx, client, o.URL, f, t, attempt, o.RequestTimeout, trace)
+			}(job.task, attempt)
 		}
 		return nil
 	}
@@ -390,18 +377,6 @@ func RunSustained(ctx context.Context, f Fixture, o SustainedOptions, commands <
 				state.inFlight--
 			}
 			return errors.New("unexpected HTTP completion")
-		}
-		if r.Confirmed && r.Action == "register" {
-			if r.ServerClientID <= int64(f.Clients) {
-				r.Confirmed = false
-				r.Error = "registration_identity_collision"
-				hr.retryable = false
-			}
-			if owner, ok := state.owners[r.ServerClientID]; ok && owner != a.id {
-				r.Confirmed = false
-				r.Error = "registration_identity_collision"
-				hr.retryable = false
-			}
 		}
 		terminal := false
 		if !r.Confirmed {

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { expect, test, type Page } from '@playwright/test'
+import { seedReportingSeat } from './database-fixtures'
 
 const config = process.env.RANKING_TEST_ADMIN_CONFIG
 const credentials: { username: string; password: string } = config ? JSON.parse(readFileSync(config, 'utf8')) : { username: '', password: '' }
@@ -14,11 +15,9 @@ async function login(page: Page) {
   await expect(page.getByRole('navigation', { name: 'Console navigation' })).toBeVisible()
 }
 
-test('places hidden-user search immediately below its tab without a duplicate heading', async ({ page, request, baseURL }, info) => {
+test('places hidden-user search immediately below its tab without a duplicate heading', async ({ page, baseURL }, info) => {
   const name = `hidden-list-${randomBytes(3).toString('hex')}`
-  const registration = await request.post('/v1/clients/register', { headers: { Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, data: { display_name: name, avatar_id: 1 } })
-  expect(registration.status()).toBe(201)
-  const id = String((await registration.json()).client_id)
+  const { id } = seedReportingSeat(name, 1)
   await login(page)
   const session = await (await page.request.get('/v1/admin/session')).json()
   expect((await page.request.put(`/v1/admin/users/${id}/ranking-visibility`, { headers: { Origin: baseURL!, 'X-CSRF-Token': session.csrf_token }, data: { hidden: true } })).status()).toBe(200)

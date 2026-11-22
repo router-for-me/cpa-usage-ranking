@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -26,17 +25,11 @@ type sustainedHTTPResult struct {
 	retryable bool
 }
 
-func sustainedRequest(ctx context.Context, client *http.Client, base string, f Fixture, task SustainedTask, action string, attempt int, timeout time.Duration, counters *sustainedTraceCounts) sustainedHTTPResult {
-	result := sustainedHTTPResult{record: sustainedRecord{Kind: "finish", Sequence: task.Sequence, Client: task.Client, Action: action, Attempt: attempt}}
-	body := []byte(task.Body)
-	method, path := http.MethodPut, "/v1/reports/"+task.Day
-	if action == "register" {
-		method, path = http.MethodPost, "/v1/clients/register"
-		body = []byte(fmt.Sprintf(`{"display_name":"capacity-new-%d"}`, task.Client))
-	}
+func sustainedRequest(ctx context.Context, client *http.Client, base string, f Fixture, task SustainedTask, attempt int, timeout time.Duration, counters *sustainedTraceCounts) sustainedHTTPResult {
+	result := sustainedHTTPResult{record: sustainedRecord{Kind: "finish", Sequence: task.Sequence, Client: task.Client, Action: "report", Attempt: attempt}}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, method, strings.TrimSuffix(base, "/")+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPut, strings.TrimSuffix(base, "/")+"/v1/clients/report/"+task.Day, bytes.NewReader(task.Body))
 	if err != nil {
 		result.record.Error = "invalid_request"
 		result.record.TimeUnixNS = time.Now().UnixNano()
@@ -117,7 +110,7 @@ func sustainedRequest(ctx context.Context, client *http.Client, base string, f F
 		result.retryable = true // an acknowledged commit may have been hidden
 		return result
 	}
-	if action == "report" && resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK {
 		var ack struct {
 			Revision string `json:"revision"`
 		}
@@ -127,18 +120,6 @@ func sustainedRequest(ctx context.Context, client *http.Client, base string, f F
 		}
 		result.record.Confirmed = true
 		result.record.AckRevision = ack.Revision
-		return result
-	}
-	if action == "register" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated) {
-		var ack struct {
-			ClientID int64 `json:"client_id"`
-		}
-		if json.Unmarshal(responseBody, &ack) != nil || ack.ClientID <= 0 {
-			result.record.Error = "bad_registration_ack"
-			return result
-		}
-		result.record.Confirmed = true
-		result.record.ServerClientID = ack.ClientID
 		return result
 	}
 	var failure struct {

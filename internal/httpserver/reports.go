@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"cpa-usage-ranking/internal/auth"
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/reports"
 	"github.com/gin-gonic/gin"
 )
@@ -19,7 +20,7 @@ func MountReports(router *gin.Engine, authenticator *auth.Authenticator, admissi
 	if authenticator == nil || admission == nil || writer == nil || maxBodyBytes <= 0 {
 		return fmt.Errorf("invalid report HTTP configuration")
 	}
-	router.PUT("/v1/reports/:utc_day", ClientAuthentication(authenticator), func(c *gin.Context) {
+	mountExact(router, http.MethodPut, "/v1/clients/report/:utc_day", ClientAuthentication(authenticator), func(c *gin.Context) {
 		client, ok := AuthenticatedClient(c)
 		if !ok {
 			writeError(c, http.StatusInternalServerError, "internal_error", "Internal server error")
@@ -65,7 +66,7 @@ func MountReports(router *gin.Engine, authenticator *auth.Authenticator, admissi
 			writeError(c, http.StatusUnprocessableEntity, "invalid_report", "Invalid report")
 			return
 		}
-		result, err := writer.Enqueue(c.Request.Context(), client.ID, c.Param("utc_day"), prepared)
+		result, err := writer.Enqueue(c.Request.Context(), client.WriterID, c.Param("utc_day"), prepared)
 		if err != nil {
 			if errors.Is(err, reports.ErrQueueFull) || errors.Is(err, reports.ErrWriterClosed) {
 				c.Header("Retry-After", "1")
@@ -94,18 +95,19 @@ func writeReportResult(c *gin.Context, result reports.WriteResult) {
 	case result.Err == nil:
 		c.JSON(http.StatusOK, gin.H{"revision": strconv.FormatInt(result.Revision, 10)})
 	case errors.As(result.Err, &conflict):
-		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "revision_conflict", "message": "Report revision conflicts with the current snapshot"}, "revision": strconv.FormatInt(conflict.Current, 10)})
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "revision_conflict", "message": "Report revision conflicts with the writer's current revision"}, "revision": strconv.FormatInt(conflict.Current, 10)})
 	case errors.Is(result.Err, reports.ErrInvalidDay), errors.Is(result.Err, reports.ErrFutureDay):
 		writeError(c, http.StatusUnprocessableEntity, "invalid_day", "Invalid or future UTC day")
 	case errors.Is(result.Err, reports.ErrExpiredDay):
 		writeError(c, http.StatusGone, "expired_day", "Report window has closed")
 	case errors.Is(result.Err, reports.ErrInvalid):
 		writeError(c, http.StatusUnprocessableEntity, "invalid_report", "Invalid report")
-	case errors.Is(result.Err, reports.ErrClientDisabled):
+	case errors.Is(result.Err, clients.ErrWithdrawn):
+		writeError(c, http.StatusForbidden, "client_withdrawn", "Client has withdrawn")
+	case errors.Is(result.Err, clients.ErrDisabled):
 		writeError(c, http.StatusForbidden, "client_disabled", "Client is disabled")
-	case errors.Is(result.Err, reports.ErrClientMissing):
-		c.Header("WWW-Authenticate", "Bearer")
-		writeError(c, http.StatusUnauthorized, "invalid_credential", "Invalid client credential")
+	case errors.Is(result.Err, clients.ErrNotFound):
+		writeInvalidCredential(c)
 	case errors.Is(result.Err, context.DeadlineExceeded), errors.Is(result.Err, context.Canceled):
 		c.Header("Retry-After", "1")
 		writeError(c, http.StatusServiceUnavailable, "report_overloaded", "Report service is busy")

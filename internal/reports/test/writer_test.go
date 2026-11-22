@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/reports"
 )
 
@@ -174,7 +175,7 @@ func TestQueuedRealSQLiteRechecksWindowAndDisabledClient(t *testing.T) {
 	if r := resultWithin(t, first); !errors.Is(r.Err, reports.ErrExpiredDay) {
 		t.Fatalf("queued cutoff: %+v", r)
 	}
-	if r := resultWithin(t, second); !errors.Is(r.Err, reports.ErrClientDisabled) {
+	if r := resultWithin(t, second); !errors.Is(r.Err, clients.ErrDisabled) {
 		t.Fatalf("queued disabled: %+v", r)
 	}
 	if scalar(t, db.Reader, `SELECT COUNT(*) FROM daily_reports`) != 0 {

@@ -8,7 +8,7 @@ import (
 
 func TestAdminUnifiedSearchHTTP(t *testing.T) {
 	router, service, db := adminDatabaseRouter(t)
-	if _, err := db.Writer.Exec(`INSERT INTO clients(id,token_hash,display_name,avatar_id,created_at_ms) VALUES(1,randomblob(32),'100',1,0),(100,randomblob(32),'target',1,0),(9007199254740993,randomblob(32),'large',1,0)`); err != nil {
+	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','100',1,0),(100,100,'550e8400-e29b-41d4-a716-446655440000','target',1,0),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','large',1,0)`); err != nil {
 		t.Fatal(err)
 	}
 	cookie, _ := adminLoginCookie(t, service, "owner", "isolated-test-password")

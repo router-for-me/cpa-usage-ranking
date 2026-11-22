@@ -1,8 +1,8 @@
 # Registration sources and trusted proxies
 
-A source is an abuse-control key, **not identity or account ownership**. By
-default only the connection's `RemoteAddr` is used. Authorization still depends
-solely on the client secret, not a nickname, IP or request-supplied client ID.
+A source is an abuse-control key for [registration start](registration-admission.md),
+**not identity or account ownership**. By default only the connection's
+`RemoteAddr` is used. It does not determine the return URL or authorize a seat.
 
 `network.RegistrationSource` uses Gin's existing `ClientIP` trusted-proxy
 resolution, then parses and canonicalizes the address. IPv4-mapped IPv6 is

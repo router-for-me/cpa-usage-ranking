@@ -10,24 +10,30 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"cpa-usage-ranking/internal/httpserver"
 )
 
 func TestRegistrationHTTPConcurrentSafeRetries(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	secrets := []string{testSecret(1), testSecret(2)}
+	var ids []string
+	for _, secret := range secrets {
+		id := f.start(t, secret, cpaUUID, returnURL)
+		f.approve(t, id, 42, "Concurrent", "concurrent", returnURL)
+		ids = append(ids, id)
+	}
 	const n = 24
 	results := make(chan registrationResponse, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() { defer wg.Done(); results <- f.send(t, `{"display_name":"Concurrent"}`, testSecret(1), nil) }()
+	for i := range n {
+		wg.Go(func() { results <- f.complete(t, secrets[i%2], ids[i%2]) })
 	}
 	wg.Wait()
 	close(results)
 	var clientID int64
 	created := 0
-	received := 0
 	for r := range results {
-		received++
 		value := identity(t, r)
 		if r.status == 201 {
 			created++
@@ -36,51 +42,34 @@ func TestRegistrationHTTPConcurrentSafeRetries(t *testing.T) {
 			clientID = value.ID
 		}
 		if value.ID != clientID {
-			t.Fatal("retry created a different identity")
+			t.Fatal("concurrent completion allocated another seat")
 		}
 	}
-	var stored int
-	if err := f.db.Reader.QueryRow("SELECT COUNT(*) FROM clients").Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if received != n || created != 1 || stored != 1 {
-		t.Fatalf("results=%d created=%d stored=%d", received, created, stored)
+	var seats, writers int
+	if err := f.db.Reader.QueryRow("SELECT (SELECT count(*) FROM clients),(SELECT count(*) FROM client_writers)").Scan(&seats, &writers); err != nil || seats != 1 || writers != 2 || created != 1 {
+		t.Fatalf("created=%d seats=%d writers=%d err=%v", created, seats, writers, err)
 	}
 }
 
-func TestRegistrationHTTPConcurrentQuotaAndForgedProxies(t *testing.T) {
+func TestRegistrationHTTPConcurrentStartsAndForgedProxies(t *testing.T) {
 	settings := defaultRegistrationSettings()
-	settings.service.Now = func() time.Time { return time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC) }
+	settings.requests.SourceRequests = 3
 	f := newRegistrationFixture(t, settings)
-	var successes atomic.Int32
+	var accepted atomic.Int32
 	var wg sync.WaitGroup
-	var firstSecret string
-	var firstMu sync.Mutex
 	for i := byte(1); i <= 16; i++ {
-		wg.Add(1)
-		go func(i byte) {
-			defer wg.Done()
-			secret := testSecret(i)
-			r := f.send(t, `{"display_name":"Same name"}`, secret, map[string]string{"X-Forwarded-For": fmt.Sprintf("192.0.2.%d", i), "X-Real-IP": fmt.Sprintf("198.51.100.%d", i)})
-			if r.status == 201 {
-				successes.Add(1)
-				firstMu.Lock()
-				firstSecret = secret
-				firstMu.Unlock()
+		wg.Go(func() {
+			r := f.send(t, validStartBody, testSecret(i), map[string]string{"X-Forwarded-For": fmt.Sprintf("192.0.2.%d", i), "X-Real-IP": fmt.Sprintf("198.51.100.%d", i)})
+			if r.status == 200 {
+				accepted.Add(1)
 				return
 			}
-			requireHTTPError(t, r, 429, "creation_quota_exceeded")
-			if r.header.Get("Retry-After") != "3600" {
-				t.Errorf("Retry-After: %s", r.header.Get("Retry-After"))
-			}
-		}(i)
+			requireHTTPError(t, r, 429, "registration_rate_limited")
+		})
 	}
 	wg.Wait()
-	if successes.Load() != 3 {
-		t.Fatalf("forged headers bypassed source quota: %d", successes.Load())
-	}
-	if r := f.send(t, `{}`, firstSecret, map[string]string{"X-Forwarded-For": "203.0.113.99"}); r.status != 200 {
-		t.Fatalf("full quota blocked retry: %d %s", r.status, r.body)
+	if accepted.Load() != 3 {
+		t.Fatalf("forged headers bypassed source rate: %d", accepted.Load())
 	}
 }
 
@@ -101,15 +90,14 @@ func TestRegistrationHTTPRequestRateAndCapacity(t *testing.T) {
 			settings.requests.GlobalRequests = tc.global
 			settings.requests.MaxSources = tc.capacity
 			var now atomic.Int64
-			now.Store(time.Date(2026, 11, 9, 23, 59, 59, 0, time.UTC).UnixNano())
+			now.Store(time.Now().UnixNano())
 			settings.service.Now = func() time.Time { return time.Unix(0, now.Load()) }
 			if tc.trusted {
 				settings.proxies = []string{"127.0.0.1"}
 			}
 			f := newRegistrationFixture(t, settings)
-			// 无效凭据仍计入请求限流，且伪造转发来源默认不能绕过。
 			requireHTTPError(t, f.send(t, `{}`, "", map[string]string{"X-Forwarded-For": "192.0.2.1"}), 401, "invalid_credential")
-			r := f.send(t, `{"display_name":"Name"}`, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.2"})
+			r := f.send(t, validStartBody, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.2"})
 			requireHTTPError(t, r, 429, tc.secondCode)
 			if r.header.Get("Retry-After") != "60" {
 				t.Fatal("wrong rate/capacity Retry-After")
@@ -127,67 +115,101 @@ func TestRegistrationHTTPRequestRateAndCapacity(t *testing.T) {
 					t.Fatalf("registration affected %s", path)
 				}
 			}
-			// 时间注入仅在同步请求之间变化，不依赖 sleep。
 			now.Add(int64(time.Minute))
-			if r := f.send(t, `{"display_name":"Name"}`, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.2"}); r.status != 201 {
-				t.Fatalf("expired request state: %d %s", r.status, r.body)
+			if r := f.send(t, validStartBody, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.2"}); r.status != 200 {
+				t.Fatalf("expired request rate state: %d %s", r.status, r.body)
 			}
 		})
 	}
 }
 
-func TestRegistrationHTTPCreationCapacityAndCrossSourceRetry(t *testing.T) {
+func TestRegistrationHTTPCapacityRetainsResultUntilExpiryAndRecovers(t *testing.T) {
 	settings := defaultRegistrationSettings()
-	settings.service.CreationLimits.MaxSources = 1
-	settings.service.Now = func() time.Time { return time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC) }
-	settings.proxies = []string{"127.0.0.1"}
+	settings.requests.SourceRequests = 1
+	settings.service.Capacity = 1
+	settings.service.TTL = 90 * time.Second
+	var now atomic.Int64
+	now.Store(time.Now().Truncate(time.Second).UnixNano())
+	settings.service.Now = func() time.Time { return time.Unix(0, now.Load()) }
 	f := newRegistrationFixture(t, settings)
-	first := identity(t, f.send(t, `{"display_name":"Name"}`, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.1"}))
-	r := f.send(t, `{"display_name":"Name"}`, testSecret(2), map[string]string{"X-Forwarded-For": "192.0.2.2"})
-	requireHTTPError(t, r, 429, "registration_capacity")
-	if r.header.Get("Retry-After") != "86400" {
-		t.Fatal("creation capacity retry time")
+	secret := testSecret(1)
+	id := f.start(t, secret, cpaUUID, returnURL)
+	const login = "this-is-a-github-login-longer-than-32"
+	f.approve(t, id, 7, "", login, returnURL)
+	first := identity(t, f.complete(t, secret, id))
+	if first.Name != login[:32] {
+		t.Fatalf("invalid login fallback: %q", first.Name)
 	}
-	retry := f.send(t, `{"avatar_id":-1}`, testSecret(1), map[string]string{"X-Forwarded-For": "192.0.2.2"})
-	if retry.status != 200 || identity(t, retry).ID != first.ID {
-		t.Fatal("creation capacity blocked existing retry")
+	now.Add(int64(time.Minute))
+	r := f.send(t, validStartBody, testSecret(2), nil)
+	requireHTTPError(t, r, 429, "registration_capacity")
+	if r.header.Get("Retry-After") != "30" {
+		t.Fatalf("capacity retry time: %v", r.header)
+	}
+	if r := f.complete(t, secret, id); r.status != 200 || identity(t, r).ID != first.ID {
+		t.Fatal("capacity or exhausted start budget blocked an unexpired recovery")
+	}
+	now.Add(int64(30 * time.Second))
+	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
+	if err := f.reg.PruneExpired(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
+	now.Add(int64(30 * time.Second))
+	fresh := f.start(t, secret, cpaUUID, returnURL)
+	f.approve(t, fresh, 7, "Changed", "different-login", returnURL)
+	if r := f.complete(t, secret, fresh); r.status != 200 || identity(t, r) != first {
+		t.Fatal("same seat recovery after expiry failed")
+	}
+	var writers int
+	if err := f.db.Reader.QueryRow("SELECT count(*) FROM client_writers").Scan(&writers); err != nil || writers != 1 {
+		t.Fatalf("lost response added another writer: %d %v", writers, err)
 	}
 }
 
-func TestRegistrationHTTPClosedDisabledAndStorageFailure(t *testing.T) {
+func TestRegistrationHTTPClosedDisabledWithdrawnAndStorageFailure(t *testing.T) {
 	settings := defaultRegistrationSettings()
-	settings.service.NewIdentitiesEnabled = false
-	f := newRegistrationFixture(t, settings)
+	settings.service.Enabled = false
+	closed := newRegistrationFixture(t, settings)
+	requireHTTPError(t, closed.send(t, validStartBody, testSecret(1), nil), 503, "registration_closed")
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	httpserver.MountWithdraw(f.router, f.repo, nil)
 	secret := testSecret(1)
-	seeded := f.seed(t, secret)
-	r := f.send(t, `{"display_name":"\u0000","avatar_id":-1}`, secret, nil)
-	if r.status != 200 || identity(t, r).ID != seeded.ID {
-		t.Fatal("closed switch blocked retry")
-	}
-	requireHTTPError(t, f.send(t, `{"display_name":"New"}`, testSecret(2), nil), 503, "registration_closed")
-	if err := f.repo.SetDisabled(context.Background(), seeded.ID, true); err != nil {
+	id := f.start(t, secret, cpaUUID, returnURL)
+	f.approve(t, id, 9, "Name", "test", returnURL)
+	first := identity(t, f.complete(t, secret, id))
+	if err := f.repo.SetDisabled(context.Background(), first.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	requireHTTPError(t, f.send(t, `{}`, secret, nil), 403, "client_disabled")
-	stored, err := f.repo.ByID(context.Background(), seeded.ID)
-	if err != nil || !stored.Disabled {
-		t.Fatal("retry re-enabled identity")
+	requireHTTPError(t, f.complete(t, secret, id), 403, "client_disabled")
+	other := f.start(t, testSecret(2), cpaUUID, returnURL)
+	f.approve(t, other, 9, "Other", "test", returnURL)
+	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_disabled")
+	if r := f.api(t, "POST", withdrawPath, "", secret, nil); r.status != 204 {
+		t.Fatalf("disabled holder couldn't withdraw: %d %s", r.status, r.body)
 	}
-	// 关闭数据库不能伪装为关闭注册或成功重试。
-	if err := f.db.Reader.Close(); err != nil {
+	requireHTTPError(t, f.complete(t, secret, id), 403, "client_withdrawn")
+	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_withdrawn")
+	third := f.start(t, secret, cpaUUID, returnURL)
+	f.approve(t, third, 9, "Other", "test", returnURL)
+	requireHTTPError(t, f.complete(t, secret, third), 403, "client_withdrawn")
+	seat, err := f.repo.ByID(context.Background(), first.ID)
+	if err != nil || !seat.Withdrawn || !seat.Disabled {
+		t.Fatal("withdraw or retry changed the management flag")
+	}
+	if err := f.db.Writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	requireHTTPError(t, f.send(t, `{}`, secret, nil), 500, "internal_error")
+	requireHTTPError(t, f.complete(t, secret, third), 500, "internal_error")
 }
 
 func TestRegistrationHTTPBodyBoundForKnownAndChunkedLength(t *testing.T) {
 	settings := defaultRegistrationSettings()
-	settings.bodyBytes = 64
+	settings.bodyBytes = int64(len(validStartBody))
 	f := newRegistrationFixture(t, settings)
-	large := `{"display_name":"` + strings.Repeat("x", 128) + `"}`
+	large := validStartBody + strings.Repeat(" ", 128)
 	requireHTTPError(t, f.send(t, large, testSecret(1), nil), 413, "request_too_large")
-	// 隐藏 Reader 的已知长度，走真实 HTTP chunked body。
-	request, err := http.NewRequest("POST", f.server.URL+"/v1/clients/register", io.NopCloser(strings.NewReader(large)))
+	request, err := http.NewRequest("POST", f.server.URL+startPath, io.NopCloser(strings.NewReader(large)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,5 +225,5 @@ func TestRegistrationHTTPBodyBoundForKnownAndChunkedLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, registrationResponse{status: response.StatusCode, body: body, header: response.Header}, 413, "request_too_large")
-	identity(t, f.send(t, `{"display_name":"Short"}`, testSecret(1), nil))
+	f.start(t, testSecret(1), cpaUUID, returnURL)
 }

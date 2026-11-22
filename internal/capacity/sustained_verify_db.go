@@ -3,7 +3,6 @@ package capacity
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +38,11 @@ func insertExpectedSnapshot(ctx context.Context, tx *sql.Tx, id int64, day strin
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO daily_reports(day,client_id,revision,digest,received_at_ms) VALUES(?,?,?,?,0) ON CONFLICT(day,client_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest`, day, id, snapshot.revision, snapshot.digest[:]); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO daily_reports(day,client_id,received_at_ms) VALUES(?,?,0) ON CONFLICT(day,client_id) DO NOTHING`, day, id); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO daily_writer_versions(day,writer_id,client_id,revision,digest) VALUES(?,?,?,?,?)
+		ON CONFLICT(day,writer_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest`, day, id, id, snapshot.revision, snapshot.digest[:]); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "DELETE FROM daily_stats WHERE day=? AND client_id=?", day, id); err != nil {
@@ -183,7 +186,7 @@ func compareQuery(ctx context.Context, expected, final *sql.DB, name, query stri
 	return count, nil
 }
 
-func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath string, final *sql.DB, s *verificationState, clients map[int]verifiedClient) (map[string]int64, error) {
+func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath string, final *sql.DB, s *verificationState) (map[string]int64, error) {
 	if err := copySustainedSeed(seedPath, expectedPath); err != nil {
 		return nil, err
 	}
@@ -201,19 +204,6 @@ func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath strin
 		return nil, err
 	}
 	defer tx.Rollback()
-	ids := make([]int, 0, len(clients))
-	for id := range clients {
-		if id > s.fixture.Clients {
-			ids = append(ids, id)
-		}
-	}
-	sort.Ints(ids)
-	for _, logical := range ids {
-		c := clients[logical]
-		if _, err = tx.ExecContext(ctx, "INSERT INTO clients(id,token_hash,display_name,avatar_id,disabled,created_at_ms) VALUES(?,?,?,?,?,?)", c.id, c.hash, c.name, c.avatar, c.disabled, c.created); err != nil {
-			return nil, err
-		}
-	}
 	keys := make([]verificationKey, 0, len(s.acks))
 	for k := range s.acks {
 		keys = append(keys, k)
@@ -225,11 +215,7 @@ func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath strin
 		return keys[i].day < keys[j].day
 	})
 	for _, k := range keys {
-		c := clients[k.client]
-		if c.id == 0 {
-			return nil, errors.New("report has no actual synthetic client")
-		}
-		if err = insertExpectedSnapshot(ctx, tx, c.id, k.day, s.acks[k], s.modelIDs); err != nil {
+		if err = insertExpectedSnapshot(ctx, tx, int64(k.client), k.day, s.acks[k], s.modelIDs); err != nil {
 			return nil, err
 		}
 	}
@@ -283,10 +269,12 @@ func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath strin
 	}
 	counts := map[string]int64{"closed": int64(len(finalClosed))}
 	queries := []struct{ name, query string }{
-		{"clients", "SELECT id,token_hash,display_name,avatar_id,disabled FROM clients ORDER BY id"},
+		{"clients", "SELECT id,github_id,cpa_uuid,display_name,avatar_id,disabled,ranking_hidden,withdrawn,created_at_ms FROM clients ORDER BY id"},
+		{"client_writers", "SELECT id,client_id,token_hash FROM client_writers ORDER BY id"},
 		{"models", "SELECT id,model_name FROM models ORDER BY id"},
 		{"report_window", "SELECT id,closed_before_day FROM report_window ORDER BY id"},
-		{"daily_reports", "SELECT day,client_id,revision,digest FROM daily_reports ORDER BY day,client_id"},
+		{"daily_reports", "SELECT day,client_id FROM daily_reports ORDER BY day,client_id"},
+		{"daily_writer_versions", "SELECT day,writer_id,client_id,revision,digest FROM daily_writer_versions ORDER BY day,writer_id"},
 		{"daily_stats", "SELECT day,client_id,model_id," + metricColumns + " FROM daily_stats ORDER BY day,client_id,model_id"},
 		{"period_stats", "SELECT kind,start_day,model_id,client_id," + metricColumns + " FROM period_stats ORDER BY kind,start_day,model_id,client_id"},
 	}

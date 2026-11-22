@@ -56,7 +56,7 @@ func TestWriterDeadlineInterruptsSQLiteWriteLock(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond):
 		t.Fatal("SQLite lock ignored the report deadline")
 	}
-	if got := scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client); got != 1 {
+	if got := scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client); got != 1 {
 		t.Fatalf("timed-out report changed revision to %d", got)
 	}
 	if got := scalar(t, db.Reader, `SELECT total_tokens FROM daily_stats WHERE client_id=? AND model_id=0`, client); got != 1 {
@@ -134,7 +134,7 @@ func TestSQLiteLockReleaseAndWriterShutdown(t *testing.T) {
 	if result := resultWithin(t, second); !errors.Is(result.Err, context.Canceled) {
 		t.Fatalf("shutdown did not cancel locked write: %+v", result)
 	}
-	if got := scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client); got != 1 {
+	if got := scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client); got != 1 {
 		t.Fatalf("cancelled report changed revision to %d", got)
 	}
 	if got := scalar(t, db.Writer, `PRAGMA busy_timeout`); got != 5000 {
@@ -196,7 +196,7 @@ func TestSQLiteInFlightTransactionCancellationRollsBack(t *testing.T) {
 	if outcome := resultWithin(t, result); !errors.Is(outcome.Err, context.Canceled) {
 		t.Fatalf("in-flight write returned %+v", outcome)
 	}
-	if got := scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client); got != 1 {
+	if got := scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client); got != 1 {
 		t.Fatalf("cancelled transaction changed revision to %d", got)
 	}
 	if got := scalar(t, db.Reader, `SELECT SUM(total_tokens) FROM daily_stats WHERE client_id=?`, client); got != 2 {

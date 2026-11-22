@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { seedUsers } from './admin-fixtures'
+import { seedReportingSeat } from './database-fixtures'
 
 const config = process.env.RANKING_TEST_ADMIN_CONFIG
 const owner: { username: string; password: string } = config ? JSON.parse(readFileSync(config, 'utf8')) : { username: '', password: '' }
@@ -130,13 +131,11 @@ test('aligns a 13px date-style refresh button above the cache timestamp, never o
   await expect(page.getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
 })
 
-test('uses one compact server-side nickname-or-ID search in both user lists', async ({ page, request, baseURL }, info) => {
+test('uses one compact server-side nickname-or-ID search in both user lists', async ({ page, baseURL }, info) => {
   const prefix = `compact-${randomBytes(3).toString('hex')}`
   seedUsers(prefix, 51)
   const numericName = '1234567890123456'
-  const response = await request.post('/v1/clients/register', { headers: { Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }, data: { display_name: numericName, avatar_id: 1 } })
-  expect(response.status()).toBe(201)
-  const id = String((await response.json()).client_id)
+  const { id } = seedReportingSeat(numericName, 1)
   await login(page)
   await page.getByRole('link', { name: 'Users', exact: true }).click()
   const search = async (term: string) => { await page.getByLabel('Display name or ID', { exact: true }).fill(term); await page.getByRole('button', { name: 'Search', exact: true }).click() }

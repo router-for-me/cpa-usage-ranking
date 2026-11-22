@@ -140,11 +140,7 @@ func readSustainedJournal(path string, f Fixture, o SustainedVerifyOptions, stat
 			if a == nil || !a.inFlight || len(a.queue) == 0 || a.queue[0].task.Sequence != r.Sequence {
 				e = errors.New("invalid ambiguous recovery")
 			} else {
-				if a.action == "register" {
-					a.regAmbiguous = true
-				} else {
-					a.queue[0].ambiguous = true
-				}
+				a.queue[0].ambiguous = true
 				a.inFlight = false
 				a.notBefore = 0
 			}
@@ -166,7 +162,7 @@ func readSustainedJournal(path string, f Fixture, o SustainedVerifyOptions, stat
 				}
 				if e == nil {
 					a := state.actors[m.TaskClient]
-					if a == nil || !a.registered || a.inFlight || len(a.queue) == 0 ||
+					if a == nil || a.inFlight || len(a.queue) == 0 ||
 						a.queue[0].task.Sequence != m.TaskSequence || a.queue[0].task.Revision != m.TaskRevision ||
 						a.queue[0].task.Day != m.TaskDay || a.queue[0].task.BodyHash != m.TaskBodySHA || a.queue[0].attempts != m.TaskAttempts {
 						e = errors.New("reviewed retry task identity or cumulative attempts changed")
@@ -221,15 +217,6 @@ func readSustainedJournal(path string, f Fixture, o SustainedVerifyOptions, stat
 	return nil
 }
 
-type verifiedClient struct {
-	id       int64
-	hash     []byte
-	name     string
-	avatar   int64
-	disabled bool
-	created  int64
-}
-
 func syntheticHash(f Fixture, logical int) ([32]byte, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(f.Secret(logical))
 	if err != nil || len(raw) != 32 {
@@ -238,71 +225,32 @@ func syntheticHash(f Fixture, logical int) ([32]byte, error) {
 	return sha256.Sum256(raw), nil
 }
 
-func matchFinalClients(ctx context.Context, final *sql.DB, s *verificationState) (map[int]verifiedClient, int64, error) {
-	byHash := make(map[[32]byte]int, s.nextClient-1)
-	for id := 1; id < s.nextClient; id++ {
-		hash, err := syntheticHash(s.fixture, id)
-		if err != nil {
-			return nil, 0, err
-		}
-		byHash[hash] = id
-	}
-	result := map[int]verifiedClient{}
-	rows, err := final.QueryContext(ctx, "SELECT id,token_hash,display_name,avatar_id,disabled,created_at_ms FROM clients")
+func checkSyntheticWriters(ctx context.Context, seed *sql.DB, fixture Fixture) error {
+	rows, err := seed.QueryContext(ctx, `SELECT id,client_id,token_hash FROM client_writers ORDER BY id`)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
 	defer rows.Close()
-	var ambiguous int64
+	logical := 0
 	for rows.Next() {
-		var c verifiedClient
-		if err = rows.Scan(&c.id, &c.hash, &c.name, &c.avatar, &c.disabled, &c.created); err != nil {
-			return nil, 0, err
+		logical++
+		var id, seat int
+		var hash []byte
+		if err := rows.Scan(&id, &seat, &hash); err != nil {
+			return err
 		}
-		if len(c.hash) != 32 {
-			return nil, 0, errors.New("invalid client hash")
-		}
-		var h [32]byte
-		copy(h[:], c.hash)
-		logical := byHash[h]
-		if logical == 0 || result[logical].id != 0 {
-			return nil, 0, errors.New("unexpected or duplicate synthetic client")
-		}
-		if logical <= s.fixture.Clients {
-			if c.id != int64(logical) || c.name != fmt.Sprintf("capacity-%06d", logical) || c.avatar != 1 || c.disabled {
-				return nil, 0, errors.New("stock identity changed")
-			}
-		} else {
-			a := s.actors[logical]
-			if a == nil || c.name != fmt.Sprintf("capacity-new-%d", logical) || c.avatar != 1 || c.disabled {
-				return nil, 0, errors.New("new identity/profile mismatch")
-			}
-			if a.registered {
-				if a.serverID != c.id {
-					return nil, 0, errors.New("registration ID mismatch")
-				}
-			} else if a.regAmbiguous {
-				ambiguous++
-			} else {
-				return nil, 0, errors.New("identity exists without a successful or ambiguous registration")
-			}
-		}
-		result[logical] = c
-	}
-	if err = rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	for id := 1; id <= s.fixture.Clients; id++ {
-		if result[id].id == 0 {
-			return nil, 0, errors.New("stock identity missing")
+		expected, err := syntheticHash(fixture, logical)
+		if err != nil || id != logical || seat != logical || !bytes.Equal(hash, expected[:]) {
+			return errors.New("invalid synthetic writer in seed")
 		}
 	}
-	for logical, a := range s.actors {
-		if a.registered && result[logical].id == 0 {
-			return nil, 0, errors.New("confirmed identity missing")
-		}
+	if err := rows.Err(); err != nil {
+		return err
 	}
-	return result, ambiguous, nil
+	if logical != fixture.Clients {
+		return errors.New("synthetic writer count mismatch")
+	}
+	return nil
 }
 
 // VerifySustained checks every journaled delta and attempt, then reconstructs
@@ -345,19 +293,18 @@ func VerifySustained(ctx context.Context, f Fixture, o SustainedVerifyOptions) (
 	if err = readSustainedJournal(o.Journal, f, o, state); err != nil {
 		return out, err
 	}
-	clients, ambiguous, err := matchFinalClients(ctx, final, state)
-	if err != nil {
+	if err := checkSyntheticWriters(ctx, seed, f); err != nil {
 		return out, err
 	}
 	var unconfirmed int64
 	for logical, a := range state.actors {
-		if len(a.queue) == 0 || a.queue[0].attempts == 0 || !a.queue[0].ambiguous || clients[logical].id == 0 {
+		if len(a.queue) == 0 || a.queue[0].attempts == 0 || !a.queue[0].ambiguous {
 			continue
 		}
 		job := a.queue[0]
 		var rev int64
 		var digest []byte
-		e := final.QueryRowContext(ctx, "SELECT revision,digest FROM daily_reports WHERE client_id=? AND day=?", clients[logical].id, job.task.Day).Scan(&rev, &digest)
+		e := final.QueryRowContext(ctx, "SELECT revision,digest FROM daily_writer_versions WHERE writer_id=? AND day=?", logical, job.task.Day).Scan(&rev, &digest)
 		if e != nil && !errors.Is(e, sql.ErrNoRows) {
 			return out, e
 		}
@@ -373,10 +320,10 @@ func VerifySustained(ctx context.Context, f Fixture, o SustainedVerifyOptions) (
 			unconfirmed++
 		}
 	}
-	counts, err := compareSustainedDatabases(ctx, o.SeedDB, o.ExpectedDB, final, state, clients)
+	counts, err := compareSustainedDatabases(ctx, o.SeedDB, o.ExpectedDB, final, state)
 	if err != nil {
 		return out, err
 	}
-	out = SustainedVerification{Produced: state.created, Confirmed: state.confirmed, Pending: state.created - state.confirmed, Registrations: state.registered, UnconfirmedCommits: unconfirmed, AmbiguousRegistrations: ambiguous, CheckedClients: int64(len(clients)), CheckedDays: counts["daily_reports"], CheckedDailyRows: counts["daily_stats"], CheckedPeriodRows: counts["period_stats"], ClosedSourcesRemaining: counts["closed"], ExpectedDB: o.ExpectedDB}
+	out = SustainedVerification{Produced: state.created, Confirmed: state.confirmed, Pending: state.created - state.confirmed, UnconfirmedCommits: unconfirmed, CheckedClients: counts["clients"], CheckedDays: counts["daily_reports"], CheckedDailyRows: counts["daily_stats"], CheckedPeriodRows: counts["period_stats"], ClosedSourcesRemaining: counts["closed"], ExpectedDB: o.ExpectedDB}
 	return out, nil
 }

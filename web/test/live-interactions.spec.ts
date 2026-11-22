@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { seedReportingSeat } from './database-fixtures'
 
 let participant = ''
 const usage = '123.46 M'
@@ -45,13 +46,10 @@ async function expectObservedClean(page: Page, observed: ReturnType<typeof obser
 test.beforeAll(async ({ playwright }, workerInfo) => {
   const api = await playwright.request.newContext({ baseURL: workerInfo.project.use.baseURL })
   try {
-    // 一个独立真实身份供本文件复用，避免超过默认每来源的注册创建限制。
-    const secret = randomBytes(32).toString('base64url')
     participant = `交互验收-${randomBytes(4).toString('hex')}`
-    const headers = { Authorization: `Bearer ${secret}` }
-    expect((await api.post('/v1/clients/register', { headers, data: { display_name: participant, avatar_id: 2 } })).status()).toBe(201)
+    const { headers } = seedReportingSeat(participant, 2)
     const day = new Date().toISOString().slice(0, 10)
-    expect((await api.put(`/v1/reports/${day}`, { headers, data: {
+    expect((await api.put(`/v1/clients/report/${day}`, { headers, data: {
       schema_version: 1, revision: '1', items: [{ model: 'claude-fable-5', total_tokens: '123456789', input_tokens: '10', output_tokens: '0', cache_read_tokens: '5', cache_write_tokens: '0', reasoning_tokens: '0', request_count: '2', success_count: '1', ttft_avg_ms: 12, ttft_samples: '1', latency_avg_ms: null, latency_samples: '0' }],
     } })).status()).toBe(200)
     await expect.poll(async () => {

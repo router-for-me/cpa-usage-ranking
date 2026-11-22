@@ -1,11 +1,9 @@
 import { defineConfig } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { databasePath, oauthOrigin, outputDir, port } from './test-paths'
 
-const port = Number(process.env.RANKING_TEST_PORT ?? 4187)
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('RANKING_TEST_PORT must be 1–65535')
 const baseURL = `http://127.0.0.1:${port}`
-const outputDir = process.env.PLAYWRIGHT_OUTPUT_DIR ?? fileURLToPath(new URL('./results', import.meta.url))
 const binary = resolve(process.env.RANKING_TEST_BINARY ?? fileURLToPath(new URL('../../bin/ranking', import.meta.url)))
 const webDir = resolve(process.env.RANKING_TEST_WEB_DIR ?? fileURLToPath(new URL('../dist', import.meta.url)))
 const adminConfig = process.env.RANKING_TEST_ADMIN_CONFIG
@@ -42,7 +40,11 @@ export default defineConfig({
       RANKING_MODELS_PATH: fileURLToPath(new URL('../../config/models.json', import.meta.url)),
       RANKING_SHUTDOWN_TIMEOUT: '5s',
       RANKING_CACHE_REFRESH_INTERVAL: adminConfig ? '5m' : '200ms',
-      RANKING_SQLITE_PATH: resolve(outputDir, '..', 'databases', String(port), 'ranking.db'),
+      RANKING_SQLITE_PATH: databasePath,
+      RANKING_REGISTRATION_ENABLED: 'true',
+      RANKING_PUBLIC_ORIGIN: oauthOrigin,
+      RANKING_GITHUB_CLIENT_ID: 'playwright-fixture',
+      RANKING_GITHUB_CLIENT_SECRET: 'playwright-fixture-not-a-secret',
     },
     reuseExistingServer: false,
     timeout: 15_000,

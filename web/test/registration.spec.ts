@@ -1,23 +1,56 @@
 import { expect, test } from '@playwright/test'
+import { withTestDatabase } from './database-fixtures'
+import { oauthOrigin } from './test-paths'
 
-test('registers and safely retries against the real production binary without adding account UI', async ({ page, request }) => {
+const start = '/v1/clients/register/start'
+const complete = '/v1/clients/register/complete'
+
+test('registers and safely retries against the real binary without adding account UI', async ({ page, request }) => {
   await page.goto('/')
-  const result = await page.evaluate(async () => {
-    // 测试客户端先生成并保存秘密；不把凭据交给服务端签发，也不加入生产 UI。
+  const ticket = await page.evaluate(async (startPath) => {
     const raw = crypto.getRandomValues(new Uint8Array(32))
     const secret = btoa(String.fromCharCode(...raw)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
     localStorage.setItem('registration-test-secret', secret)
-    const send = async (body: object) => {
-      const response = await fetch('/v1/clients/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('registration-test-secret')}` },
-        body: JSON.stringify(body),
-      })
-      return { status: response.status, cache: response.headers.get('Cache-Control'), body: await response.json() as Record<string, unknown> }
-    }
-    const first = await send({ display_name: '  Ｂrowser 🙂  ', avatar_id: 66 })
-    const retry = await send({ display_name: '\u0000', avatar_id: -1 })
-    const minimal = await send({})
+    const response = await fetch(startPath, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ cpa_uuid: '550e8400-e29b-41d4-a716-446655440000', return_to: `${location.origin}/?from=client#settings` }),
+    })
+    return { status: response.status, cache: response.headers.get('Cache-Control'), body: await response.json() as { request_id: string; authorize_url: string } }
+  }, start)
+  expect(ticket.status).toBe(200)
+  expect(ticket.cache).toBe('no-store')
+  const id = ticket.body.request_id
+  const authorizePath = `/auth/github/authorize?request_id=${id}`
+  expect(ticket.body.authorize_url).toBe(oauthOrigin + authorizePath)
+  const auth = await request.get(authorizePath, { maxRedirects: 0 })
+  expect(auth.status()).toBe(302)
+  expect(auth.headers()['referrer-policy']).toBe('no-referrer')
+  expect(auth.headers().location).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+  const completeInBrowser = () => page.evaluate(async ({ path, requestID }) => {
+    const response = await fetch(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('registration-test-secret')}` },
+      body: JSON.stringify({ request_id: requestID }),
+    })
+    return { status: response.status, cache: response.headers.get('Cache-Control'), retryAfter: response.headers.get('Retry-After'), body: await response.text() }
+  }, { path: complete, requestID: id })
+  const pending = await completeInBrowser()
+  expect(pending.status).toBe(202)
+  expect(pending.retryAfter).toMatch(/^\d+$/)
+
+  // Only this test DB is seeded at the approved boundary. Never follow the
+  // GitHub redirect. Go tests exercise the entire callback with fake transport.
+  const approved = withTestDatabase((db) => db.prepare(`UPDATE registration_requests SET stage='approved',
+    github_id=(SELECT coalesce(max(github_id),0)+1 FROM clients),display_name='Browser 🙂',
+    state=NULL,browser_hash=NULL,verifier=NULL WHERE id=? AND stage='authorizing'`).run(id).changes)
+  expect(approved).toBe(1)
+  const first = await completeInBrowser()
+  const retry = await completeInBrowser()
+  expect(first.status).toBe(201)
+  expect(first.cache).toBe('no-store')
+  expect(retry.status).toBe(200)
+  expect(JSON.parse(first.body)).toEqual({ avatar_id: '1', client_id: expect.stringMatching(/^\d+$/), display_name: 'Browser 🙂' })
+  expect(JSON.parse(retry.body)).toEqual(JSON.parse(first.body))
+  const result = await page.evaluate(async () => {
     const day = new Date().toISOString().slice(0, 10)
     const snapshot = {
       schema_version: 1, revision: '1', items: [{
@@ -28,32 +61,24 @@ test('registers and safely retries against the real production binary without ad
       }],
     }
     const report = async () => {
-      const response = await fetch(`/v1/reports/${day}`, {
+      const response = await fetch(`/v1/clients/report/${day}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('registration-test-secret')}` },
         body: JSON.stringify(snapshot),
       })
       return { status: response.status, body: await response.json() as Record<string, unknown> }
     }
-    const firstReport = await report()
-    const retryReport = await report()
+    const first = await report()
+    const retry = await report()
     localStorage.removeItem('registration-test-secret')
-    return { first, retry, minimal, firstReport, retryReport }
+    return { first, retry }
   })
-  expect(result.first.status).toBe(201)
-  expect(result.first.cache).toBe('no-store')
-  expect(Object.keys(result.first.body).sort()).toEqual(['avatar_id', 'client_id', 'display_name'])
-  expect(result.first.body.display_name).toBe('Browser 🙂')
-  expect(result.first.body.avatar_id).toBe(66)
-  expect(result.retry.status).toBe(200)
-  expect(result.minimal.status).toBe(200)
-  expect(result.retry.body).toEqual(result.first.body)
-  expect(result.minimal.body).toEqual(result.first.body)
-  expect(result.firstReport).toEqual({ status: 200, body: { revision: '1' } })
-  expect(result.retryReport).toEqual(result.firstReport)
-  const rejected = await request.post('/v1/clients/register', { data: { display_name: 'No secret' } })
+  expect(result.first).toEqual({ status: 200, body: { revision: '1' } })
+  expect(result.retry).toEqual(result.first)
+  const rejected = await request.post(start, { data: {} })
   expect(rejected.status()).toBe(401)
   expect(await rejected.json()).toEqual({ error: { code: 'invalid_credential', message: 'Invalid client credential' } })
+  expect((await request.post('/v1/clients/register', { data: {}, maxRedirects: 0 })).status()).toBe(404)
   await expect.poll(async () => {
     const response = await request.get('/v1/leaderboards/overall/today')
     if (response.status() !== 200) return false

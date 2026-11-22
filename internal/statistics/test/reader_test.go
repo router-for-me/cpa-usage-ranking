@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -15,11 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/models"
 	"cpa-usage-ranking/internal/periods"
 	"cpa-usage-ranking/internal/reports"
 	"cpa-usage-ranking/internal/statistics"
 	"cpa-usage-ranking/internal/storage"
+	"cpa-usage-ranking/internal/testfixture"
 	"github.com/mattn/go-sqlite3"
 )
 
@@ -62,15 +65,16 @@ func newFixture(t *testing.T) *fixture {
 }
 func (f *fixture) client(t *testing.T) int64 {
 	t.Helper()
-	res, err := f.db.Writer.Exec(`INSERT INTO clients(token_hash,display_name,avatar_id,created_at_ms) VALUES(randomblob(32),'client',1,0)`)
+	var hash clients.CredentialHash
+	rand.Read(hash[:])
+	writer, err := testfixture.Seat(context.Background(), f.db.Writer, hash, "client", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatal(err)
+	if writer.ID != writer.WriterID {
+		t.Fatal("single-writer fixture requires equal IDs")
 	}
-	return id
+	return writer.ID
 }
 func item(name string, n int64) reports.Item {
 	return reports.Item{Model: name, TotalTokens: n, InputTokens: n, RequestCount: 1, SuccessCount: 1}

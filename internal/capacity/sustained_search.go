@@ -165,11 +165,11 @@ func assessSustainedStage(before SustainedSample, samples []SustainedSample, rat
 		out.Verdict, out.Reason = "tool_limited", "generator or transport path was not valid"
 		return out, nil
 	}
-	if sampleCodeDelta(before.ReportErrorCodes, end.ReportErrorCodes, "report_rate_limited") > 0 || sampleCodeDelta(before.RegistrationErrorCodes, end.RegistrationErrorCodes, "registration_rate_limited") > 0 || sampleCodeDelta(before.RegistrationErrorCodes, end.RegistrationErrorCodes, "creation_quota_exceeded") > 0 {
+	if sampleCodeDelta(before.ReportErrorCodes, end.ReportErrorCodes, "report_rate_limited") > 0 {
 		out.Verdict, out.Reason = "policy_limited", "test rate admission was reached"
 		return out, nil
 	}
-	if sampleCodeDelta(before.ReportErrorCodes, end.ReportErrorCodes, "report_capacity") > 0 || sampleCodeDelta(before.RegistrationErrorCodes, end.RegistrationErrorCodes, "registration_capacity") > 0 {
+	if sampleCodeDelta(before.ReportErrorCodes, end.ReportErrorCodes, "report_capacity") > 0 {
 		out.Verdict, out.Reason = "capacity_policy", "non-rate admission capacity was reached"
 		return out, nil
 	}

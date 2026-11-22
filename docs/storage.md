@@ -1,9 +1,10 @@
 # SQLite storage
 
 The service initializes its current schema before listening for HTTP requests.
-It creates the [client identity/profile](client-storage.md), model dictionary,
-report-window watermark, daily snapshots, finalized period statistics and
-ordinary administrator tables; startup creates no participant records. Startup
+It creates the [client seats and writers](client-storage.md), bounded registration
+transactions, model dictionary, report-window watermark, daily snapshots and
+writer versions, finalized period statistics and ordinary administrator tables;
+startup creates no participant records. Startup
 atomically registers canonical model names. IDs are positive and stable; ID 0
 is reserved for internal totals and is not a dictionary row. Removed names
 remain in the dictionary but are not active until reintroduced. The watermark
@@ -72,7 +73,9 @@ There is no schema version ledger, upgrade, downgrade, repair or conversion of
 old databases. Use a new database when the schema changes.
 
 `models` stores only IDs and unique canonical names, not aliases or prices.
-`daily_reports` and `daily_stats` use composite primary keys and `WITHOUT ROWID`;
+`daily_writer_versions` uses `(day, writer_id)` for revision and digest. The
+single effective snapshot uses `(day, client_id)`; deleting it during settlement
+also deletes its writer versions. Daily snapshots and versions use `WITHOUT ROWID`;
 a partial index supports total-row reads. The total uses model ID 0 without
 a model dictionary row; real details use positive model IDs. `daily_stats`
 uses `(day, client_id, model_id)` and `period_stats` uses
@@ -88,7 +91,7 @@ reads include the full backlog. The transaction ends before derived processing;
 reads time out independently and reject overflow or more than 100,000 clients
 per candidate view. All-model totals and individual model views are
 separate. Daily views support totals only, because finalized model-level daily
-rows are not retained. Annual views combine finalized monthly rows with the year's unsettled daily rows in the same transaction. Public builds also read profiles and filter disabled clients in that snapshot. The limit is not a verified client-capacity claim.
+rows are not retained. Annual views combine finalized monthly rows with the year's unsettled daily rows in the same transaction. Public builds also read profiles and exclude disabled, hidden, and withdrawn seats before scoring in that snapshot. The limit is not a verified client-capacity claim.
 
 Candidate metrics may be derived from raw sums and counts without changing the
 stored int64 values. Ratios and means are unavailable when their denominator
@@ -106,6 +109,8 @@ items run sequentially; every item releases its read transaction before encoding
 Only a complete successful round replaces the previous immutable snapshot. A
 failure, timeout or capacity limit retains the previous round; a missing first
 round is unavailable, and reads never rebuild it. Pending ticks during a build
-are discarded. Uploads, profile changes and settlement do not trigger builds. Six real period items each build five leaderboards; see [leaderboard calculations](leaderboards.md). The initial
+are discarded. Ordinary uploads and settlement do not trigger builds; a
+committed withdrawal requests an asynchronous refresh and supersedes a build
+already in progress. Six real period items each build five leaderboards; see [leaderboard calculations](leaderboards.md). The initial
 100,000-candidate, 16 MiB encoded-round and 32-item limits are safety bounds,
 not evidence of tested client capacity.

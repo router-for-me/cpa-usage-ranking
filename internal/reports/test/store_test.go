@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"math"
@@ -9,21 +10,24 @@ import (
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/reports"
 	"cpa-usage-ranking/internal/storage"
+	"cpa-usage-ranking/internal/testfixture"
 )
 
 func createReportClient(t *testing.T, db *storage.DB) int64 {
 	t.Helper()
-	result, err := db.Writer.Exec(`INSERT INTO clients(token_hash,display_name,avatar_id,created_at_ms) VALUES(randomblob(32),'client',1,0)`)
+	var hash clients.CredentialHash
+	rand.Read(hash[:])
+	writer, err := testfixture.Seat(context.Background(), db.Writer, hash, "client", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		t.Fatal(err)
+	if writer.ID != writer.WriterID {
+		t.Fatal("single-writer fixture requires equal IDs")
 	}
-	return id
+	return writer.ID
 }
 
 func prepared(t *testing.T, revision int64, items ...reports.Item) reports.Prepared {
@@ -79,7 +83,7 @@ func TestAtomicReplacementDiffsAndEmptySnapshots(t *testing.T) {
 	if scalar(t, db.Reader, `SELECT COUNT(*) FROM audit`) != 0 {
 		t.Fatal("higher revision rewrote unchanged statistics")
 	}
-	if scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE day=? AND client_id=?`, day, client) != 6 {
+	if scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE day=? AND client_id=?`, day, client) != 6 {
 		t.Fatal("new revision not persisted")
 	}
 	var conflict *reports.RevisionConflict
@@ -102,7 +106,7 @@ func TestAtomicReplacementDiffsAndEmptySnapshots(t *testing.T) {
 	if _, err := store.Apply(ctx, client, day, prepared(t, 10, usage("unknown", 4, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
-	if scalar(t, db.Reader, `SELECT COUNT(*) FROM daily_stats WHERE day=? AND client_id=?`, day, client) != 0 || scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE day=? AND client_id=?`, day, client) != 10 {
+	if scalar(t, db.Reader, `SELECT COUNT(*) FROM daily_stats WHERE day=? AND client_id=?`, day, client) != 0 || scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE day=? AND client_id=?`, day, client) != 10 {
 		t.Fatal("empty filtered snapshot did not clear rows and retain version")
 	}
 	if _, err := store.Apply(ctx, client, day, prepared(t, 11)); err != nil {
@@ -131,7 +135,7 @@ func TestIdempotentRetryDoesNotAggregateNewCatalog(t *testing.T) {
 	if _, err := newStore.Apply(context.Background(), client, "2026-11-01", prepared(t, 4, input...)); !errors.Is(err, reports.ErrInvalid) {
 		t.Fatalf("new aggregation overflow accepted: %v", err)
 	}
-	if scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client) != 3 || scalar(t, db.Reader, `SELECT COUNT(*) FROM daily_stats`) != 0 {
+	if scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client) != 3 || scalar(t, db.Reader, `SELECT COUNT(*) FROM daily_stats`) != 0 {
 		t.Fatal("failed new replacement changed old snapshot")
 	}
 }
@@ -151,7 +155,7 @@ func TestSQLiteFailureRollsBackVersionAndEveryRow(t *testing.T) {
 	if _, err := store.Apply(ctx, client, day, prepared(t, 2, usage("alpha", 20, 1, 1))); err == nil {
 		t.Fatal("injected SQLite failure reported success")
 	}
-	if scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client) != 1 || scalar(t, db.Reader, `SELECT SUM(total_tokens) FROM daily_stats WHERE client_id=?`, client) != 20 {
+	if scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client) != 1 || scalar(t, db.Reader, `SELECT SUM(total_tokens) FROM daily_stats WHERE client_id=?`, client) != 20 {
 		t.Fatal("partial metadata or stats escaped rollback")
 	}
 }
@@ -177,13 +181,13 @@ func TestConcurrentRevisionsDisabledAndCancellation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client) != n-1 || scalar(t, db.Reader, `SELECT total_tokens FROM daily_stats WHERE client_id=? AND model_id=0`, client) != n {
+	if scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client) != n-1 || scalar(t, db.Reader, `SELECT total_tokens FROM daily_stats WHERE client_id=? AND model_id=0`, client) != n {
 		t.Fatal("concurrent revisions lost latest snapshot")
 	}
 	if _, err := db.Writer.Exec(`UPDATE clients SET disabled=1 WHERE id=?`, client); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Apply(ctx, client, day, prepared(t, n)); !errors.Is(err, reports.ErrClientDisabled) {
+	if _, err := store.Apply(ctx, client, day, prepared(t, n)); !errors.Is(err, clients.ErrDisabled) {
 		t.Fatalf("disabled client: %v", err)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
@@ -191,7 +195,7 @@ func TestConcurrentRevisionsDisabledAndCancellation(t *testing.T) {
 	if _, err := store.Apply(cancelled, client, day, prepared(t, n)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled write: %v", err)
 	}
-	if scalar(t, db.Reader, `SELECT revision FROM daily_reports WHERE client_id=?`, client) != n-1 {
+	if scalar(t, db.Reader, `SELECT revision FROM daily_writer_versions WHERE client_id=?`, client) != n-1 {
 		t.Fatal("disabled/cancelled write changed revision")
 	}
 }

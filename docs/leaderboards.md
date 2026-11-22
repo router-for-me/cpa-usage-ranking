@@ -43,9 +43,8 @@ Formatting is presentation only: the API, score calculation and sorting remain u
 
 The cache builds five views from all eligible clients: overall, token usage,
 cache reuse, conservative success score, and measured mean time to first token
-(TTFT). Eligibility requires an enabled client without the administrator-set
-`ranking_hidden` exclusion and at least one accepted execution in the selected
-UTC period. There is no minimum sample count or success rate. Only all-model totals are used; totals and model details are not added.
+(TTFT). Eligibility requires an enabled, non-hidden, non-withdrawn seat with
+at least one accepted execution in the selected UTC period. There is no minimum sample count or success rate. Only all-model totals are used; totals and model details are not added.
 
 The six fixed periods are UTC today, yesterday, the previous complete
 Monday-start UTC week, the previous complete UTC calendar month, the current
@@ -57,12 +56,13 @@ not mean immutable data. A successful cache round publishes any corrections;
 a failed round retains the previous complete publication. Yearly
 raw totals combine finalized monthly sums and all unsettled daily sums of that
 calendar year in one SQLite read snapshot; there is no year table. Cumulative
-statistics remain persisted and maintained. Profiles, disabled/excluded state and
-raw statistics are read in the same snapshot before scoring; banned and excluded
-clients are filtered before candidate limits and all scoring references. Global
-exclusion continues to accept reports; banning rejects reports. Both states are
-independent, survive restarts and apply even when the [admin console](admin.md) is
-disabled. Restoration uses only retained statistics under the original rules.
+statistics remain persisted and maintained. Profiles, seat flags and raw
+statistics are read in the same snapshot; banned, hidden and withdrawn seats
+are filtered before candidate limits and all scoring references. Hiding alone
+still permits reports; banning and [withdrawal](registration-api.md#withdraw-the-entire-seat)
+reject reports. These states are independent and survive restarts. A withdrawn
+seat cannot be restored via the [admin console](admin.md) or registration; it
+is removed from public results after the next successful cache publication.
 Daily and weekly retention follows the [daily report storage rules](report-snapshots.md).
 
 Overall has at most 100 points: usage 40, success 30, cache 20, TTFT 10.

@@ -39,7 +39,7 @@ func TestIndependentVisibilityBanPersistenceAndNaturalRetention(t *testing.T) {
 		t.Fatal("unban cleared independent hidden flag", err)
 	}
 	var count, revision, total int
-	if err := db.Reader.QueryRow(`SELECT count(*),sum(revision) FROM daily_reports`).Scan(&count, &revision); err != nil || count != 4 || revision != 30 {
+	if err := db.Reader.QueryRow(`SELECT count(*),sum(revision) FROM daily_writer_versions`).Scan(&count, &revision); err != nil || count != 4 || revision != 30 {
 		t.Fatal("management rewrote daily revisions", err)
 	}
 	if err := db.Reader.QueryRow(`SELECT sum(total_tokens) FROM daily_stats`).Scan(&total); err != nil || total != 6000 {
@@ -149,8 +149,8 @@ func TestExcludedSamplesAreFilteredBeforeCandidateLimitAndScoring(t *testing.T) 
 	ctx := context.Background()
 	_, db := serviceDB(t)
 	_, err := db.Writer.Exec(`WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<120)
-	INSERT INTO clients(id,token_hash,display_name,avatar_id,ranking_hidden,created_at_ms) SELECT n,randomblob(32),'candidate-'||n,1,n>2,0 FROM ids;
-	INSERT INTO daily_reports SELECT '2026-11-18',id,1,zeroblob(32),0 FROM clients;
+	INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,ranking_hidden,created_at_ms) SELECT n,n,'550e8400-e29b-41d4-a716-446655440000','candidate-'||n,1,n>2,0 FROM ids;
+	INSERT INTO daily_reports SELECT '2026-11-18',id,0 FROM clients;
 	INSERT INTO daily_stats SELECT '2026-11-18',id,0,id*1000,id*1000,0,100,0,0,100,90,id*100,100,10000,100 FROM clients`)
 	if err != nil {
 		t.Fatal(err)

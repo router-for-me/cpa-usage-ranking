@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { expect, test } from '@playwright/test'
+import { seedReportingSeat } from './database-fixtures'
 
 const config = process.env.RANKING_TEST_ADMIN_CONFIG
 const credentials: { username: string; password: string } = config ? JSON.parse(readFileSync(config, 'utf8')) : { username: '', password: '' }
@@ -87,8 +88,7 @@ test('persists locale across public and admin console routes without page reload
   test.skip(!config, 'Requires an isolated enabled console')
 
   const name = `i18n-${randomBytes(3).toString('hex')}`
-  const headers = { Authorization: `Bearer ${randomBytes(32).toString('base64url')}` }
-  expect((await request.post('/v1/clients/register', { headers, data: { display_name: name, avatar_id: 1 } })).status()).toBe(201)
+  const { headers } = seedReportingSeat(name, 1)
   const day = new Date().toISOString().slice(0, 10)
   const report = {
     schema_version: 1,
@@ -109,7 +109,7 @@ test('persists locale across public and admin console routes without page reload
       latency_samples: '5',
     }],
   }
-  expect((await request.put(`/v1/reports/${day}`, { headers, data: report })).status()).toBe(200)
+  expect((await request.put(`/v1/clients/report/${day}`, { headers, data: report })).status()).toBe(200)
 
   let documents = 0
   page.on('request', (req) => {

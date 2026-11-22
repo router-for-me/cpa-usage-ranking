@@ -262,7 +262,7 @@ func Burst(ctx context.Context, f Fixture, o BurstOptions) (BurstSummary, error)
 		id := i + 1
 		actors[i] = actor{queue: make(chan *burstTask, o.QueuePerClient), secret: f.Secret(id)}
 		t := makeTask(id, f.Day, 2, "initial_today", 0)
-		req, e := http.NewRequest(http.MethodPut, u.Scheme+"://"+u.Host+"/v1/reports/"+f.Day, bytes.NewReader(initialBody))
+		req, e := http.NewRequest(http.MethodPut, u.Scheme+"://"+u.Host+"/v1/clients/report/"+f.Day, bytes.NewReader(initialBody))
 		if e != nil {
 			_ = finishLogs()
 			return summary, e
@@ -520,7 +520,7 @@ func runBurstTask(ctx context.Context, client *http.Client, u *url.URL, f Fixtur
 		if attempt == 1 && task.prepared != nil {
 			req = task.prepared.WithContext(attemptCtx)
 		} else {
-			req, err = http.NewRequestWithContext(attemptCtx, http.MethodPut, u.Scheme+"://"+u.Host+"/v1/reports/"+task.Day, bytes.NewReader(body))
+			req, err = http.NewRequestWithContext(attemptCtx, http.MethodPut, u.Scheme+"://"+u.Host+"/v1/clients/report/"+task.Day, bytes.NewReader(body))
 			if err != nil {
 				cancel()
 				return err
