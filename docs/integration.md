@@ -1,91 +1,150 @@
-# 客户端接入指南
+# Client Integration Guide
 
-适用于用量采集器、网关和其他需要提交统计或展示排行榜的应用。接入方自行读取、归并本地数据，不依赖特定数据库、事件表或SDK。本文仅描述当前已实现的HTTP接口。
+[简体中文](integration.zh.md) · [README](../README.md)
 
-## 1. 可用接口
+This guide defines the public HTTP JSON protocol for any usage collector, gateway, or dashboard that reports usage snapshots or displays leaderboards. Clients read and aggregate local data independently; the server requires no client SDK, specific database, or upstream event schema.
 
-访问入口由部署者提供，例如 `https://ranking.example.com`。下表路径相对此入口；“无需凭据”不代表部署者必须开放公网访问。
+## Endpoints Overview
 
-| 方法 | 路径 | 凭据 | 用途 |
-|---|---|---|---|
-| `POST` | `/v1/clients/register/start` | 本端生成的 Bearer | 提交 CPA UUID 和返回地址，领取 `request_id` 和授权链接 |
-| `POST` | `/v1/clients/register/complete` | 领号时的同一 Bearer | 用已获 GitHub 授权的编号完成注册 |
-| `POST` | `/v1/clients/withdraw` | 已注册的 Bearer | 退出整个席位，不带正文或查询参数 |
-| `PUT` | `/v1/clients/report/{utc_day}` | 已注册身份的Bearer凭据 | 替换一个UTC日的完整累计快照 |
-| `GET` | `/v1/leaderboards/{board}/{period}` | 无需 | 读取公开排行榜，最多100行 |
-| `GET` / `HEAD` | `/avatars/catalog.json` | 无需 | 读取头像ID、默认项及资源路径 |
-| `GET` / `HEAD` | `/avatars/{path}` | 无需 | 按清单返回的路径获取图片；GET返回图片二进制，HEAD仅返回响应头 |
-| `GET` | `/healthz` | 无需 | 检查HTTP服务存活 |
-| `GET` | `/readyz` | 无需 | 检查数据库、目录及初始排行榜缓存就绪 |
+All paths are relative to the deployment's HTTPS origin (for example `https://ranking.example.com`).
 
-浏览器另经 Ranking 的 `/auth/github/authorize` 和 `/auth/github/callback` 跳转，不把它们作为上报客户端 API。只展示排行榜的应用无需注册。需要上报的应用依次完成：**保存凭据 → 领号并授权 → 完成注册 → 按UTC日生成完整快照 → 持久化版本与待发正文 → 上报并核对确认**（完整时序与分支见[客户端接入流程图](integration-flow.md)）。
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA UUID and `return_to`; receive `request_id` and `authorize_url` |
+| `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization |
+| `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat (empty body, no query parameters) |
+| `PUT` | `/v1/clients/report/{utc_day}` | Registered `Bearer <secret>` | Atomically replace the seat's full cumulative snapshot for one UTC day |
+| `GET` | `/v1/leaderboards/{board}/{period}` | None | Fetch the latest published Top-100 leaderboard cache |
+| `GET` / `HEAD` | `/avatars/catalog.json` | None | Fetch the avatar catalog, default ID, and relative asset paths |
+| `GET` / `HEAD` | `/avatars/{path}` | None | Fetch an avatar WebP binary (`HEAD` returns headers only) |
+| `GET` | `/healthz` | None | Liveness probe (`200 {"status":"ok"}`) |
+| `GET` | `/readyz` | None | Readiness probe (`200 {"status":"ready"}` after DB, catalogs, and first cache build) |
 
-使用HTTPS传输凭据。注册和上报正文为UTF-8 JSON，设置 `Content-Type: application/json`，不使用gzip等请求压缩。不要在URL、日志、公开页面或代码仓库中放入凭据，也不要上传上游模型API密钥、提示词或响应正文。
+Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` during OAuth authorization; these are browser redirect routes rather than JSON client APIs.
 
-## 2. 身份与注册
+**Transport and privacy requirements:**
+- Always use **HTTPS** in production. HTTP on loopback is only for local development or behind a trusted TLS-terminating reverse proxy.
+- Send uncompressed UTF-8 JSON with `Content-Type: application/json` (`charset` parameter is accepted; no `Content-Encoding` other than `identity`).
+- Never place Bearer secrets in URLs, request bodies, logs, public pages, or source repositories. Never upload upstream model API keys, prompts, or response payloads.
+- Clients that only display leaderboards need no registration or credentials.
 
-1. 首次请求前，生成 **32 字节密码学安全随机数**，编码为 **43 字符无填充 base64url**，先持久化到受保护的凭据存储。用一个 `Authorization: Bearer <secret>` 请求头发送。每个上报端独立生成凭据，不与同一席位的其他端共享。服务端只存摘要，不签发或找回原文。
-2. 调用 `POST /v1/clients/register/start`，请求体例如 `{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:8080/settings?tab=ranking#status"}`。使用实际 CPA 提供的持久 UUID，不能由每个采集器各自生成。保存返回的 `request_id`，在用户浏览器直接打开 `authorize_url`。同意或拒绝后 Ranking 都跳回原 `return_to`，不加参数；浏览器回跳不是写入确认，Ranking 不访问这个地址。
-3. 客户端用相同 Bearer 调用 `POST /v1/clients/register/complete`，仅提交 `{"request_id":"<原编号>"}`。新建席位返回 `201`，复用或取回已办结结果返回 `200`；待授权返回 `202` 和 `Retry-After`。返回对象例如 `{"client_id":"42","display_name":"Alice","avatar_id":"1"}`，其中两个 ID 是十进制字符串。
+## Credentials, Registration, and Withdrawal
 
-席位由 **GitHub 数字 ID + CPA UUID** 唯一确定。GitHub 名字有效则作为新席位昵称，否则使用规范化的 `login`（超长截断）；头像为目录默认项。新增 writer 不会改动已有资料。昵称、GitHub 登录名、来源 IP、凭据正文或自报 `client_id` 均不能指定一个席位。
+### Client-Owned Credentials
 
-**丢包恢复：** 未过期时，用原编号及原凭据重调 `complete`；过期后，保留**原凭据**重新领号，并使用同一 GitHub 帐号和 CPA UUID 授权。之前如果已成功，不会新建席位或 writer；不得把凭据重绑到别的席位。禁用和退出都不能靠重试或重新领号恢复。领号回复丢失也使用原密钥重新领号。详见[注册 API](registration-api.md)。
+Before the first registration attempt, each reporting installation generates **32 bytes from a cryptographically secure random source**, encodes them as **43-character unpadded `base64url`** (RFC 4648 URL alphabet `A–Z a–z 0–9 - _`, no `=` or whitespace), and persists the secret durably in protected storage.
 
-**退出：** `POST /v1/clients/withdraw` 只带当前 Bearer，不提交正文或 `client_id`，成功或重复退出均为 `204`。退出作用于整个席位，保留历史记录，同席位所有端连原样上报重试也会收到 `403 client_withdrawn`。下一次成功发布榜单缓存时，退出席位不再参榜或参与评分参考；退出确认只代表已落库。
+- Send exactly one `Authorization: Bearer <secret>` header (scheme is case-insensitive, separated by one space).
+- The server decodes the 43-character token and stores only the **32-byte `SHA-256` digest of the decoded bytes**—never the raw secret.
+- Each reporting installation uses its own credential; multiple writers for the same seat must not share a secret.
+- The server does not generate secrets, rotate credentials, issue sessions, or recover lost secrets. Keeping only `client_id` is insufficient for reporting or retries.
 
-### 获取头像清单
+### GitHub OAuth Registration Flow
 
-```http
-GET /avatars/catalog.json
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as User Browser
+    participant R as Ranking Server
+    participant G as GitHub
+    Note over C: Generate & persist 32-byte Bearer secret locally
+    C->>R: POST /v1/clients/register/start (cpa_uuid, return_to, Bearer)
+    R-->>C: 200 {request_id, authorize_url} (no seat yet)
+    C->>B: Open authorize_url
+    B->>R: GET /auth/github/authorize
+    R-->>B: Redirect to GitHub with one-time state, PKCE & browser cookie
+    B->>G: User approves or denies
+    G-->>B: Redirect to /auth/github/callback
+    B->>R: GET /auth/github/callback
+    R->>G: Exchange code & read numeric GitHub user ID
+    R-->>B: Record decision & redirect to exact return_to (no extra params)
+    C->>R: POST /v1/clients/register/complete (request_id, same Bearer)
+    R-->>C: 201 new seat / 200 reused or recovered / 202 pending / error
 ```
 
-无需Bearer凭据，成功返回200和JSON清单。以下仅示意结构，实际ID和路径以接口响应为准：
+#### Step 1: Start Registration
+
+```http
+POST /v1/clients/register/start
+Authorization: Bearer <secret>
+Content-Type: application/json
+
+{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:8080/settings?tab=ranking#status"}
+```
+
+- `cpa_uuid`: Persistent, nonzero `8-4-4-4-12` hex UUID supplied by the CPA instance (case-insensitive). Do not invent an independent UUID per collector if multiple collectors report for the same CPA instance.
+- `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are all allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
+- `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (default lifetime: 10 minutes) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
+
+#### Step 2: Browser Authorization
+
+The server binds the browser flow with a `Secure; HttpOnly; SameSite=Lax` cookie, one-time state, and `S256` PKCE, exchanges the authorization code server-side, and reads the authenticated GitHub user without requesting repository or email scopes or storing any GitHub token. After recording approval or denial, the server redirects to the exact saved `return_to` with no added query parameters and sets `Referrer-Policy: no-referrer`. Ranking never makes a server-side HTTP request to `return_to`, and a browser return is **not** proof of registration.
+
+#### Step 3: Complete Registration
+
+```http
+POST /v1/clients/register/complete
+Authorization: Bearer <same-secret-as-start>
+Content-Type: application/json
+
+{"request_id":"<original-request-id>"}
+```
+
+- `202 Accepted` with `Retry-After` (seconds, empty body): waiting for browser authorization; retry with the same `request_id` and Bearer secret after that delay.
+- `201 Created`: new ranking seat created.
+- `200 OK`: existing seat reused or committed completion recovered.
+
+Success response (`client_id` and `avatar_id` are positive int64 decimal strings):
 
 ```json
-{
-  "default_avatar_id": 1,
-  "avatars": [
-    {"avatar_id": 1, "path": "images/avatar-example.webp"}
-  ]
-}
+{"client_id":"42","display_name":"Alice","avatar_id":"1"}
 ```
 
-`default_avatar_id` 是默认头像ID；`avatars` 包含全部可选头像，每项给出 `avatar_id` 和相对图片路径 `path`。
+**Seat identity and profile rules:**
+- A seat is uniquely identified by **`(GitHub numeric user ID, CPA UUID)`**. Additional writers for the same pair share the seat without changing its profile. A credential can never be rebound to a different seat.
+- New seats take their initial `display_name` from GitHub `name`, falling back to GitHub `login` (truncated to fit), and receive the catalog's default avatar (no GitHub avatar sync or profile-edit API).
+- **Display-name normalization** (applied automatically to GitHub `name`/`login`): requires valid UTF-8, applies Unicode **NFKC** normalization, rejects Unicode control characters (`Cc`), line/paragraph separators (`Zl`/`Zp`), and `Bidi_Control` before trimming, trims outer Unicode whitespace, enforces **1–32 Unicode code points and ≤128 UTF-8 bytes**, and requires visible content (not solely whitespace, combining marks, format characters, default-ignorables, or Braille blank `U+2800`). Duplicate names are allowed; render display names as escaped plain text.
+- **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry. After expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and CPA UUID; if the earlier write succeeded, completion reuses that seat and writer. Disabled or withdrawn seats cannot be restored by retrying or re-authorizing.
 
-### 获取头像图片
-
-清单接口返回JSON；图片接口直接返回图片，二者用途不同。客户端将清单中的 `path` 相对服务入口的 `/avatars/` 解析，然后请求该地址：
+### Withdraw an Entire Seat
 
 ```http
-GET /avatars/{path}
+POST /v1/clients/withdraw
+Authorization: Bearer <registered-writer-secret>
 ```
 
-`{path}` 是占位符，调用时替换为清单中某一项的完整 `path` 值，不包含花括号。
+Send no request body or query parameters. `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat). Withdrawal preserves historical records and administrator flags, immediately blocks **every writer** on that seat from reporting or retrying (`403 client_withdrawn`), and removes the seat from all leaderboards and scoring references on the next successful cache build. Other seats (for example a different CPA UUID under the same GitHub account) are unaffected. There is no public rejoin API.
 
-无需Bearer凭据。成功响应为 **200**，`Content-Type: image/webp`，响应体是**WebP图片二进制，不是JSON或Base64字符串**。路径不存在时返回404。`HEAD`访问同一路径仅获取响应头，不下载图片正文。
+## Daily Cumulative Snapshot Reporting
 
-客户端将解析后的完整URL交给图片组件即可预览，无需预先附带图片文件。遍历清单可获取全部资源，不根据 ID 自行猜路径；注册不提交头像。头像清单 ID 为 JSON 整数，注册响应和榜单 ID 为十进制字符串。
+```mermaid
+sequenceDiagram
+    participant A as Writer A
+    participant R as Ranking Server (Seat 42)
+    participant B as Writer B
+    Note over A,B: Independent Bearer secrets; PUT /v1/clients/report/{utc_day}
+    A->>R: revision "1", full total 100
+    B->>R: revision "1", full total 120
+    Note over R: Seat/day active snapshot = 120 (last replacement wins, never summed)
+    A->>R: Retry exact revision "1" (total 100)
+    R-->>A: 200 {"revision":"1"} (confirmed without overwriting 120)
+    A->>R: revision "2", full total 110
+    Note over R: Seat/day active snapshot = 110
+    A->>R: POST /v1/clients/withdraw
+    R-->>A: 204 (entire seat withdrawn)
+    B->>R: Retry or new report
+    R-->>B: 403 client_withdrawn (all writers stop)
+```
 
-目录和资源支持ETag条件请求；收到304时使用已保存的对应内容。
+### Reporting Window and Aggregation Rules
 
-## 3. 日累计快照上报
+- `{utc_day}` must be `YYYY-MM-DD` in **UTC** (never local timezone) and within the open window: **UTC today or UTC yesterday**. Future dates return `422 invalid_day`; closed older dates return `410 expired_day`.
+- Every `PUT` sends the **complete cumulative snapshot** for that seat and UTC day—not per-request events or incremental deltas. After a client restarts, it must reconstruct the full day's totals before reporting.
+- Merge all local sources for the same canonical model into **one item per model** (no `service_tier` field is accepted, not even `"default"` or `null`). Duplicate normalized model names or aliases resolving to the same canonical model reject the entire snapshot.
+- Compute `ttft_avg_ms` and `latency_avg_ms` from summed durations divided by their own sample counts (sample-weighted when merging groups; never average group averages equally). When no latency sample exists, send `null` with `"0"` samples—never fabricate zero latency.
+- Model names are stripped through the final `/` and matched **exact, case-sensitive** against the server's [model catalog](catalogs.md#model-catalog). Valid unmatched models are skipped from totals without error and are not returned in the response; any malformed item (even an unknown model) rejects the whole snapshot.
 
-### 日期与统计范围
-
-`{utc_day}` 为 `YYYY-MM-DD`，例如 `2026-11-15`。实际调用必须替换为服务端允许的 **UTC今天或昨天**，不是客户端本地时区的日期。未来日期被拒绝，已关闭日期返回410；重试也不能绕过这个窗口。
-
-每次PUT提交该席位、该 UTC 日的**全部模型累计统计**，不是单条执行事件或本次新增量。重启后也要恢复当日完整聚合，不能只上报重启后的部分。
-
-- 按模型归并所有来源（包括原先区分的tier），每个标准模型只能出现一次；不同路径或别名指向同一标准模型也必须先合并。
-- 对耗时保存总和和真实样本数，再计算平均值；合并分组时使用样本加权，不直接平均各组平均值。
-- 没有采集到耗时，使用平均值 `null`、样本数 `"0"`，不要补成零耗时。
-- 指向同一标准模型的重复项会被拒绝（即使零执行）；合法但未匹配的模型会被跳过，不参与统计与总量。服务端不会返回被忽略的模型清单。
-- 当前没有公开模型目录查询接口，应与部署者确认支持的名称和别名。名称去除末个 `/` 之前的路径后精确、区分大小写地匹配，不会自动去掉版本后缀。
-
-### 请求示例
-
-下面是一次完整日快照。`{utc_day}`须替换为允许上报的日期；模型名仅作示例，需确认目标部署的目录支持它。
+### Request Schema and Validation
 
 ```http
 PUT /v1/clients/report/{utc_day}
@@ -99,184 +158,179 @@ Content-Type: application/json
   "revision": "1",
   "items": [
     {
-      "model": "claude-fable-5",
-      "total_tokens": "120",
-      "input_tokens": "80",
-      "output_tokens": "40",
-      "cache_read_tokens": "60",
-      "cache_write_tokens": "5",
-      "reasoning_tokens": "10",
-      "request_count": "2",
-      "success_count": "2",
-      "ttft_avg_ms": null,
-      "ttft_samples": "0",
-      "latency_avg_ms": 3000,
-      "latency_samples": "2"
+      "model": "claude-opus-4-5",
+      "total_tokens": "150000",
+      "input_tokens": "100000",
+      "output_tokens": "50000",
+      "cache_read_tokens": "60000",
+      "cache_write_tokens": "0",
+      "reasoning_tokens": "10000",
+      "request_count": "42",
+      "success_count": "41",
+      "ttft_avg_ms": 320.5,
+      "ttft_samples": "41",
+      "latency_avg_ms": 1850.0,
+      "latency_samples": "41"
     }
   ]
 }
 ```
 
-### 字段与校验
+Every field below is required (even when `0` or `null`). Unknown fields, duplicate JSON keys, invalid UTF-8, unpaired surrogates, and trailing JSON values are rejected.
 
-前三项是顶层字段，其余属于 `items` 中的每一项。
+| Field | Scope | JSON Type | Constraints |
+| --- | --- | --- | --- |
+| `schema_version` | Root | Integer | Must be `1` |
+| `revision` | Root | Decimal string | Writer-scoped monotonic int64 (`0` to `9223372036854775807`) |
+| `items` | Root | Array | Complete day snapshot; `[]` clears matched totals while advancing revision |
+| `model` | Item | String | Nonempty UTF-8 ≤128 bytes, no control chars, nonempty final path segment |
+| `total_tokens` | Item | Decimal string | `>= input_tokens + output_tokens` (may include unclassified remainder) |
+| `input_tokens`, `output_tokens` | Item | Decimal string | Nonnegative int64 |
+| `cache_read_tokens`, `cache_write_tokens` | Item | Decimal string | `cache_read_tokens + cache_write_tokens <= input_tokens` |
+| `reasoning_tokens` | Item | Decimal string | `reasoning_tokens <= output_tokens` |
+| `request_count`, `success_count` | Item | Decimal string | `success_count <= request_count`; nonzero usage requires `request_count > 0` |
+| `ttft_avg_ms`, `latency_avg_ms` | Item | Number or `null` | Finite and `>= 0` when samples `> 0`; must be `null` when samples `== "0"` |
+| `ttft_samples`, `latency_samples` | Item | Decimal string | Each `<= request_count` |
 
-| 字段 | JSON类型 | 含义 |
-|---|---|---|
-| `schema_version` | 整数 | 当前固定为 `1` |
-| `revision` | 十进制字符串 | 该上报端、该日的快照版本 |
-| `items` | 数组 | 完整日快照；允许空数组 |
-| `model` | 字符串 | 模型名或别名，最多128个UTF-8字节 |
-| `total_tokens` | 十进制字符串 | 总token数，可包含未归类的余量 |
-| `input_tokens` / `output_tokens` | 十进制字符串 | 输入 / 输出token数 |
-| `cache_read_tokens` / `cache_write_tokens` | 十进制字符串 | 输入token中的缓存读取 / 写入部分 |
-| `reasoning_tokens` | 十进制字符串 | 输出token中的推理部分 |
-| `request_count` / `success_count` | 十进制字符串 | 执行总次数 / 成功次数 |
-| `ttft_avg_ms` / `latency_avg_ms` | 数字或 `null` | 实测首token耗时 / 总耗时的平均毫秒数 |
-| `ttft_samples` / `latency_samples` | 十进制字符串 | 对应平均值实际使用的样本数 |
+Decimal strings must contain nonnegative int64 digits without `+` signs (avoid leading zeros). Integer or floating-point aggregation overflow rejects the snapshot.
 
-表中字段均必须提供，即使其值为零或 `null`。版本、计数和token值均为 `0` 至 `9223372036854775807` 的整数，但以JSON字符串发送；建议不使用前导零。平均值可为浮点数，必须有限且非负。
+### Revisions, Idempotency, and Conflicts
 
-还须满足：
+`revision` is a **per-writer, per-UTC-day** snapshot counter (starting at `"0"` or `"1"`, gaps allowed; next day can restart from `"0"` or `"1"`). It is not a software version.
 
-- `success_count`、每种耗时样本数均不超过 `request_count`。
-- `cache_read_tokens + cache_write_tokens <= input_tokens`；`reasoning_tokens <= output_tokens`。
-- `input_tokens + output_tokens <= total_tokens`。缓存和推理token已属于输入/输出，不能重复加到总量。
-- 存在非零用量时必须有执行次数；样本数为零时对应平均值必须为 `null`，有样本时必须提供平均值。
-- 不传未知字段、重复JSON对象字段或重复模型项；聚合溢出或任一项不合法会拒绝整份快照，包括格式非法的未知模型。
+| Submission Case | Server Result |
+| --- | --- |
+| First submission or higher `revision` for this writer/day | Atomically replaces the seat's active day snapshot; returns `200 {"revision":"<n>"}` |
+| Same `revision` and identical order-independent content digest | Idempotent `200 {"revision":"<n>"}` without rewriting active data or rematching the model catalog |
+| Lower `revision`, or same `revision` with different content | `409 revision_conflict` returning the writer's current decimal-string `revision` |
 
-### 数据修订号、确认与更正
+**Client reliability rules:**
+- Persist the pending `{utc_day, revision, payload}` locally before sending. Confirm success only when HTTP is `200` **and** the returned `revision` equals the exact revision sent in that request.
+- On timeout, dropped connection, or unreadable response, keep the exact same `revision` and payload and retry with bounded backoff.
+- A higher revision may decrease metrics or omit models; `items: []` clears matched totals for that day. Never send `items: []` to represent a temporary local collection failure, and never split one day across multiple incremental `PUT`s.
+- On `409 revision_conflict`, inspect the returned `revision` and check for concurrent local writers—do not blindly bump `revision` over unknown state unless you can reconstruct the authoritative complete snapshot for that day.
 
-这里的 `revision` 是**某个上报端、某个 UTC 日的快照数据修订号**，不是软件版本，也没有主版本/次版本。例如第一次提交 `"1"`，同一天统计更新后提交 `"2"`；翌日可以重新从 `"0"` 或 `"1"` 开始。
+## Minimal End-to-End cURL Example
 
-请区分以下概念：
+Run against a deployment with [GitHub OAuth configured](deployment.md#github-oauth-app):
 
-| 概念 | 当前形式 | 用途与兼容关系 |
-|---|---|---|
-| 数据修订号 | 请求/响应中的 `revision: "2"` | 标记该上报端该日的第几版完整数据，防止本端旧数据覆盖新数据，并使重试幂等；不是软件兼容性检查 |
-| 正文结构版本 | `schema_version: 1` | 声明上报JSON的结构；当前服务只接受整数 `1`，没有结构版本协商接口 |
-| API路径版本 | `/v1/...` | 标识HTTP接口命名空间；当前提供本文列出的v1接口，不通过路径表达快照修订号 |
-| 软件发布版本 | 客户端/服务端自身的发布号或镜像标签 | 不参与上报修订号比较，也不是注册或上报字段 |
+```sh
+# 1. Generate and persist a 43-char unpadded base64url secret (32 random bytes)
+SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+BASE=https://ranking.example.com
 
-**本次为破坏性协议变更：** `/v1` 和 `schema_version: 1` 保持不变，但不再接受 `service_tier`，包括 `"default"` 和 `null`；旧正文会返回422。客户端先按模型合并各来源的计数与耗时总和，并按各自实际样本数计算加权均值，再上报一个模型项；服务端不做跨tier兼容合并。旧数据库不转换，应使用新数据库。客户端仍应妥善保存凭据和未确认正文；不能把软件发布号填入 `revision`，也没有协议自动协商。
+# 2. Start registration; save request_id and open authorize_url in a browser
+curl -sS -X POST "$BASE/v1/clients/register/start" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d '{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"http://localhost:3001/settings?tab=ranking#status"}'
 
-数据修订号按 **writer 和 UTC 日**维护，首版可为 0，允许跳号。席位每天只留一份完整统计。不同端不比版本号；最后提交的新快照生效（不累加）。原样重发自己的旧确认，即使生效数据已被另一端替换，也只确认、不覆盖：
+# 3. After approving in GitHub, complete with the same request_id and secret
+REQUEST_ID='replace-with-returned-request-id'
+curl -sS -X POST "$BASE/v1/clients/register/complete" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d "{\"request_id\":\"$REQUEST_ID\"}"
 
-| 提交情况 | 结果 |
-|---|---|
-| 本端首次提交或更高版本 | 原子替换席位日快照，200 返回本端确认版本 |
-| 同版本、内容摘要相同 | 幂等确认，不重复累加或重新匹配模型 |
-| 更低版本，或同版本但内容不同 | 409 `revision_conflict`，返回本端当前版本 |
+# 4. After 200 or 201, upload the full cumulative snapshot for the UTC day
+TODAY=$(date -u +%F)
+curl -sS -X PUT "$BASE/v1/clients/report/$TODAY" \
+  -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+  -d '{
+    "schema_version": 1,
+    "revision": "1",
+    "items": [{
+      "model": "claude-opus-4-5",
+      "total_tokens": "150000",
+      "input_tokens": "100000",
+      "output_tokens": "50000",
+      "cache_read_tokens": "60000",
+      "cache_write_tokens": "0",
+      "reasoning_tokens": "10000",
+      "request_count": "42",
+      "success_count": "41",
+      "ttft_avg_ms": 320.5,
+      "ttft_samples": "41",
+      "latency_avg_ms": 1850.0,
+      "latency_samples": "41"
+    }]
+  }'
 
-成功响应：
-
-```json
-{"revision":"1"}
+# 5. Read the public Overall leaderboard (no credential required)
+curl -sS "$BASE/v1/leaderboards/overall/today"
 ```
 
-客户端必须确认HTTP为200，并核对响应中的 `revision` 与**这次请求发送的 `revision` 数值相等**，之后才能标记成功。例如请求发 `"2"`，响应应确认 `"2"`；不是比较客户端和服务端的软件版本，也不是把响应修订号与客户端后来生成的新任务比较。网络超时、连接中断或响应无法解析不代表写入失败：服务器可能已提交，保留原版本及完整正文重试。
+## Public Leaderboards and Avatars
 
-新的高版本可以减少统计值、删除未再包含的模型项；`items: []` 会清空该日已匹配统计，但保留新版本。**不要用空数组表示临时采集失败，也不要把一个日快照拆成多次PUT来累加。** 模型配置变更后，旧版本的幂等重试不会重新计算；仍在窗口内时，须用更高版本重报完整快照。
-
-收到409时，核对返回的 `revision`、本地持久状态及是否存在并行写入。不要把冲突当成功，或只提高版本号来覆盖未知的新数据。只有能重建完整、权威的该日快照时才继续更正；否则停止该日自动写入并提示处理。
-
-## 4. 读取排行榜
+### Reading Leaderboards
 
 ```http
-GET /v1/leaderboards/usage/today
+GET /v1/leaderboards/{board}/{period}
 ```
 
-| `board` | `metric`含义 | 优先顺序 |
-|---|---|---|
-| `overall` | 综合分，最高100分 | 高优先 |
-| `usage` | 总token数 | 高优先 |
-| `cache` | 缓存读取占输入token的百分比 | 高优先 |
-| `success` | 保守成功评分，**不是原始成功率百分比** | 高优先 |
-| `ttft` | 实测平均首token耗时，毫秒 | 低优先 |
+- `board`: `overall`, `usage`, `cache`, `success`, `ttft`
+- `period`: `today`, `yesterday`, `week` (previous complete UTC Monday–Monday week), `month` (previous complete UTC calendar month), `year` (current UTC year), `all` (all-time)
+- No query parameters are accepted (no pagination, model filters, or cache-busting timestamps).
+- `client_id`, `avatar_id`, and `metric` are decimal strings (`usage` is an integer; other metrics have two decimal places); `rank` is an integer with competition ranking (`1, 1, 3`). Only `overall` entries include a `details` object (`total_tokens`, `request_count`, `success_rate`, `cache_read_rate`, `ttft_mean_ms`, `latency_mean_ms`).
+- Full response examples, scoring formulas, and UI formatting rules are documented in [Leaderboards & Scoring](leaderboards.md).
 
-`period` 支持 `today`、`yesterday`、`week`、`month`、`year`、`all`，均按UTC定义。**破坏性语义变更：** `week` 为上一完整自然周（上周一00:00含、本周一00:00不含），`month` 为上一完整自然月（上月1日含、本月1日不含），不再表示本周/月累计。`today`、`yesterday` 不变；月首或周一时，昨天仍在公开日报窗口内可修订，因此完整周期的统计并非冻结。榜单随成功的缓存轮次更新，失败时保留上次完整轮次及原日期。不得添加查询参数，包括分页、模型筛选或缓存穿透用的时间戳参数。
+### Fetching Avatars
 
-响应结构示例：
+- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}` (`avatar_id` is a JSON integer here, whereas registration/leaderboard responses encode it as a decimal string).
+- Resolve each `path` relative to `/avatars/` (for example `/avatars/images/001.webp`) and request with `GET` (`Content-Type: image/webp`, binary WebP) or `HEAD`. Do not guess image paths from IDs. Both catalog and image endpoints support `ETag` conditional requests (`304 Not Modified`). See [Catalogs & Brand Assets](catalogs.md#avatar-catalog).
 
-```json
-{
-  "board": "usage",
-  "period": "today",
-  "start": "2026-11-15",
-  "end": "2026-11-16",
-  "generated_at": "2026-11-15T12:00:00Z",
-  "entries": [
-    {"rank": 1, "client_id": "1", "display_name": "Example Client", "avatar_id": "1", "metric": "120"}
-  ]
-}
-```
+### Completion Signals vs. Non-Guarantees
 
-- `start`包含、`end`不包含；`all`使用 `start: "0001-01-01"`、`end: null`。以返回边界为准，不自行把旧缓存解释为当前日期。
-- `generated_at`是缓存构建轮次的UTC开始时间，不是客户端最后上报时间。
-- `client_id`、`avatar_id`、`metric`均为十进制字符串；用量为整数，其余榜单指标保留两位小数。`rank`是JSON整数；并列名次采用1、1、3形式。
-- 每榜最多100行，不能分页获取其余身份。无结果返回200和 `entries: []`，未入榜不等于上报失败；昵称按纯文本展示。
-- 上报成功不触发立即刷新。默认每5分钟构建一轮，周期可由部署者调整；后续构建失败可能继续返回旧缓存，没有缓存新鲜度SLA。合理轮询并展示 `generated_at`，不要把榜单当作写入确认接口。
+| Stage | Confirmed By | Does **Not** Imply |
+| --- | --- | --- |
+| Start registration | `200` with `request_id` and `authorize_url` | Seat created or write access granted |
+| Complete registration | `201` or `200` | Usage uploaded |
+| Daily report | `200` with matching `revision` | Immediate appearance in leaderboard cache |
+| Withdraw | `204` | Old leaderboard cache already replaced |
+| Read leaderboard | `200` with `entries`, `start`/`end`, `generated_at` | Non-empty entries or guaranteed cache freshness |
 
-综合榜（`overall`）的每个条目还包含 `details`，与总分来自同一周期、同一轮缓存，例如：
+Ordinary reports do not trigger immediate cache rebuilds (default refresh interval is 5 minutes; withdrawals trigger an asynchronous rebuild). Display `generated_at` when polling and never use the leaderboard API to confirm a report write.
 
-```json
-{"total_tokens":"100","request_count":"4","success_rate":"75.00","cache_read_rate":"35.71","ttft_mean_ms":"75.00","latency_mean_ms":null}
-```
+## Error Contract, Retries, and Limits
 
-- `total_tokens`：总Token；`request_count`：已接纳的执行次数。两者均为保持int64精度的十进制整数字符串。
-- `success_rate`：实际成功次数 / 执行次数 × 100，**不是成功率榜的保守得分**。
-- `cache_read_rate`：缓存读取Token / 输入Token × 100；无输入Token时为 `null`。
-- `ttft_mean_ms`、`latency_mean_ms`：相应耗时总和 / 测量样本数，单位毫秒；无样本时为 `null`。跨日使用总和与样本数加权，不平均每日均值。
-- 比例和均值均为两位小数的字符串；比例使用0～100的百分数。真实零为 `"0.00"`，未知为JSON `null`，展示时不要把未知当成零。其他分榜没有 `details`；旧版响应没有该对象时，可将详情视为未知。
-
-新增详情不改变上报字段、总分或排序，也不包含TPM/RPM。排行榜依据客户端自行上报的统计，不是用量真实性认证。接入方直接使用接口返回的 `rank` 和 `metric` 展示结果，无需在客户端复算评分。
-
-## 5. 错误处理与调度
-
-业务API错误通常使用以下结构；按状态码和 `error.code` 处理，不匹配提示文字。代理层错误可能不是JSON，不能因此把请求标记为已确认。
+API errors use the JSON structure below. Branch on HTTP status and `error.code`, not on `message`. Reverse proxies may return non-JSON errors; never treat them as write confirmations.
 
 ```json
 {"error":{"code":"report_rate_limited","message":"Report admission limit reached"}}
 ```
 
-| HTTP / 错误 | 客户端处理 |
-|---|---|
-| 400 / 422 参数、名称或数据错误 | 修正请求，不原样无限重试 |
-| 401 `invalid_credential` | 检查入口、凭据及注册状态；不自动生成新凭据 |
-| 202 + `Retry-After` | 注册等待授权，用原编号和原凭据重试 |
-| 403 `github_authorization_denied` | 停止本次注册，不自动再次触发授权 |
-| 403 `client_disabled` | 停止写入并联系部署者 |
-| 403 `client_withdrawn` | 整席已经退出；停止注册重试和上报 |
-| 410 `registration_request_expired` | 保留原凭据；如仍要参与，重新领号并授权 |
-| 409 `revision_conflict` | 按版本冲突规则核对与恢复 |
-| 410 `expired_day` | 停止该日期补报；记录未确认状态，不转记到其他日期 |
-| 413 `request_too_large` | 减少体积或与部署者调整限制，不拆成增量PUT |
-| 415 `unsupported_media_type` | 使用未压缩的 `application/json` |
-| 429 限流或准入容量不足 | 至少等待 `Retry-After` 指定的秒数，再加抖动重试 |
-| 503 `report_overloaded` | 保留原版本及正文，遵守 `Retry-After`，退避重试 |
-| 503 `registration_closed` | 暂停新身份注册；不影响已获写入权限的端；仍可在原交易到期前恢复已办结结果 |
-| 503 `leaderboard_unavailable` | 暂无完整榜单缓存，延迟再读取，不伪装为空榜 |
-| 500、网络错误或丢失响应 | 有界退避；注册保留原凭据，上报保留原版本和正文 |
-| 404 / 405 | 检查入口路径和HTTP方法 |
+| Status | `error.code` | Client Action |
+| --- | --- | --- |
+| `202` | — (`Retry-After` header) | Registration pending browser approval; retry `complete` with same `request_id` and Bearer |
+| `400` / `422` | `invalid_request`, `invalid_source`, `invalid_parameter`, `invalid_day`, `invalid_report`, `too_many_items` | Fix request payload or path; do not retry unchanged |
+| `401` | `invalid_credential` (`WWW-Authenticate: Bearer`) | Verify origin, Bearer secret, and registration state; do not auto-generate a new secret |
+| `403` | `github_authorization_denied` | User denied authorization; stop and do not auto-restart OAuth |
+| `403` | `client_disabled` | Seat banned by admin; stop reporting and contact the operator |
+| `403` | `client_withdrawn` | Seat withdrawn; stop all registration retries and reporting on every writer |
+| `404` / `405` | `not_found`, `method_not_allowed` | Verify endpoint URL and HTTP method |
+| `409` | `revision_conflict` (includes current `revision`) | Reconcile local state and concurrent writers before revising |
+| `410` | `registration_request_expired` | Keep the original secret and start a new registration if still desired |
+| `410` | `expired_day` | Stop retrying that UTC day; never move its data into another date |
+| `413` | `request_too_large` | Reduce payload size; never split one day into incremental `PUT`s |
+| `415` | `unsupported_media_type` | Send uncompressed `application/json` |
+| `429` | `registration_rate_limited`, `registration_capacity`, `report_rate_limited`, `report_capacity` | Wait at least `Retry-After` seconds plus random jitter before retrying |
+| `503` | `report_overloaded` | Keep original `revision` and payload; obey `Retry-After` with exponential backoff |
+| `503` | `registration_closed` | Pause new registrations; existing writers and unexpired recovery retries continue |
+| `503` | `leaderboard_unavailable` | First cache round not ready yet; retry later without displaying a fake empty board |
+| `500` / network error | `internal_error` | Bounded exponential backoff with jitter; preserve secret (registration) or `revision` + payload (report) |
 
-退避建议采用指数增长和随机抖动；任何重试仍须遵守服务端限制及日期窗口。对同一上报端串行调度。同席位各端的今日和昨日上报共用该席位额度。持久化待确认任务及其版本、正文，避免进程重启导致身份、版本或当天统计重置。
+### Default Limits and Boundaries
 
-以下为当前**默认值**，不是部署容量保证，实际值可由部署者调整：
+Deployers can tune these defaults via [environment variables](deployment.md#configuration-reference); they are conservative defaults, not capacity guarantees:
 
-| 限制 | 默认值 |
-|---|---|
-| 注册正文 | 4,096字节 |
-| 领号请求额度 | 每来源 20 次、全局 200 次；固定窗口 1 分钟 |
-| 领号状态 | 10 分钟有效；全站最多同时保留 2000 笔未过期事务 |
-| 上报正文与条目 | 131,072字节；128个原始条目（匹配/合并前） |
-| 每席位上报额度 | 每分钟补充1个令牌，突发容量2；重试也消耗额度 |
-| 全局上报额度 | 每5毫秒补充1个令牌，突发容量400 |
+| Limit | Default |
+| --- | --- |
+| Registration request body | `4,096` bytes |
+| Registration start rate | `20`/source and `200` global per `1m` fixed window; max `10,000` active sources |
+| Pending registration transactions | `10m` lifetime; max `2,000` unexpired transactions server-wide |
+| Report body and items | `131,072` bytes; `128` raw items (before catalog matching) |
+| Report rate per seat (shared by all writers) | `1` token per `1m`, burst `2` (retries consume budget) |
+| Global report rate | `1` token per `5ms`, burst `400` |
 
-同一NAT出口可能共享注册来源额度，来源解析及可信代理由部署者配置。不要通过重复创建身份或自报转发IP来规避限制。
-
-## 6. 健康检查与接口边界
-
-- `/healthz`：200 `{"status":"ok"}`，只表示存活。
-- `/readyz`：200 `{"status":"ready"}`；未就绪为503 `{"status":"not_ready","reason":"initializing_or_unavailable"}`。它不保证最新上报已入榜，也不保证缓存始终新鲜。
-- 当前没有凭据找回/轮换、资料修改、恢复参榜、身份合并、单客户端统计、已提交快照查询或关闭日期修复接口，也没有逐模型、任意日期或分页查询接口。
-- 前端页面及 `/assets/` 是可选静态展示资源，不作为数据接入协议。服务未内建CORS配置；跨域浏览器调用所需的预检和来源策略由部署者处理，推荐由后端或本地受信任进程上报。
+**Explicit boundaries:**
+- Serialize scheduling per writer and persist pending jobs across restarts.
+- The server provides no credential recovery/rotation, profile edit, public rejoin, seat merge, single-client stats, submitted-snapshot query, closed-day backfill, per-model query, or built-in CORS layer (handle browser cross-origin policies at the reverse proxy, or report from a trusted backend/local process).
+- `/healthz` and `/readyz` are operator probes, not part of client registration or reporting workflows.
