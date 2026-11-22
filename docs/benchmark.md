@@ -8,7 +8,7 @@ This document summarizes the sustained 500 TPS SQLite ingestion benchmark and pr
 
 **Test date: 2026-11-13.** Under a `2 vCPU / 1 GiB RAM (0 swap)` cgroup v2 limit, the server sustained **499.91 logical report arrivals/sec** for **1,200.727 seconds** (~20 minutes) while draining an initial backlog and completing 4 periodic leaderboard cache rebuilds.
 
-> **Scope note**: This measurement validates the core ingestion engine (Go + SQLite WAL + `synchronous=FULL` + serialized write queue + settlement + atomic cache). It was run against an earlier build prior to GitHub OAuth registration and `service_tier` removal (about 1% of requests used the former registration route and snapshots included per-tier rows). Treat it as a workload-specific reference rather than a maximum throughput, zero-error, or current-schema capacity guarantee.
+> **Scope & traceability**: This measurement validates the core ingestion engine (Go + SQLite WAL + `synchronous=FULL` + serialized write queue + settlement + atomic cache). It ran against an earlier build prior to GitHub OAuth registration and `service_tier` removal (about 1% of requests used the former registration route and snapshots included per-tier rows; generator baseline `fd5a81c`, tested server binary SHA-256 `3c70530c8131497465b469f1164dbb476f05a3967a8fc65c627bbff8bc0e3413`, server source commit unconfirmed). Treat it as a workload-specific reference rather than a maximum throughput, zero-error, or current-schema capacity guarantee.
 
 ### Environment and Workload
 
@@ -20,7 +20,7 @@ This document summarizes the sustained 500 TPS SQLite ingestion benchmark and pr
 | Service cgroup v2 | `200%` CPU (`2 vCPU`), `MemoryMax 1 GiB`, `MemoryHigh 768 MiB`, `MemorySwapMax 0` | — |
 | Software | Go `1.26.10` (CGO), Gin `1.12.0`, `go-sqlite3 1.14.53` / SQLite `3.54.1` (`WAL`, `FULL` sync, `5m` cache refresh) | OpenSSH `10.0p2` tunnel to loopback HTTP |
 
-- **Dataset & arrival model**: Pre-seeded with 10,000 identities and 90-day historical shape (growing from 14,575 to 20,622 identities during confirmation), starting with **16,330 pending reports** plus **2,500 injected backlog items**, alongside a 500 TPS open-loop arrival rate (~90% today, ~10% yesterday; 60/30/10 light/medium/heavy clients; 10% hot clients driving 50% of updates; payload upper bounds P50 ≤1,344 B, P95 ≤7,808 B, P99 ≤14,208 B).
+- **Dataset & arrival model**: Pre-seeded with 10,000 identities and 90-day historical shape (growing from **14,575 to 20,622** identities during confirmation), starting with **16,330 pending reports** plus **2,500 injected backlog items**, alongside a 500 TPS open-loop arrival rate (~90% today, ~10% yesterday; 60/30/10 light/medium/heavy clients; 10% hot clients driving 50% of updates; payload upper bounds P50 ≤1,344 B, P95 ≤7,808 B, P99 ≤14,208 B).
 - **Rate limits**: Relaxed test-only limits were used (`10 µs` / `100,000` global burst; `100 µs` / `1,000` per-client burst) to measure engine throughput rather than default deployment throttles.
 
 ### Throughput and Backlog Recovery
@@ -46,7 +46,7 @@ This document summarizes the sustained 500 TPS SQLite ingestion benchmark and pr
 ### Resource Usage and Data Integrity
 
 - **Server process**: ~`1.01` average CPU cores, `120.28 MiB` peak RSS (process RSS excludes cgroup page cache); host minimum available memory stayed at `1,544.69 MiB`.
-- **Ledger reconciliation**: Replaying all confirmed reports against the seed database matched the final SQLite state across `38,622` daily revision/digest rows, `246,565` daily metric rows, and `920,000` period metric rows (all 12 metrics), passing SQLite integrity and foreign-key checks with zero miscounts.
+- **Ledger reconciliation**: Rebuilding expected state from the seed database and full load ledger (including tracking the 3 DB-committed uncertain-ACK items separately without counting them as confirmed) matched the final SQLite state across `38,622` daily revision/digest rows, `246,565` daily metric rows, and `920,000` period metric rows (all 12 metrics), passing SQLite integrity and foreign-key checks with zero miscounts.
 
 ## Capacity Test CLI (`cmd/ranking-capacity`)
 
@@ -57,68 +57,70 @@ This document summarizes the sustained 500 TPS SQLite ingestion benchmark and pr
 ### Build and Seed Synthetic Data
 
 ```sh
-install -d -m 700 /path/to/private-test
-go build -o /path/to/private-test/ranking-capacity ./cmd/ranking-capacity
+WORK=/path/to/private-test
+install -d -m 700 "$WORK"
+go build -o "$WORK/ranking-capacity" ./cmd/ranking-capacity
 
-# Standard 8-model fixture (use `seed-sustained --model-seed 1` for variable-size sustained workloads)
-/path/to/private-test/ranking-capacity seed \
-  --db /path/to/private-test/seed.sqlite \
-  --fixture /path/to/private-test/fixture.json \
+# Standard 8-model fixture for `load` or `burst`
+# (For `sustained`, use `seed-sustained --model-seed 1` into a separate DB/fixture.)
+"$WORK/ranking-capacity" seed \
+  --db "$WORK/seed.sqlite" --fixture "$WORK/fixture.json" \
   --models config/models.json --clients 6000 --history-days 90 --backlog 1000
 ```
 
-Keep `seed.sqlite` untouched as the reconciliation baseline and start an isolated test `ranking` server against a **copy** of it.
+Keep `seed.sqlite` untouched as the reconciliation baseline. Start an isolated test `ranking` server against a **fresh copy** of the corresponding seed database for each independent load run.
 
-### Generate Load
+### Generate Load (Independent Modes)
 
-The CLI supports three report-only load drivers against pre-seeded seats (`PUT /v1/clients/report/{utc_day}`, no GitHub OAuth traffic):
+Each mode below is an **independent run** against pre-seeded seats (`PUT /v1/clients/report/{utc_day}`, no GitHub OAuth traffic). Do **not** run `load` and `burst` sequentially against the same DB copy—both start at revision `2`, so a shared DB turns the second run into idempotent ACKs and prevents combined ledger verification:
 
 ```sh
-# 1. Fixed-rate open-loop load (no automatic retry)
-/path/to/private-test/ranking-capacity load \
-  --fixture /path/to/private-test/fixture.json --url http://127.0.0.1:4210 \
+# Mode A: Fixed-rate open-loop load (no automatic retry)
+"$WORK/ranking-capacity" load \
+  --fixture "$WORK/fixture.json" --url http://127.0.0.1:4210 \
   --rps 10 --duration 10m --revision 2 --changed 2 \
-  --ledger /path/to/private-test/steady.jsonl
+  --ledger "$WORK/steady.jsonl"
 
-# 2. Synchronized barrier wave + retryable background cycles
-/path/to/private-test/ranking-capacity burst \
-  --fixture /path/to/private-test/fixture.json --url http://127.0.0.1:4210 \
+# Mode B: Synchronized barrier wave + retryable background cycles (fresh DB copy)
+"$WORK/ranking-capacity" burst \
+  --fixture "$WORK/fixture.json" --url http://127.0.0.1:4210 \
   --duration 2m --cycle 10m --changed 2 \
-  --ledger /path/to/private-test/attempts.jsonl \
-  --events /path/to/private-test/tasks.jsonl --samples /path/to/private-test/samples.jsonl
+  --ledger "$WORK/attempts.jsonl" \
+  --events "$WORK/tasks.jsonl" --samples "$WORK/samples.jsonl"
 
-# 3. Interactive Poisson sustained driver (reads JSON commands on stdin: stage / pause / resume / stop; supports .jsonl or .jsonl.gz)
-/path/to/private-test/ranking-capacity sustained \
-  --fixture /path/to/private-test/fixture.json --models config/models.json \
+# Mode C: Interactive Poisson sustained driver (against `seed-sustained` DB copy)
+# Reads JSON lines on stdin: stage / pause / resume / stop; supports .jsonl or .jsonl.gz
+"$WORK/ranking-capacity" sustained \
+  --fixture "$WORK/sustained-fixture.json" --models config/models.json \
   --model-seed 1 --arrival-seed 2 --url http://127.0.0.1:4210 \
-  --journal /path/to/private-test/sustained.jsonl.gz
+  --journal "$WORK/sustained.jsonl.gz"
 ```
 
 ### Offline Verification and Read Probing
 
-Stop the test server cleanly first so SQLite has a consistent snapshot, then verify all ledgers against the final database:
+Stop the test server cleanly first so SQLite has a consistent snapshot, then pass **all** ledgers generated against that database copy:
 
 ```sh
 # Inspect raw row/metric totals
-/path/to/private-test/ranking-capacity inspect --db /path/to/private-test/running.sqlite
+"$WORK/ranking-capacity" inspect --db "$WORK/running.sqlite"
 
-# Verify `load` / `burst` ledgers (comma-separated complete history)
-/path/to/private-test/ranking-capacity verify \
-  --fixture /path/to/private-test/fixture.json \
-  --db /path/to/private-test/running.sqlite \
-  --ledgers /path/to/private-test/steady.jsonl
+# Verify all `load` or `burst` ledgers for one DB copy (comma-separated)
+"$WORK/ranking-capacity" verify \
+  --fixture "$WORK/fixture.json" --db "$WORK/running.sqlite" \
+  --ledgers "$WORK/steady.jsonl"
 
-# Verify and summarize a `sustained` journal against the untouched seed DB
-/path/to/private-test/ranking-capacity verify-sustained \
-  --fixture /path/to/private-test/fixture.json --models config/models.json \
-  --model-seed 1 --seed-db /path/to/private-test/seed.sqlite \
-  --db /path/to/private-test/final.sqlite --journal /path/to/private-test/sustained.jsonl.gz \
-  --expected-db /path/to/private-test/reconstructed.sqlite
-/path/to/private-test/ranking-capacity summarize-sustained \
-  --journal /path/to/private-test/sustained.jsonl.gz --models config/models.json
+# Verify and summarize a `sustained` journal against its untouched seed DB
+"$WORK/ranking-capacity" verify-sustained \
+  --fixture "$WORK/sustained-fixture.json" --models config/models.json \
+  --model-seed 1 --seed-db "$WORK/sustained-seed.sqlite" \
+  --db "$WORK/final.sqlite" --journal "$WORK/sustained.jsonl.gz" \
+  --expected-db "$WORK/reconstructed.sqlite"
+"$WORK/ranking-capacity" summarize-sustained \
+  --journal "$WORK/sustained.jsonl.gz" --models config/models.json
 
 # Time read-only statistics queries across periods (does not benchmark full cache builds)
-/path/to/private-test/ranking-capacity probe --db /path/to/private-test/running.sqlite --day "$(date -u +%F)"
+"$WORK/ranking-capacity" probe \
+  --db "$WORK/running.sqlite" --day "$(date -u +%F)"
 ```
 
 Run `ranking-capacity <subcommand> -h` for the full flag list and safety bounds (`--max-in-flight`, `--max-pending`, `--max-journal-bytes`, `--active-budget`, and `assess-sustained`).
