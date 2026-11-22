@@ -13,74 +13,44 @@
 <h1 align="center">CPA Usage Ranking</h1>
 
 <p align="center">
-  面向 <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI（CPA）</a> 生态的自托管开源 AI 用量排行榜服务端与可视化面板。<br />
-  任意用量采集器、网关或面板均可通过标准 HTTP JSON 协议接入，不耦合具体客户端实现，也不收集上游 API Key、提示词或响应正文。
+  面向 <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI（CPA）</a> 生态的开源 AI 用量排行榜服务端。<br />
+  专为第三方采集器、网关与面板设计，通过简洁的 HTTP JSON 协议上报脱敏日用量并读取公开榜单。
 </p>
 
 <p align="center">
-  <strong><a href="#快速部署">快速部署</a> · <a href="#客户端接入">客户端接入</a> · <a href="#排行榜与管理后台">排行榜与管理后台</a> · <a href="#核心配置">核心配置</a> · <a href="#文档导航">文档导航</a></strong>
+  <strong><a href="#客户端接入">客户端接入</a> · <a href="#排行榜">排行榜</a> · <a href="#文档导航">文档导航</a></strong>
 </p>
-
-## 核心特性
-
-- **开放的客户端接入协议**：客户端自行生成并保管 32 字节 `base64url` Bearer 凭据（服务端仅保存 `SHA-256` 摘要）；经 GitHub OAuth 将 `(GitHub 用户 ID, CPA UUID)` 绑定为同一席位，支持多个独立上报端。
-- **隐私最小化与幂等上报**：仅接收 UTC 今日/昨日按模型聚合后的 Token、请求/成功次数与平均延迟；各端独立维护 `revision`，重试安全幂等。
-- **五维榜单与完整 UTC 周期**：内置**综合总榜、用量榜、缓存复用榜、成功率榜（95% Wilson）、首字响应榜**，支持**今日、昨日、周榜（上一完整 UTC 周）、月榜（上一完整 UTC 月）**，全程保持 64 位整数精度。
-- **单机 SQLite 引擎与内置前端**：基于 Go + SQLite（`WAL`、`FULL` 同步、单写队列、后台日结、原子缓存），同域托管极简响应式 Web 面板、66 款内置 WebP 头像与可选管理员控制台。
-
-## 快速部署
-
-推荐使用 Docker Compose（支持 `linux/amd64` 与 `linux/arm64`），镜像内置静态二进制、前端资源、头像与模型目录，无需宿主机安装 Go 或 Node.js。
-
-```sh
-# 本地构建并启动
-docker compose -p cpa-ranking up -d --build
-docker compose -p cpa-ranking ps
-```
-
-或拉取已发布的精确 GHCR 镜像标签（稳定版发布 `vMAJOR.MINOR.PATCH` 与 `sha-<commit>`，非默认分支手动发布 `dev-*`；不提供浮动 `latest` 标签，严格不可变部署请锁定 `@sha256:<digest>`）：
-
-```sh
-export RANKING_IMAGE=ghcr.io/<owner>/cpa-usage-ranking:v0.1.0
-docker compose -p cpa-ranking pull ranking
-docker compose -p cpa-ranking up -d --no-build
-```
-
-- **生产要点**：请前置 HTTPS 反向代理转发至 `127.0.0.1:8080`，配置 `RANKING_TRUSTED_PROXIES` 填入代理 IP/CIDR，配置 GitHub OAuth App（回调路径 `/auth/github/callback`）以开放新注册，并在本地磁盘单实例运行（勿使用 NFS）。详见[部署、配置与运维指南](docs/deployment.zh.md)。
 
 ## 客户端接入
 
-接入方通过标准 HTTPS 与未压缩 UTF-8 JSON 通信。完整时序图、字段校验、错误码与 cURL 示例见**[客户端接入指南](docs/integration.zh.md)**。
+接入方通过标准 **HTTPS + 未压缩 UTF-8 JSON** 与服务端通信，无需专用 SDK，也不依赖特定客户端实现：
+
+- **只读展示端**：直接匿名调用 `GET /v1/leaderboards/{board}/{period}` 与 `/avatars/*`，无需注册或凭据。
+- **用量上报端**：每个安装实例本地持久化一份 32 字节 `base64url` Bearer 凭据，经 GitHub OAuth 绑定 `(GitHub 用户 ID, CPA UUID)` 席位后，按 UTC 自然日上报完整累计快照。
 
 | 步骤 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA UUID 与 `return_to`，在浏览器打开返回的 `authorize_url` |
-| 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer <secret>` | 完成新席位（`201`）、复用/恢复（`200`）或轮询等待（`202`） |
+| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `cpa_uuid` 与 `return_to`，获取 `authorize_url` |
+| 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权） |
 | 上报日快照 | `PUT /v1/clients/report/{utc_day}` | 已注册 `Bearer` | 原子替换席位在 UTC 今日/昨日的完整累计快照 |
 | 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席永久退出（`204`，空请求体） |
 | 读取榜单 | `GET /v1/leaderboards/{board}/{period}` | 无需 | 获取最新发布的 Top 100 缓存榜单 |
+| 获取头像 | `GET /avatars/catalog.json`、`/avatars/{path}` | 无需 | 读取头像清单与内置 WebP 图片（支持 `ETag`） |
 
-## 排行榜与管理后台
+**核心协议特性：**
+- **凭据由客户端自持**：服务端仅存 32 字节随机密钥的 `SHA-256` 摘要；同一 `(GitHub ID, CPA UUID)` 席位下的多个上报端各自持有独立凭据。
+- **全量日快照幂等**：各上报端按日独立维护 `revision`；相同内容的重试会安全确认，不重复累加，也不会覆盖其他端的新快照。
+- **隐私最小化**：仅接收按模型聚合的 Token 数、请求/成功次数与平均延迟，绝不收集上游 API Key、提示词或响应正文。
+
+完整时序图、字段校验、可复制 cURL 流程、错误码与重试策略见**[客户端接入指南](docs/integration.zh.md)**；模型匹配与头像资源规范见**[模型、头像与品牌资源目录](docs/catalogs.zh.md)**。
+
+## 排行榜
 
 - **五大榜单**：`overall`（满分 100 综合分 + 6 项明细）、`usage`（精确 int64 总 Token）、`cache`（`cache_read / input`）、`success`（95% Wilson 置信下界）、`ttft`（平均首字延迟，越低越靠前）。
-- **统计周期**：页面展示 `today`、`yesterday`、`week`（上一完整 UTC 自然周，周一起）与 `month`（上一完整 UTC 自然月）；API 额外支持 `year` 与 `all`。详见[排行榜与评分规则](docs/leaderboards.zh.md)。
-- **管理员控制台（可选）**：默认关闭。在 `RANKING_WEB_DIR` 外准备主管理员 JSON（权限 `0600`/`0640` 或更严格只读）并设置 `RANKING_ADMIN_CONFIG_FILE`，即可开启 `/admin/leaderboards`（下榜/恢复席位、重新拉取已发布榜单）、`/admin/users`（搜索、封禁/解封）与 `/admin/accounts`（普通管理员管理）。详见[管理员控制台](docs/admin.zh.md)。
+- **六个 UTC 周期**：Web 页面展示 `today`、`yesterday`、`week`（上一完整 UTC 自然周，周一起）与 `month`（上一完整 UTC 自然月）；API 额外提供 `year` 与 `all`。
+- **精度与缓存**：所有 ID 与指标均采用精确十进制字符串传输以保留 64 位整数精度；公开 Top 100 快照由后台定时原子构建（默认 `5m`）。
 
-## 核心配置
-
-下表列出常用环境变量（完整限流与写队列调优参数见[部署、配置与运维指南](docs/deployment.zh.md#环境变量参考)）：
-
-| 环境变量 | 源码默认值（镜像默认值） | 说明 |
-| --- | --- | --- |
-| `RANKING_HTTP_ADDR` | `127.0.0.1:8080`（`0.0.0.0:8080`） | HTTP 监听地址 |
-| `RANKING_SQLITE_PATH` | `data/ranking.db`（`/data/ranking.db`） | SQLite 数据库文件路径 |
-| `RANKING_MODELS_PATH` | `config/models.json`（`/app/config/models.json`） | 标准模型与别名目录 |
-| `RANKING_WEB_DIR` | 未设置（`/app/web`） | 前端构建目录（源码运行不设置时为纯 API 模式） |
-| `RANKING_TRUSTED_PROXIES` | 未设置 | 可信反向代理 IP 或 CIDR |
-| `RANKING_PUBLIC_ORIGIN`<br>`RANKING_GITHUB_CLIENT_ID`<br>`RANKING_GITHUB_CLIENT_SECRET` | 未设置 | GitHub OAuth 配置（三项同配开启注册） |
-| `RANKING_ADMIN_CONFIG_FILE` | 未设置 | 主管理员私有 JSON 路径（启用后台） |
-
-健康探针：`GET /healthz`（进程存活）与 `GET /readyz`（SQLite、目录及首轮榜单缓存就绪返回 `200`，否则返回 `503`）。
+完整评分公式、并列规则与前端格式化详见**[排行榜与评分规则](docs/leaderboards.zh.md)**。
 
 ## 文档导航
 
@@ -88,37 +58,13 @@ docker compose -p cpa-ranking up -d --no-build
 | --- | --- |
 | [客户端接入指南](docs/integration.zh.md) | 接口总览、OAuth 与多端上报时序、日快照规范、cURL 示例、错误码与重试 |
 | [排行榜与评分规则](docs/leaderboards.zh.md) | 五大榜单、六个 UTC 周期、评分公式、并列规则与前端格式化 |
-| [部署、配置与运维指南](docs/deployment.zh.md) | Docker Compose、GHCR 策略、GitHub OAuth、代理安全、全量环境变量与备份 |
-| [管理员控制台](docs/admin.zh.md) | 主/普通管理员、用户检索、封禁与下榜状态矩阵、CSRF/HTTPS 安全 |
+| [模型、头像与品牌资源目录](docs/catalogs.zh.md) | 标准模型与别名匹配、内置 WebP 头像目录与品牌资源 |
+| [部署、配置与运维指南](docs/deployment.zh.md) | Docker Compose、GHCR 策略、GitHub OAuth、反向代理、全量环境变量与备份 |
+| [管理员控制台](docs/admin.zh.md) | 可选治理后台：主/普通管理员、用户检索、封禁与下榜规则 |
 | [存储、结算与缓存架构](docs/storage.zh.md) | SQLite WAL 连接池、表结构、串行写队列、UTC 日结保留与原子缓存 |
-| [模型、头像与品牌资源目录](docs/catalogs.zh.md) | `config/models.json` 解析、内置 WebP 头像目录与品牌图标生成 |
 | [性能基准与压测工具](docs/benchmark.zh.md) | 500 TPS 持续上报基准参考与 `cmd/ranking-capacity` 工具速查 |
 
-## 本地开发
-
-<details>
-<summary>环境要求、本地运行与质量检查命令</summary>
-
-- **环境要求**：Go `1.26.10+`（`CGO_ENABLED=1` + GCC/Clang 编译 `go-sqlite3`）与 Node.js `24.15+`（`24.x`）。
-- **前后端联调**（Vite 将 `/healthz`、`/readyz`、`/v1/leaderboards`、`/v1/admin`、`/avatars/*` 代理到 `http://127.0.0.1:8080`）：
-  ```sh
-  go run ./cmd/ranking
-  npm --prefix web ci && npm --prefix web run dev
-  ```
-- **单二进制构建运行**：
-  ```sh
-  npm --prefix web run build
-  go build -o bin/ranking ./cmd/ranking
-  RANKING_WEB_DIR=web/dist ./bin/ranking
-  ```
-- **测试验证**：
-  ```sh
-  make verify       # gofmt、go vet、Go 单测、前端 typecheck/lint/Vitest 与双端构建
-  make test-race    # Go 竞态检查（-race）
-  make test-browser # 独立回环实例 + Playwright 浏览器检查
-  ```
-
-</details>
+> **需要自建排行榜服务端实例？** 多架构 Docker Compose（`linux/amd64`、`linux/arm64`）、GHCR 镜像标签、GitHub OAuth 配置与全量环境变量详见[部署、配置与运维指南](docs/deployment.zh.md)。
 
 ## 开源许可
 
