@@ -1,80 +1,65 @@
-# 管理控制台
+# Administrator Console
 
-## 启用与登录
+[简体中文](admin.zh.md) · [README](../README.md)
 
-后台默认关闭，公开服务不受影响。设置 `RANKING_ADMIN_CONFIG_FILE` 指向静态资源目录之外的私有 JSON 文件，然后重启服务：
+The administrator console is disabled by default; public leaderboards and client reporting work independently without it.
+
+## Enabling and Signing In
+
+Create a private JSON file outside `RANKING_WEB_DIR`, point `RANKING_ADMIN_CONFIG_FILE` to it, and restart the service:
 
 ```json
 {
-  "username": "<填写主管理员用户名>",
-  "password": "<填写自行生成的高强度密码>"
+  "username": "admin",
+  "password": "replace-with-strong-password-12-to-72-bytes"
 }
 ```
 
-用户名为 3–64 个 ASCII 字母、数字、`_`、`.`、`-`，首字符为字母或数字；区分大小写。密码为 12–72 字节（bcrypt 上限），无默认密码。配置缺失、格式错误、无效字段或权限不安全会阻止启动；错误信息不回显配置内容。
+- **Username**: `3`–`64` ASCII letters, digits, `_`, `.`, or `-`, starting with a letter or digit (case-sensitive).
+- **Password**: `12`–`72` bytes (bcrypt maximum); there is no default password.
+- **File permissions**: Must be `0600` or `0640` (no world read, no group write) and reside outside `RANKING_WEB_DIR` (symlinks pointing into `RANKING_WEB_DIR` are also rejected). Missing, malformed, or insecurely readable config fails startup without echoing file contents. Account edits take effect on restart (no hot reload).
 
-文件由部署管理员管理，建议 `0600`，或由服务所属组读取的 `0640`；禁止其他用户读取、组写入。不要提交 Git、放进 `RANKING_WEB_DIR` 或将密码写进日志；启动会拒绝配置位于该静态目录或符号链接指向其中。账号变更通过修改文件并重启，不做热更新。
+When enabled, the header shows **Sign in** and switches to **Console** (`/admin/leaderboards`) while authenticated. `GET /v1/admin/session` exposes only whether admin is enabled/signed in to anonymous callers.
 
-公开页右上角显示“登录”；登录后原位置显示“控制台”，可进入 `/admin/leaderboards`。退出或会话过期后恢复“登录”。未配置后台时不显示入口，后台路径不挂载。`GET /v1/admin/session` 仅匿名返回启用/登录状态；登录后才返回本人信息。
+## Ordinary Administrators
 
-控制台可查看五个公开榜单的今日、昨日、周榜和月榜；周榜为上一完整 UTC 自然周（周一开始），月榜为上一完整 UTC 自然月，直接读取相同的公开缓存和数值格式，不另行计算。公开榜单仍然匿名可读。
+The configured owner account can open `/admin/accounts` to list, create, and delete ordinary database administrators stored in SQLite (`admin_accounts`, bcrypt password hashes only).
 
-## 普通管理员
+- Ordinary administrators cannot view or manage administrator accounts.
+- Usernames are unique; the configured owner username is reserved (a collision with an existing DB admin on startup fails boot).
+- Deleting an ordinary administrator immediately revokes all of their active sessions; recreating the same username allocates a new ID and cannot inherit old cookies. Password resets are handled by deleting and recreating the account. Accounts persist across restarts; sessions do not.
 
-配置账号可进入 `/admin/accounts` 查看、添加及删除数据库管理员。界面统一称为管理员，只在配置账号的导航中额外提供“管理员管理”；当前登录处仅显示账号名，不显示角色说明或配置账号信息块。配置账号仍由配置维护、不可通过管理 API 删除；数据库管理员不能列出或增删管理员，后端权限校验不变。管理员管理页在桌面左侧新增、右侧列表，窄屏按此顺序堆叠。
+## User Management and Moderation
 
-普通管理员存在 SQLite 的 `admin_accounts` 中，只保存 bcrypt 密码哈希，不与客户端身份混合。用户名唯一，配置主管理员用户名为保留名；重启时若配置用户名与普通管理员重名，服务拒绝启动。新数据库直接初始化当前表结构，不转换旧结构。
+Both owner and ordinary administrators can access `/admin/users` and `/admin/leaderboards`.
 
-删除普通管理员会撤销其全部会话；同名重建使用新的 ID，不能继承旧 Cookie。忘记密码由主管理员删除重建，暂不提供改密、找回、自助注册或角色编辑。账号在重启后保留，会话不保留。
+- **User search (`/admin/users`)**: Lists all registered seats (active, unreported, banned, or withdrawn; never admin accounts) with internal ID, avatar/display name, UTC creation time, ban status, and exclusion status. A single search input matches literal display-name substrings or exact numeric IDs with cursor pagination (`50` per page by default, API max `100`). Secrets, digests, and report payloads are never returned.
+- **Ban / Unban (`disabled`)**: Applies to the seat (`client_id`) and all of its writers (other CPA UUIDs under the same GitHub account are unaffected). Banned seats are rejected on subsequent reports—including requests still awaiting the final write transaction—and removed from all five boards, all six backend periods, and scoring references without deleting data. Requests set `disabled: true/false` explicitly (idempotent).
+- **Exclude / Restore (`ranking_hidden`)**: Available under `/admin/leaderboards` (**Current Boards** and **Excluded Users** views). Exclusion removes a seat from all five boards, all six backend periods, and scoring references **before** scoring, while continuing to accept its daily reports until manually restored. Exclusion persists across period boundaries and restarts.
 
-## 用户列表
+### Moderation State Matrix (When Not Withdrawn)
 
-两类管理员均可访问 `/admin/users`。用户是成功注册的参榜席位，包含未上报、正常、已封禁或主动退出的席位；管理员账号不在其中。
-
-列表显示内部 ID、头像/昵称、注册 UTC 时间、封禁状态和下榜状态。使用一个搜索框同时按昵称字面子串或精确 ID 查询，纯数字昵称也可匹配；不在浏览器筛当前页。用户页和已下榜名单均采用紧凑搜索，已下榜名单保留固定的全局下榜条件。按 ID 升序游标分页，每页默认 50 条（接口最多 100 条）；切换查询会回到第一页，不返回密钥、摘要或日报正文。行内可封禁/解封，不提供身份删除、数据重置或改分。
-
-## 封禁与榜单刷新
-
-封禁当前客户端身份后，后续上报返回拒绝，包括已通过鉴权、仍在等待最终写事务的请求。该身份退出全部五榜、六个后端周期及评分参考样本，不删除统计、不更换凭据。解封恢复上报及按原规则参榜资格，不保证回到原名次。
-
-操作确认包含目标身份与影响；状态请求是明确设置 `disabled: true/false`，重复操作不会反转状态。普通管理员写入在 SQLite 写事务内复核账号仍存在，不能通过已删除账号的在途请求继续修改用户。
-
-默认周期缓存每 5 分钟刷新；管理状态提交后会向原缓存 worker 请求提前刷新，合并突发信号、串行构建全部周期并原子发布，构建中发生的新修改会保留一次后续刷新。写入成功不等于公开榜单已发布；失败保留旧完整缓存，后续信号/定时刷新继续重试。不会在前端拼接名次，也不改变评分公式、UTC、日快照/revision 或原有日结与自然保留政策。
-
-封禁针对当前 `client_id` 所属席位及其所有上报端；同一 GitHub 帐号另一个 CPA UUID 的席位不受影响。
-
-## 下榜与手动恢复
-
-榜单管理 `/admin/leaderboards` 有“当前榜单”和“已下榜用户”两个视图。当前榜单沿用公开五榜、四个页面周期；“下榜”针对内部 `client_id`，统一作用于全部五榜、全部六个后端周期（包括年度/累计）。下榜不只是隐藏一行，而是在评分前从候选与参考样本排除。
-
-下榜保留数据、凭据并继续接收上报，直到管理员手动恢复；不会跨日/周/月或重启自动清除。“已下榜用户”是全局分页用户名单，不跟随当前榜单/周期，也不构造假想名次。恢复是恢复资格，按仍保留的数据和原规则计算，不保证进入前100或回到原名次。
-
-未主动退出时，管理标志的规则如下：
-
-| 封禁 | 下榜 | 上报 | 参榜资格 |
+| Banned (`disabled`) | Excluded (`ranking_hidden`) | Reports Accepted | Leaderboard Eligibility |
 | --- | --- | --- | --- |
-| 否 | 否 | 允许 | 按原规则参与 |
-| 否 | 是 | 允许 | 不参与 |
-| 是 | 否 | 拒绝 | 不参与 |
-| 是 | 是 | 拒绝 | 不参与 |
+| No | No | Yes | Eligible under standard rules |
+| No | Yes | Yes | Excluded |
+| Yes | No | Rejected | Excluded |
+| Yes | Yes | Rejected | Excluded |
 
-两个管理标志互不覆盖。已封禁且下榜的用户须先到用户管理解封，再到已下榜名单恢复；恢复接口也会拒绝被封禁身份。解封不会顺带清除下榜标记。客户端[主动退出](registration-api.md#withdraw-the-entire-seat)是独立状态；解封和取消下榜不清除该状态，也不会恢复其上报或参榜资格。管理员登录与权限不使用 GitHub OAuth。
+- Ban and exclusion flags are independent: unbanning does not clear `ranking_hidden`, and a banned-and-excluded seat must be unbanned first before restoring leaderboard eligibility.
+- Client-initiated [seat withdrawal](integration.md#withdraw-an-entire-seat) is independent and permanent: neither unbanning nor restoring clears `withdrawn`.
+- **Cache refresh**: Moderation mutations signal the cache worker to rebuild all periods early and publish atomically (coalescing bursts). A write confirmation does not guarantee the new cache is already live; failed rebuilds retain the previous complete snapshot. The console never edits scores, resets data, deletes seats, or restores withdrawn seats.
+- **Disabling the console**: Unset `RANKING_ADMIN_CONFIG_FILE` and restart. Stored DB admins and ban/exclusion flags remain in SQLite and continue affecting public leaderboards.
 
-当前榜单可在操作后短暂等候公开 API 的新完整缓存并整表重读；暂不可读时可点击“刷新榜单”重试，不在浏览器自行删除排名或拼算分数。管理台不提供人工改分、批量操作、恢复主动退出席位或数据重置/删除。
+## Security and Docker Mount
 
-关闭后台只需移除管理员文件环境变量并重启，数据库普通账号和封禁/下榜状态仍保留且继续影响公开排名。不同结构的数据库不受支持；不认识 `ranking_hidden` 的代码不能保留下榜过滤效果。
+- **Sessions & CSRF**: Server-side in-memory sessions last `8h` (max `1024` active sessions, cleared on restart). Cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` by default. Write requests require Same-Origin and a session CSRF token; client Bearer secrets cannot log in to the admin console.
+- **Login rate limits**: `5` attempts/minute per source and `40`/minute globally, reusing the deployment's trusted-proxy and IPv6 `/64` source rules (separate from registration quotas; see [Deployment & Configuration](deployment.md#reverse-proxy-security-and-source-resolution)).
+- **HTTPS**: Serve admin routes only over HTTPS behind a trusted proxy that sets `Host` and `X-Forwarded-Proto: https` and appears in `RANKING_TRUSTED_PROXIES`. For isolated local loopback testing only, set `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true` (requires a literal loopback listen address and loopback request origin).
 
-## 会话与部署安全
+### Docker Read-Only Mount Example
 
-- 随机服务端会话固定 8 小时，最多 1024 个有效会话；保存在单进程内存，重启必须重新登录。密码使用 bcrypt 验证。
-- Cookie 为 HttpOnly、SameSite=Strict，默认 Secure。管理写请求要求同源及会话 CSRF 令牌；登录只接受同源 JSON。客户端 Bearer 密钥不能用于管理登录。
-- 登录独立限流：每来源每分钟 5 次、全站每分钟 40 次；来源状态有界。可信代理及 IPv6 来源归并沿用现有来源设置，不共享客户端注册计数。
-- 对外必须使用 HTTPS。TLS 终止代理应设置正确的 `Host` 和 `X-Forwarded-Proto: https`，且直接代理地址须在 `RANKING_TRUSTED_PROXIES` 中明确配置；不要信任任意来源，也不要将后台 HTTP 监听直接暴露公网。
-- 仅本机隔离测试可显式设置 `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true`，要求服务绑定字面量 loopback IP，且请求的直接来源及 Host 也是 loopback。默认关闭，不能用于公网 HTTP。
-
-### Docker 只读配置
-
-容器默认使用 UID/GID `10001:10001`。在宿主机准备服务身份可读的文件，例如 root 所有、组为 10001、权限 0640。按现有部署方式额外挂载：
+The container runs as UID/GID `10001:10001`. Prepare a host file readable by UID/GID `10001` (for example owned by `root:10001` with mode `0640` inside a traversable parent directory) and mount it read-only—never bake real credentials into images:
 
 ```yaml
 volumes:
@@ -82,5 +67,3 @@ volumes:
 environment:
   RANKING_ADMIN_CONFIG_FILE: /etc/cpa-ranking/admin.json
 ```
-
-保留现有数据库卷、静态文件和网络设置。不需要启用后台时，无须新增挂载或变量。确认父目录允许容器运行身份遍历，文件只读可读而不可写。不要把真实配置打包进镜像。
