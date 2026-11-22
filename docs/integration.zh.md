@@ -18,9 +18,9 @@
 | `GET` / `HEAD` | `/avatars/catalog.json` | 无需 | 获取头像清单、默认 ID 及相对图片路径 |
 | `GET` / `HEAD` | `/avatars/{path}` | 无需 | 获取 WebP 头像二进制（`HEAD` 仅返回响应头） |
 | `GET` | `/healthz` | 无需 | 存活探针（`200 {"status":"ok"}`） |
-| `GET` | `/readyz` | 无需 | 就绪探针：`200 {"status":"ready"}`，未就绪或库不可用时返回 `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` |
+| `GET` | `/readyz` | 无需 | 就绪探针（数据库、目录及首轮缓存就绪返回 `200`，否则 `503`） |
 
-浏览器在授权期间还会经由 `/auth/github/authorize` 与 `/auth/github/callback` 跳转，它们是浏览器重定向路由而非上报客户端 JSON API。
+浏览器在授权期间还会经由 `/auth/github/authorize` 与 `/auth/github/callback` 跳转，它们是浏览器重定向路由而非上报客户端 JSON API。未就绪或运行中 SQLite 不可用时，`/readyz` 返回 `503 {"status":"not_ready","reason":"initializing_or_unavailable"}`（非业务 `error.code` 信封）。
 
 **传输与隐私要求：**
 - 生产环境必须使用 **HTTPS**；回环 HTTP 仅用于本地调试或受信任的 TLS 反向代理之后。
@@ -82,7 +82,7 @@ Content-Type: application/json
 #### 第二步：浏览器授权
 
 - 服务端通过 `Secure; HttpOnly; SameSite=Lax` Cookie、一次性 state 与 `S256` PKCE 绑定浏览器会话。
-- 服务端向 GitHub 换取授权码并读取数字用户 ID，不申请仓库或邮箱权限，也不持久化 GitHub Token。
+- 服务端用回调授权码向 GitHub 换取访问令牌并读取数字用户 ID，不申请仓库或邮箱权限，也不持久化 GitHub Token。
 - 记录同意或拒绝后，服务端带 `Referrer-Policy: no-referrer` 原样跳回 `return_to`（不附加任何参数），且绝不会从服务端主动请求 `return_to`。浏览器回跳**不是**注册成功的确认凭证。
 
 #### 第三步：完成注册（Complete）
@@ -109,8 +109,8 @@ Content-Type: application/json
 - **席位主键**：由 **`(GitHub 数字用户 ID, CPA UUID)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
 - **初始资料**：新席位取 GitHub `name`（无效或为空时回退至截断后的 `login`），经 Unicode NFKC 规范化与去首尾空白处理，要求 `1`–`32` 码点、`≤128` UTF-8 字节、含可见内容且不含控制或双向控制字符。允许重名，展示时按纯文本转义渲染。头像默认采用目录默认项（不同步 GitHub 头像，无资料修改接口）。
 - **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，未过期前用原 `request_id` 和原凭据重试，过期后保留**原凭据**重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 CPA UUID）。
-- **GitHub 换码失败**：若服务端换码或查询 GitHub 用户失败，该事务会被标记为 `failed`，继续重试原 `request_id` 仍会返回 `500 internal_error`。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权。
-- **不可逆状态**：已封禁或已退出的席位无法通过重试或重新授权恢复。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
+- **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；在原请求过期前重试同一 `request_id` 仍会返回 `500 internal_error`（过期后返回 `410 registration_request_expired`）。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权。
+- **封禁、退出与撤销授权**：`disabled`（管理员封禁）无法由客户端通过重试或重新授权解除，但可由管理员解封；`withdrawn`（主动退出）为永久状态，客户端与管理员均不可恢复。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
 
 ### 退出席位（Withdraw）
 
@@ -223,22 +223,28 @@ Content-Type: application/json
 针对已[配置 GitHub OAuth 的 HTTPS 服务](deployment.zh.md#github-oauth-app)：
 
 ```sh
-# 1. 生成并妥善保存 43 字符无填充 base64url 凭据（32 字节随机数）
-SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+# 1. 首次生成并持久化 43 字符无填充 base64url 凭据（已存在则直接复用）
+SECRET_FILE="$HOME/.config/cpa-ranking/writer.secret"
+install -d -m 700 "$(dirname "$SECRET_FILE")"
+if [ ! -f "$SECRET_FILE" ]; then
+  umask 077 && openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$SECRET_FILE"
+fi
+SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
+CPA_UUID='替换为当前 CPA 实例的持久 UUID'
 
 # 2. 开始注册；保存返回的 request_id，并在浏览器打开 authorize_url
 curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
-    "return_to": "http://localhost:3001/settings?tab=ranking#status"
-  }'
+  -d "{
+    \"cpa_uuid\": \"$CPA_UUID\",
+    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\"
+  }"
 
-# 3. 在 GitHub 同意授权后，用同一 request_id 与凭据完成注册
+# 3. 在 GitHub 同意授权后完成注册；加 -i 以便查看空体 202 + Retry-After 或 200/201
 REQUEST_ID='替换为返回的 request_id'
-curl -sS -X POST "$BASE/v1/clients/register/complete" \
+curl -isS -X POST "$BASE/v1/clients/register/complete" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{\"request_id\":\"$REQUEST_ID\"}"

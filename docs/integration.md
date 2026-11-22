@@ -18,9 +18,9 @@ All paths are relative to the deployment's HTTPS origin (for example `https://ra
 | `GET` / `HEAD` | `/avatars/catalog.json` | None | Fetch the avatar catalog, default ID, and relative asset paths |
 | `GET` / `HEAD` | `/avatars/{path}` | None | Fetch an avatar WebP binary (`HEAD` returns headers only) |
 | `GET` | `/healthz` | None | Liveness probe (`200 {"status":"ok"}`) |
-| `GET` | `/readyz` | None | Readiness probe: `200 {"status":"ready"}`, or `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` |
+| `GET` | `/readyz` | None | Readiness probe (`200` when DB, catalogs, and initial cache are ready; `503` otherwise) |
 
-Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` during OAuth authorization; these are browser redirect routes rather than JSON client APIs.
+Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` during OAuth authorization; these are browser redirect routes rather than JSON client APIs. When unready or if SQLite becomes unavailable, `/readyz` returns `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` (not the business `error.code` envelope).
 
 **Transport and privacy requirements:**
 - Always use **HTTPS** in production. Loopback HTTP is only for local development or behind a trusted TLS-terminating reverse proxy.
@@ -109,8 +109,8 @@ Success response (`client_id` and `avatar_id` are positive int64 decimal strings
 - **Seat key**: Uniquely identified by **`(GitHub numeric user ID, CPA UUID)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
 - **Initial profile**: New seats normalize GitHub `name` (falling back to truncated `login`) using Unicode NFKC, outer whitespace trimming, `1`–`32` code points / `≤128` UTF-8 bytes, visible content required, and no control or bidi characters. Duplicate names are allowed; always render `display_name` as escaped plain text. Avatars default to the catalog default (no GitHub avatar sync or profile-edit API).
 - **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry; after expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and CPA UUID.
-- **GitHub exchange failure**: If the server-side GitHub code exchange or user lookup fails, that transaction is marked `failed` and retrying the same `request_id` continues returning `500 internal_error`. Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again.
-- **Irrevocable states**: Disabled or withdrawn seats cannot be restored by retrying or re-authorizing. Revoking the OAuth app on GitHub does **not** revoke already-bound writers—call `POST /v1/clients/withdraw` to stop a seat.
+- **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` until expiry (and `410 registration_request_expired` afterward). Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again.
+- **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. A `withdrawn` seat is permanent and cannot be restored by clients or admins. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
 
 ### Withdraw an Entire Seat
 
@@ -223,22 +223,28 @@ Decimal strings must contain nonnegative int64 digits without `+` signs (avoid l
 Run against a deployment with [GitHub OAuth configured](deployment.md#github-oauth-app):
 
 ```sh
-# 1. Generate and persist a 43-char unpadded base64url secret (32 random bytes)
-SECRET=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
+# 1. Generate once and persist a 43-char unpadded base64url secret (32 random bytes)
+SECRET_FILE="$HOME/.config/cpa-ranking/writer.secret"
+install -d -m 700 "$(dirname "$SECRET_FILE")"
+if [ ! -f "$SECRET_FILE" ]; then
+  umask 077 && openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$SECRET_FILE"
+fi
+SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
+CPA_UUID='replace-with-your-cpa-instance-uuid'
 
 # 2. Start registration; save request_id and open authorize_url in a browser
 curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
-  -d '{
-    "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
-    "return_to": "http://localhost:3001/settings?tab=ranking#status"
-  }'
+  -d "{
+    \"cpa_uuid\": \"$CPA_UUID\",
+    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\"
+  }"
 
-# 3. After approving in GitHub, complete with the same request_id and secret
+# 3. After approving in GitHub, complete with -i to inspect 202 + Retry-After or 200/201
 REQUEST_ID='replace-with-returned-request-id'
-curl -sS -X POST "$BASE/v1/clients/register/complete" \
+curl -isS -X POST "$BASE/v1/clients/register/complete" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{\"request_id\":\"$REQUEST_ID\"}"
