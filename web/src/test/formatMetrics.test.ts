@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { exactMetric, formatCount, formatDuration, formatMetric } from '../formatMetrics'
 
-describe('Keeper-compatible compact counts with exact integer scaling', () => {
+describe('compact counts with exact integer scaling', () => {
   it.each([
     ['0', '0'], ['999', '999'], ['1000', '1.00 K'], ['12345', '12.35 K'], ['999994', '999.99 K'], ['999995', '1.00 M'],
     ['1000000', '1.00 M'], ['999995000', '1.00 B'], ['123456789', '123.46 M'], ['1000000000', '1.00 B'],
