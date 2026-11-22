@@ -12,19 +12,18 @@
 
 <h1 align="center">CPA Usage Ranking</h1>
 
-<p align="center">Open-source, standalone AI usage leaderboard server and web dashboard for the CLIProxyAPI (CPA) ecosystem.</p>
-
 <p align="center">
-  <strong><a href="#quick-start">Quick Start</a>&emsp;|&emsp;<a href="#client-integration">Client Integration</a>&emsp;|&emsp;<a href="#leaderboards--admin">Leaderboards &amp; Admin</a>&emsp;|&emsp;<a href="#configuration">Configuration</a>&emsp;|&emsp;<a href="#documentation">Documentation</a></strong>
+  Open-source, self-hosted AI usage leaderboard server and web dashboard for the <a href="https://github.com/router-for-me/CLIProxyAPI">CLIProxyAPI (CPA)</a> ecosystem.<br />
+  Any compatible collector, gateway, or dashboard can integrate over HTTP JSON without client coupling or uploading API keys, prompts, or responses.
 </p>
 
----
-
-**CPA Usage Ranking** is a self-hosted leaderboard server built for the **[CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI)** ecosystem. Any compatible usage collector, gateway, or dashboard can integrate over a compact HTTP JSON protocol to register seats via GitHub OAuth, upload UTC daily cumulative snapshots, and read public rankings—without coupling to any specific client implementation or uploading upstream API keys, prompts, or response payloads.
+<p align="center">
+  <strong><a href="#quick-start">Quick Start</a> · <a href="#client-integration">Client Integration</a> · <a href="#leaderboards--admin">Leaderboards &amp; Admin</a> · <a href="#configuration">Configuration</a> · <a href="#documentation">Documentation</a></strong>
+</p>
 
 ## Features
 
-- **Open Client Protocol**: Clients generate and store their own 32-byte `base64url` Bearer secret (only its `SHA-256` digest is persisted). GitHub OAuth binds `(GitHub user ID, CPA UUID)` into one seat supporting multiple independent writers.
+- **Open Client Protocol**: Clients generate and persist their own 32-byte `base64url` Bearer secret (only its `SHA-256` digest is stored). GitHub OAuth binds `(GitHub user ID, CPA UUID)` into one seat supporting multiple independent writers.
 - **Privacy-Minimal & Idempotent**: Accepts only aggregated per-model token counts, request/success counts, and mean latencies over UTC today/yesterday; per-writer `revision` tracking makes retries safe.
 - **Five Boards & Complete UTC Periods**: Built-in **Overall, Usage, Cache Reuse, Reliability (95% Wilson), and TTFT** leaderboards across **Today, Yesterday, Weekly (previous complete UTC week), and Monthly (previous complete UTC month)** views with exact 64-bit integer precision.
 - **Single-Binary SQLite Engine & Built-in UI**: Go + SQLite (`WAL`, `FULL` sync, serialized writer, background settlement, atomic cache) serving a responsive web dashboard, 66 embedded WebP avatars, and an opt-in administrator console.
@@ -39,7 +38,7 @@ docker compose -p cpa-ranking up -d --build
 docker compose -p cpa-ranking ps
 ```
 
-Or run an immutable GHCR release tag (`vMAJOR.MINOR.PATCH` or `sha-<commit>`; no floating `latest` tag):
+Or run an exact GHCR release tag (`vMAJOR.MINOR.PATCH` or `sha-<commit>`, with optional `dev-*` tags on manual non-default builds; no floating `latest` tag—pin `@sha256:<digest>` for strict immutability):
 
 ```sh
 export RANKING_IMAGE=ghcr.io/<owner>/cpa-usage-ranking:v0.1.0
@@ -47,7 +46,7 @@ docker compose -p cpa-ranking pull ranking
 docker compose -p cpa-ranking up -d --no-build
 ```
 
-- **Production essentials**: Place an HTTPS reverse proxy in front of `127.0.0.1:8080`, set `RANKING_TRUSTED_PROXIES` to your proxy IP/CIDR, configure a GitHub OAuth App (`/auth/github/callback`) to enable new registrations, and run a single instance on local disk (never NFS). See [Deployment & Configuration](docs/deployment.md).
+- **Production essentials**: Place an HTTPS reverse proxy in front of `127.0.0.1:8080`, set `RANKING_TRUSTED_PROXIES` to your proxy IP/CIDR, configure a GitHub OAuth App (`/auth/github/callback`) to enable new registrations, and run a single instance on local disk (never NFS). See [Deployment and Configuration Guide](docs/deployment.md).
 
 ## Client Integration
 
@@ -64,36 +63,36 @@ Clients integrate over standard HTTPS + uncompressed UTF-8 JSON. See the **[Clie
 ## Leaderboards & Admin
 
 - **Boards**: `overall` (100-pt composite + 6 detail metrics), `usage` (exact int64 tokens), `cache` (`cache_read / input`), `success` (95% Wilson lower bound), and `ttft` (mean first-token latency, lower is better).
-- **Periods**: Web UI displays `today`, `yesterday`, `week` (previous complete Monday–Monday UTC week), and `month` (previous complete UTC month); the API also serves `year` and `all`. See [Leaderboards & Scoring](docs/leaderboards.md).
-- **Admin Console (opt-in)**: Disabled by default. Mount a `0600`/`0640` owner JSON file outside `RANKING_WEB_DIR` and set `RANKING_ADMIN_CONFIG_FILE` to enable `/admin/leaderboards` (exclude/restore, manual cache refresh), `/admin/users` (search, ban/unban), and `/admin/accounts` (ordinary DB admins). See [Administrator Console](docs/admin.md).
+- **Periods**: Web UI displays `today`, `yesterday`, `week` (previous complete Monday-start UTC week), and `month` (previous complete UTC month); the API also serves `year` and `all`. See [Leaderboards and Scoring](docs/leaderboards.md).
+- **Admin Console (opt-in)**: Disabled by default. Mount an owner JSON file (`0600`/`0640` or stricter read-only) outside `RANKING_WEB_DIR` and set `RANKING_ADMIN_CONFIG_FILE` to enable `/admin/leaderboards` (exclude/restore seats and reload published boards), `/admin/users` (search, ban/unban), and `/admin/accounts` (ordinary DB admins). See [Administrator Console](docs/admin.md).
 
 ## Configuration
 
-Core variables are listed below (full rate-limit and ingestion tuning options are in [Deployment & Configuration](docs/deployment.md#configuration-reference)):
+Core variables are listed below (full rate-limit and ingestion tuning options are in [Deployment and Configuration Guide](docs/deployment.md#configuration-reference)):
 
 | Variable | Source Default (Docker) | Description |
 | --- | --- | --- |
 | `RANKING_HTTP_ADDR` | `127.0.0.1:8080` (`0.0.0.0:8080`) | HTTP listen address |
 | `RANKING_SQLITE_PATH` | `data/ranking.db` (`/data/ranking.db`) | SQLite database file path |
 | `RANKING_MODELS_PATH` | `config/models.json` (`/app/config/models.json`) | Canonical model & alias catalog |
-| `RANKING_WEB_DIR` | unset (`/app/web`) | Built frontend directory (omit for API-only) |
+| `RANKING_WEB_DIR` | unset (`/app/web`) | Built frontend directory (omit when running from source for API-only) |
 | `RANKING_TRUSTED_PROXIES` | unset | Trusted reverse-proxy IPs or CIDRs |
-| `RANKING_PUBLIC_ORIGIN` / `RANKING_GITHUB_CLIENT_ID` / `RANKING_GITHUB_CLIENT_SECRET` | unset | GitHub OAuth settings (set all three to enable registration) |
+| `RANKING_PUBLIC_ORIGIN`<br>`RANKING_GITHUB_CLIENT_ID`<br>`RANKING_GITHUB_CLIENT_SECRET` | unset | GitHub OAuth settings (set all three to enable registration) |
 | `RANKING_ADMIN_CONFIG_FILE` | unset | Private owner credentials JSON (enables Admin Console) |
 
-Health probes: `GET /healthz` (process alive) and `GET /readyz` (SQLite, catalogs, and initial cache round ready).
+Health probes: `GET /healthz` (process alive) and `GET /readyz` (`200` when SQLite, catalogs, and initial cache are ready; `503` otherwise).
 
 ## Documentation
 
 | Document | Scope |
 | --- | --- |
 | [Client Integration Guide](docs/integration.md) | Endpoints, OAuth & reporting flows, snapshot schema, cURL, errors & retries |
-| [Leaderboards & Scoring](docs/leaderboards.md) | 5 boards, 6 UTC periods, scoring formulas, tie-breaking, UI formatting |
-| [Deployment & Configuration](docs/deployment.md) | Docker Compose, GHCR policy, GitHub OAuth, proxy security, full env vars, backups |
+| [Leaderboards and Scoring](docs/leaderboards.md) | 5 boards, 6 UTC periods, scoring formulas, tie-breaking, UI formatting |
+| [Deployment and Configuration Guide](docs/deployment.md) | Docker Compose, GHCR policy, GitHub OAuth, proxy security, full env vars, backups |
 | [Administrator Console](docs/admin.md) | Owner & DB admins, user search, ban/exclude matrix, CSRF/HTTPS security |
-| [Storage, Settlement & Caching](docs/storage.md) | SQLite WAL pools, schema, serialized writer, UTC settlement & retention, cache |
-| [Model, Avatar & Brand Catalogs](docs/catalogs.md) | `config/models.json` resolution, embedded WebP avatars, brand icon generation |
-| [Benchmark & Capacity Testing](docs/benchmark.md) | 500 TPS sustained ingestion benchmark reference & `cmd/ranking-capacity` CLI |
+| [Storage, Settlement, and Caching](docs/storage.md) | SQLite WAL pools, schema, serialized writer, UTC settlement & retention, cache |
+| [Model, Avatar, and Brand Catalogs](docs/catalogs.md) | `config/models.json` resolution, embedded WebP avatars, brand icon generation |
+| [Benchmark and Capacity Testing](docs/benchmark.md) | 500 TPS sustained ingestion benchmark reference & `cmd/ranking-capacity` CLI |
 
 ## Development
 
