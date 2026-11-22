@@ -24,24 +24,28 @@
 
 启动时在单事务内幂等创建当前表结构与索引；结构不兼容变更需使用全新数据库。
 
-| 表 / 模块 | 主键与职责 |
+| 表名 | 主键与职责 |
 | --- | --- |
-| `clients` | 自增正整数 `id`；唯一席位键 `(github_id, cpa_uuid)`；`display_name`、`avatar_id`、`created_at_ms`；相互独立的 `disabled`、`ranking_hidden`、`withdrawn` 状态标志 |
-| `client_writers` | `(id, client_id)` 与全局唯一的 32 字节 `SHA-256` `token_hash`（不存凭据原文）；凭据不会跨席位改绑 |
-| 注册事务表 | 有界短生命周期 OAuth 请求状态（`10m` 有效，最多 `2,000` 笔未过期），保存 `cpa_uuid`、原样 `return_to`、上报端摘要、截止时间及过期前保留的办结结果 |
-| `models` | 稳定正整数 ID 与唯一标准模型名映射（ID `0` 保留给内部全模型总计；别名与价格不入库） |
-| `daily_writer_versions` | `WITHOUT ROWID`，键为 `(day, writer_id)`，记录各上报端最新 `revision` 与内容摘要 |
-| `daily_stats` | `WITHOUT ROWID`，键为 `(day, client_id, model_id)`，保存席位当日生效快照的 12 项原始汇总计数（`model_id = 0` 为全模型总计行，与分模型行独立存放） |
-| `period_stats` | 键为 `(kind, start_day, model_id, client_id)`，保存已日结的单日总计及周、月、累计（`0001-01-01`）汇总行 |
-| 水位线与 `admin_accounts` | 单调递增的 `closed_before_day` UTC 封窗水位线，以及可选的数据库普通管理员 bcrypt 哈希 |
+| `clients` | 自增正整数 `id`；唯一席位 `(github_id, cpa_uuid)`；`display_name`、`avatar_id`、`created_at_ms`；独立的 `disabled`、`ranking_hidden`、`withdrawn` 标志 |
+| `client_writers` | `(id, client_id)` 与全局唯一 32 字节 `SHA-256` `token_hash`（不存凭据原文，不跨席位改绑） |
+| `registration_requests` | `WITHOUT ROWID`（主键 `id`）；有界 `10m` OAuth 请求（最多 `2,000` 笔未过期），保存 `cpa_uuid`、`return_to`、摘要、state/PKCE 与过期前保留的完成结果 |
+| `models` | 稳定正整数 ID 与唯一标准模型名映射（ID `0` 保留给内部总计；别名与价格不入库） |
+| `daily_reports` | `WITHOUT ROWID`（主键 `(day, client_id)`）；席位单日父表（记录 `received_at_ms`），日结删除时级联清理版本与统计行 |
+| `daily_writer_versions` | `WITHOUT ROWID`（主键 `(day, writer_id)`）；各上报端最新 `revision` 与 32 字节内容摘要 |
+| `daily_stats` | `WITHOUT ROWID`（主键 `(day, client_id, model_id)`）；生效快照的 12 项原始汇总（`model_id = 0` 为全模型总计行） |
+| `period_stats` | 主键 `(kind, start_day, model_id, client_id)`；已日结单日总计及周、月、累计（`0001-01-01`）汇总行 |
+| `report_window` | 单行表（`id = 1`），保存单调递增的 `closed_before_day` UTC 封窗水位线 |
+| `admin_accounts` | 可选的数据库普通管理员账号（仅存 bcrypt 密码哈希） |
 
 **注册事务一致性**：浏览器回调校验并消费一次性 state、浏览器 Cookie 凭证与 S256 PKCE，向 GitHub 换码期间不持有 SQLite 写锁，也不持久化 GitHub Token。仅 `POST /v1/clients/register/complete` 在单次 `IMMEDIATE` 事务内完成席位创建与上报端绑定，异常则整体回滚。
 
 ## 串行写队列、UTC 封窗与后台日结
 
-- **单写串行队列**：内部专用写协程串行执行上报写入与后台维护任务，默认 `128` 容量的上报待写队列与单槽维护队列（双方均有任务时交替调度），单事务默认超时 `5s`（`RANKING_REPORT_TRANSACTION_TIMEOUT`）。SQLite 锁等待响应超时、请求取消与停机信号。
-- **持久 UTC 封窗水位线（`closed_before_day`）**：根据服务端观察到的 UTC 时间仅向前推进（至少推进至 UTC 昨日），在启动时、后台周期检查（最长 `1m`）及每笔上报事务前后推进校验。时钟回拨、重试或重启均无法重新打开已关闭日期。
-- **后台日结（Settlement）**：落入 `closed_before_day` 之前的日快照由后台扫描器按 `(day, client_id)` 有界分页提交给写协程，逐席逐日单事务结转：将 12 项原始汇总累加至 `period_stats` 对应的 UTC 周/月/累计行，写入仅含总计的单日归档行（空快照不生成），再删除源 `daily_stats` 与 `daily_writer_versions`。算术溢出检查或数据库错误会回滚该条以便重试，绝不重复累加。
+- **单写串行队列**：内部专用写协程串行执行上报写入与后台维护任务，默认 `128` 容量的上报待写队列与单槽维护队列（双方均有任务时交替调度），单事务默认超时 `5s`（`RANKING_REPORT_TRANSACTION_TIMEOUT`）。SQLite 锁等待响应超时、取消与优雅停机信号。
+- **持久 UTC 水位线（`closed_before_day`）**：根据服务端观察到的 UTC 时间仅向前推进（至少推进至 UTC 昨日），在启动时、后台周期检查（最长 `1m`）及每笔上报事务前后推进校验。时钟回拨、重试或重启均无法重新打开已关闭日期。
+- **后台日结（Settlement）**：
+  - 按 `(day, client_id)` 顺序扫描早于 `closed_before_day` 的日快照，逐席逐日单事务结转：将 12 项原始汇总累加至 `period_stats` 的周/月/累计行，并写入仅含总计的已日结单日行（空快照不生成）。
+  - 同事务内删除 `daily_reports` 源行（级联清理 `daily_stats` 与 `daily_writer_versions`）；算术溢出检查或数据库错误会回滚该条以便重试，绝不重复累加。
 - **自然保留策略（`RANKING_SETTLED_DAY_RETENTION_DAYS`）**：仅清理已日结的 `period_stats`（绝不触碰未结 `daily_stats`），经同一写协程分批执行：
   - **单日总计行**：默认保留 UTC 今日及此前 `30` 天（共 `31` 天，可配 `1`–`36500`）。
   - **周汇总行**：保留当前与上一完整 UTC 自然周（周一起）。
@@ -49,7 +53,7 @@
 
 ## 一致性读快照与原子缓存刷新
 
-- **单事务只读合并**：读取任意周期候选集时，在单个 `mode=ro` 事务中合并 `period_stats` 已结行与该周期内尚未日结的 `daily_stats`（年度视图合并已结月行与本年未结日行，累计视图包含全部未结积压），同时读取席位资料与 `disabled`/`ranking_hidden`/`withdrawn` 状态，在评分前完成过滤。
-- **派生指标计算**：比例与均值由原始 int64 总和与样本数直接计算，不修改底层存储；分母为零时返回 `null` 而非伪造零值。
-- **原子 6 周期缓存**：单个串行缓存 worker 在启动时及每隔 `RANKING_CACHE_REFRESH_INTERVAL`（默认 `5m`）依次构建全部 6 个周期 × 5 个榜单。仅整轮构建成功后原子替换内存只读快照；失败时保留上一轮完整结果及其原始时间边界与 `generated_at`。普通上报与日结不触发立即重建，管理员封禁/下榜与客户端退出会触发异步合并刷新。
+- **单事务只读合并**：候选读取在单个 `mode=ro` 事务中合并 `period_stats` 已结行与未结 `daily_stats`（年度合并已结月行与本年未结日行，累计含全部未结积压），并同快照读取席位资料与状态标志，在评分前过滤封禁、下榜与退出席位。
+- **指标存储与派生**：Token 数、执行次数与耗时样本数按精确 `int64`（`INTEGER`）存储，`ttft_sum_ms` 与 `latency_sum_ms` 按 `float64`（`REAL`）存储。比例与均值直接派生而不改动底层行；分母为零返回 `null` 而非伪造零值。
+- **原子 6 周期缓存**：单个串行 worker 在启动时及每 `RANKING_CACHE_REFRESH_INTERVAL`（`5m`）构建全部 6 周期 × 5 榜单，仅整轮成功后原子替换只读快照（失败保留旧快照）。普通上报与日结不触发立即重建，管理员治理与客户端退出触发异步合并刷新。
 - **内存保护边界**：默认单视图最多 `100,000` 候选人、整轮编码上限 `16 MiB`、最多 `32` 个构建项，属于防 OOM 安全边界而非容量保证。
