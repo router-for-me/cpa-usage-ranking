@@ -27,7 +27,7 @@ docker buildx build --platform linux/amd64 --load -t cpa-usage-ranking:local .
 
 ### Run a Published GHCR Image
 
-Set `RANKING_IMAGE` to an exact immutable tag or manifest digest (replace `<owner>/<repo>` and version with real values; repository paths are lowercase):
+Set `RANKING_IMAGE` to an exact release tag or immutable manifest digest (replace `<owner>/<repo>` and version with real values; repository paths are lowercase):
 
 ```sh
 export RANKING_IMAGE=ghcr.io/<owner>/<repo>:v1.0.0
@@ -35,13 +35,13 @@ docker compose -p cpa-ranking pull ranking
 docker compose -p cpa-ranking up -d --no-build
 ```
 
-Use `--no-build` so Compose does not rebuild locally. For strict reproducibility, pin a verified manifest digest (`ghcr.io/<owner>/<repo>@sha256:<digest>`).
+Use `--no-build` so Compose does not rebuild locally. Registry tags can still be republished; for strictly immutable deployments, pin a verified manifest digest (`ghcr.io/<owner>/<repo>@sha256:<digest>`).
 
 ### GHCR Publication Policy
 
 - **Stable tags**: Pushing a strict `vMAJOR.MINOR.PATCH` tag (no leading zeroes except `0`, no prerelease suffix) reachable from the default branch publishes `:vMAJOR.MINOR.PATCH` and `:sha-<40-char-commit>`.
 - **Development tags**: Manual `workflow_dispatch` on a non-default branch publishes `:dev-sha-<40-char-commit>` and, when a valid lowercase `dev_tag` is given, `:dev-<name>`.
-- **No floating aliases**: `:latest`, `:v1`, and `:v1.x` are never published so backfills or rollbacks cannot silently overwrite a shared channel.
+- **No floating aliases**: `:latest`, `:v1`, and `:v1.x` are never published so consumers always pick an exact version or digest.
 - **CI gate**: Every publish job runs policy checks and the full reusable CI (Go, frontend, policy tests, and `amd64`/`arm64` smoke tests) before logging into GHCR with `GITHUB_TOKEN`.
 
 ## GitHub OAuth App
@@ -58,7 +58,7 @@ If all three OAuth variables are unset—or `RANKING_REGISTRATION_ENABLED=false`
 - **Scrub sensitive proxy logs**: Exclude `Authorization` headers, cookies, request bodies, and full `/auth/github/*` query strings (log path only on OAuth routes).
 - **Trusted proxies (`RANKING_TRUSTED_PROXIES`)**: Unset by default (all forwarded headers are ignored and only the connection's `RemoteAddr` is used). Behind a reverse proxy, explicitly list only your actual proxy IPs or CIDRs (for example `127.0.0.1,10.2.0.0/24`). Only connections from trusted peers honor `X-Forwarded-For` (right-to-left to the first untrusted hop) or `X-Real-IP`; malformed headers fall back to `RemoteAddr`. Never trust `0.0.0.0/0` or client-accessible subnets.
 - **IPv6 source grouping (`RANKING_REGISTRATION_IPV6_64`)**: Enabled (`true`) by default, masking native IPv6 addresses to `/64` (IPv4-mapped IPv6 is unmapped to IPv4) for registration start and admin login rate limits. Source keys are abuse-control keys only—never identity or account ownership.
-- **Registration admission gate**: `POST /v1/clients/register/start` enforces per-source and global fixed-window quotas **before** Bearer/body validation; requests rejected by source/capacity limits do not spend global slots. At most `2,000` unexpired registration transactions (each lasting `10m`) exist in SQLite simultaneously; expired entries are reclaimed without evicting valid results. Rate-limit state is in-memory per process and resets on restart.
+- **Two-layer registration admission**: `POST /v1/clients/register/start` runs an in-memory per-source and global fixed-window gate **before** Bearer/body validation (resets on restart); requests rejected by per-source limits or a full in-memory source table (`429 registration_capacity`) do not spend global slots. Valid admitted requests then allocate a fixed `10m` SQLite transaction capped at `2,000` unexpired rows (not env-configurable); hitting that SQLite cap also returns `429 registration_capacity` after rate slots have been consumed, without evicting valid entries.
 
 ## Configuration Reference
 
@@ -66,16 +66,18 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 ### Core Service and Health
 
-| Variable | Source Default (Image Default) | Purpose |
+| Variable | Source / Image Default | Purpose |
 | --- | --- | --- |
-| `RANKING_HTTP_ADDR` | `127.0.0.1:8080` (`0.0.0.0:8080`) | HTTP listen address (`host:port`) |
-| `RANKING_SQLITE_PATH` | `data/ranking.db` (`/data/ranking.db`) | SQLite database file path on local storage |
-| `RANKING_MODELS_PATH` | `config/models.json` (`/app/config/models.json`) | Required canonical model and alias catalog |
-| `RANKING_WEB_DIR` | unset (`/app/web`) | Built frontend directory; omit for API-only mode |
+| `RANKING_HTTP_ADDR` | Source: `127.0.0.1:8080`<br>Image: `0.0.0.0:8080` | HTTP listen address (`host:port`) |
+| `RANKING_SQLITE_PATH` | Source: `data/ranking.db`<br>Image: `/data/ranking.db` | SQLite database file path on local storage |
+| `RANKING_MODELS_PATH` | Source: `config/models.json`<br>Image: `/app/config/models.json` | Required canonical model and alias catalog |
+| `RANKING_WEB_DIR` | Source: unset<br>Image: `/app/web` | Built frontend directory; omit when running from source for API-only mode |
 | `RANKING_CACHE_REFRESH_INTERVAL` | `5m` | Periodic leaderboard cache rebuild interval |
 | `RANKING_SHUTDOWN_TIMEOUT` | `10s` | Drain deadline per graceful shutdown stage |
 | `RANKING_SETTLED_DAY_RETENTION_DAYS` | `31` | Retention days (`1`–`36500`) for finalized daily total summaries |
-| `RANKING_HEALTHCHECK_URL` | — (`http://127.0.0.1:8080/readyz`) | Container `HEALTHCHECK` URL only (not read by the Go binary) |
+| `RANKING_HEALTHCHECK_URL` | Image: `http://127.0.0.1:8080/readyz` | Container `HEALTHCHECK` URL only (not read by the Go binary) |
+
+- **Probes**: `GET /healthz` returns `200 {"status":"ok"}` while alive. `GET /readyz` returns `200 {"status":"ready"}` once SQLite, catalogs, and the initial cache round succeed, or `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` before readiness or if SQLite becomes unavailable (used by image `HEALTHCHECK`; update `RANKING_HEALTHCHECK_URL` if changing ports).
 
 ### Reverse Proxy and GitHub OAuth Registration
 
@@ -113,13 +115,8 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600` or `0640`); see [Admin Console](admin.md) |
+| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600`/`0640` or stricter read-only); see [Administrator Console](admin.md) |
 | `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | Local loopback test override only; requires literal loopback listen address |
-
-### Health and Readiness Probes
-
-- `GET /healthz`: returns `200 {"status":"ok"}` whenever the HTTP server is alive.
-- `GET /readyz`: returns `200 {"status":"ready"}` only after SQLite, model/avatar catalogs, and the **first complete leaderboard cache build** succeed (used by the image `HEALTHCHECK`). If you change `RANKING_HTTP_ADDR`, update the Compose port mapping and `RANKING_HEALTHCHECK_URL` accordingly.
 
 ## Data Permissions, Stopping, and Backups
 
@@ -130,17 +127,21 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 ### Offline Backup
 
-Stop the container cleanly, verify exit code `0`, and archive the entire volume:
+Stop the container cleanly, verify exit code `0`, resolve the actual `/data` volume mounted on the container (so backups still target the active volume after any restore), and archive it:
 
 ```sh
 docker compose -p cpa-ranking stop -t 30 ranking
-docker inspect --format '{{.State.ExitCode}}' "$(docker compose -p cpa-ranking ps -aq ranking)"
+CID=$(docker compose -p cpa-ranking ps -aq ranking)
+[ "$(docker inspect --format '{{.State.ExitCode}}' "$CID")" = "0" ] || { echo 'unclean exit'; exit 1; }
+DATA_VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$CID")
+[ -n "$DATA_VOLUME" ] && docker volume inspect "$DATA_VOLUME" >/dev/null || { echo 'missing /data volume'; exit 1; }
+
 umask 077
 BACKUP_DIR="$HOME/cpa-ranking-backups"
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/ranking-data-$(date -u +%Y%m%dT%H%M%SZ).tar"
 docker run --rm --network none \
-  --mount type=volume,src=cpa-ranking_ranking-data,dst=/data,readonly \
+  --mount "type=volume,src=$DATA_VOLUME,dst=/data,readonly" \
   --entrypoint /bin/busybox "${RANKING_IMAGE:-cpa-usage-ranking:local}" \
   tar -C /data -cf - . > "$BACKUP_FILE"
 docker compose -p cpa-ranking start ranking
