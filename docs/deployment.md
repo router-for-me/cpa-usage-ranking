@@ -150,7 +150,7 @@ if docker run --rm --network none \
   --mount "type=volume,src=$DATA_VOLUME,dst=/data,readonly" \
   --entrypoint /bin/busybox "${RANKING_IMAGE:-cpa-usage-ranking:local}" \
   tar -C /data -cf - . > "$TMP_FILE"; then
-  mv "$TMP_FILE" "$BACKUP_FILE"
+  mv "$TMP_FILE" "$BACKUP_FILE" || status=$?
 else
   status=$?
   rm -f "$TMP_FILE"
