@@ -89,7 +89,9 @@ go build -o "$WORK/ranking-capacity" ./cmd/ranking-capacity
   --events "$WORK/tasks.jsonl" --samples "$WORK/samples.jsonl"
 
 # 模式 C：交互式泊松持续发压（使用 `seed-sustained` 数据库副本）
-# 从标准输入读取 JSON 行指令：stage / pause / resume / stop，支持 .jsonl 与 .jsonl.gz
+# 启动后默认暂停，从标准输入按行读取 JSON 指令（支持 .jsonl 与 .jsonl.gz）：
+#   {"operation":"stage","stage":"demo","rate":10}
+#   {"operation":"stop"}
 "$WORK/ranking-capacity" sustained \
   --fixture "$WORK/sustained-fixture.json" --models config/models.json \
   --model-seed 1 --arrival-seed 2 --url http://127.0.0.1:4210 \

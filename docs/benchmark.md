@@ -89,7 +89,9 @@ Each mode below is an **independent run** against pre-seeded seats (`PUT /v1/cli
   --events "$WORK/tasks.jsonl" --samples "$WORK/samples.jsonl"
 
 # Mode C: Interactive Poisson sustained driver (against `seed-sustained` DB copy)
-# Reads JSON lines on stdin: stage / pause / resume / stop; supports .jsonl or .jsonl.gz
+# Starts paused; reads one JSON command per line on stdin (supports .jsonl or .jsonl.gz):
+#   {"operation":"stage","stage":"demo","rate":10}
+#   {"operation":"stop"}
 "$WORK/ranking-capacity" sustained \
   --fixture "$WORK/sustained-fixture.json" --models config/models.json \
   --model-seed 1 --arrival-seed 2 --url http://127.0.0.1:4210 \
