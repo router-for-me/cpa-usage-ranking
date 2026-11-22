@@ -127,24 +127,36 @@ docker compose -p cpa-ranking up -d --no-build
 
 ### 离线备份
 
-先正常停止容器并确认退出码为 `0`，再从该容器动态解析并校验实际挂载到 `/data` 的命名卷（避免恢复切换卷后误备旧卷），随后执行归档：
+先正常停止容器并确认其进入 `exited` 状态且退出码为 `0`，动态解析并校验实际挂载到 `/data` 的命名卷（避免恢复切换卷后误备旧卷），先写入临时文件成功后再原子改名：
 
 ```sh
-docker compose -p cpa-ranking stop -t 30 ranking
+docker compose -p cpa-ranking stop -t 30 ranking || exit 1
 CID=$(docker compose -p cpa-ranking ps -aq ranking)
-[ "$(docker inspect --format '{{.State.ExitCode}}' "$CID")" = "0" ] || { echo 'unclean exit'; exit 1; }
-DATA_VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$CID")
-[ -n "$DATA_VOLUME" ] && docker volume inspect "$DATA_VOLUME" >/dev/null || { echo 'missing /data volume'; exit 1; }
+STATE=$(docker inspect --format '{{.State.Status}}:{{.State.ExitCode}}' "$CID")
+[ "$STATE" = "exited:0" ] || { echo "unexpected container state: $STATE"; exit 1; }
+DATA_VOLUME=$(docker inspect \
+  --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' \
+  "$CID")
+[ -n "$DATA_VOLUME" ] && docker volume inspect "$DATA_VOLUME" >/dev/null \
+  || { echo 'missing /data volume'; exit 1; }
 
 umask 077
 BACKUP_DIR="$HOME/cpa-ranking-backups"
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/ranking-data-$(date -u +%Y%m%dT%H%M%SZ).tar"
-docker run --rm --network none \
+TMP_FILE="$BACKUP_FILE.tmp"
+status=0
+if docker run --rm --network none \
   --mount "type=volume,src=$DATA_VOLUME,dst=/data,readonly" \
   --entrypoint /bin/busybox "${RANKING_IMAGE:-cpa-usage-ranking:local}" \
-  tar -C /data -cf - . > "$BACKUP_FILE"
-docker compose -p cpa-ranking start ranking
+  tar -C /data -cf - . > "$TMP_FILE"; then
+  mv "$TMP_FILE" "$BACKUP_FILE"
+else
+  status=$?
+  rm -f "$TMP_FILE"
+fi
+docker compose -p cpa-ranking start ranking || status=$?
+exit "$status"
 ```
 
 ### 离线恢复
@@ -154,7 +166,8 @@ docker compose -p cpa-ranking start ranking
 ```sh
 docker compose -p cpa-ranking stop -t 30 ranking
 BACKUP_FILE=/absolute/path/to/verified-backup.tar
-docker volume inspect cpa-ranking-restored >/dev/null 2>&1 && { echo 'volume already exists'; exit 1; }
+docker volume inspect cpa-ranking-restored >/dev/null 2>&1 \
+  && { echo 'volume already exists'; exit 1; }
 docker volume create cpa-ranking-restored
 docker run --rm -i --network none --user 0:0 \
   --mount type=volume,src=cpa-ranking-restored,dst=/data \

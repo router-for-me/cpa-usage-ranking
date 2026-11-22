@@ -127,24 +127,36 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 ### Offline Backup
 
-Stop the container cleanly, verify exit code `0`, resolve the actual `/data` volume mounted on the container (so backups still target the active volume after any restore), and archive it:
+Stop the container cleanly, verify it reached `exited` with exit code `0`, resolve the actual `/data` volume mounted on the container (so backups still target the active volume after any restore), write to a temporary archive, and rename atomically on success:
 
 ```sh
-docker compose -p cpa-ranking stop -t 30 ranking
+docker compose -p cpa-ranking stop -t 30 ranking || exit 1
 CID=$(docker compose -p cpa-ranking ps -aq ranking)
-[ "$(docker inspect --format '{{.State.ExitCode}}' "$CID")" = "0" ] || { echo 'unclean exit'; exit 1; }
-DATA_VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$CID")
-[ -n "$DATA_VOLUME" ] && docker volume inspect "$DATA_VOLUME" >/dev/null || { echo 'missing /data volume'; exit 1; }
+STATE=$(docker inspect --format '{{.State.Status}}:{{.State.ExitCode}}' "$CID")
+[ "$STATE" = "exited:0" ] || { echo "unexpected container state: $STATE"; exit 1; }
+DATA_VOLUME=$(docker inspect \
+  --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' \
+  "$CID")
+[ -n "$DATA_VOLUME" ] && docker volume inspect "$DATA_VOLUME" >/dev/null \
+  || { echo 'missing /data volume'; exit 1; }
 
 umask 077
 BACKUP_DIR="$HOME/cpa-ranking-backups"
 mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/ranking-data-$(date -u +%Y%m%dT%H%M%SZ).tar"
-docker run --rm --network none \
+TMP_FILE="$BACKUP_FILE.tmp"
+status=0
+if docker run --rm --network none \
   --mount "type=volume,src=$DATA_VOLUME,dst=/data,readonly" \
   --entrypoint /bin/busybox "${RANKING_IMAGE:-cpa-usage-ranking:local}" \
-  tar -C /data -cf - . > "$BACKUP_FILE"
-docker compose -p cpa-ranking start ranking
+  tar -C /data -cf - . > "$TMP_FILE"; then
+  mv "$TMP_FILE" "$BACKUP_FILE"
+else
+  status=$?
+  rm -f "$TMP_FILE"
+fi
+docker compose -p cpa-ranking start ranking || status=$?
+exit "$status"
 ```
 
 ### Offline Restore
@@ -154,7 +166,8 @@ Extract a verified archive into a **new, empty volume** rather than overwriting 
 ```sh
 docker compose -p cpa-ranking stop -t 30 ranking
 BACKUP_FILE=/absolute/path/to/verified-backup.tar
-docker volume inspect cpa-ranking-restored >/dev/null 2>&1 && { echo 'volume already exists'; exit 1; }
+docker volume inspect cpa-ranking-restored >/dev/null 2>&1 \
+  && { echo 'volume already exists'; exit 1; }
 docker volume create cpa-ranking-restored
 docker run --rm -i --network none --user 0:0 \
   --mount type=volume,src=cpa-ranking-restored,dst=/data \
