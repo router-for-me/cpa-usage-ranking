@@ -28,15 +28,25 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 	}
 	mountExact(router, http.MethodPost, "/v1/clients/register/start", RegistrationAdmission(limiter, options.GroupIPv6By64), func(c *gin.Context) {
 		var cpaUUID, returnTo string
-		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"cpa_uuid": &cpaUUID, "return_to": &returnTo})
+		var rawAvatarID *string
+		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"cpa_uuid": &cpaUUID, "return_to": &returnTo}, map[string]**string{"avatar_id": &rawAvatarID})
 		if !ok {
 			return
+		}
+		var avatarID *int64
+		if rawAvatarID != nil {
+			parsed, ok := parsePositiveInt64String(*rawAvatarID)
+			if !ok {
+				writeRegistrationError(c, registration.ErrInvalidRequest)
+				return
+			}
+			avatarID = &parsed
 		}
 		if github == nil {
 			writeRegistrationError(c, registration.ErrRegistrationClosed)
 			return
 		}
-		id, err := service.Start(c.Request.Context(), hash, cpaUUID, returnTo)
+		id, err := service.Start(c.Request.Context(), hash, cpaUUID, returnTo, avatarID)
 		if err != nil {
 			writeRegistrationError(c, err)
 			return
@@ -45,7 +55,7 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 	})
 	mountExact(router, http.MethodPost, "/v1/clients/register/complete", func(c *gin.Context) {
 		var id string
-		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"request_id": &id})
+		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"request_id": &id}, nil)
 		if !ok {
 			return
 		}
@@ -68,7 +78,7 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 	return nil
 }
 
-func registrationInput(c *gin.Context, maxBytes int64, fields map[string]*string) (clients.CredentialHash, bool) {
+func registrationInput(c *gin.Context, maxBytes int64, required map[string]*string, optional map[string]**string) (clients.CredentialHash, bool) {
 	hash, err := auth.BearerHash(c.Request.Header)
 	if err != nil {
 		writeInvalidCredential(c)
@@ -85,14 +95,14 @@ func registrationInput(c *gin.Context, maxBytes int64, fields map[string]*string
 		writeError(c, http.StatusRequestEntityTooLarge, "request_too_large", "Registration body is too large")
 		return hash, false
 	}
-	if err != nil || !decodeRegistrationFields(body, fields) {
+	if err != nil || !decodeRegistrationFields(body, required, optional) {
 		writeRegistrationError(c, registration.ErrInvalidRequest)
 		return hash, false
 	}
 	return hash, true
 }
 
-func decodeRegistrationFields(body []byte, fields map[string]*string) bool {
+func decodeRegistrationFields(body []byte, required map[string]*string, optional map[string]**string) bool {
 	if !utf8.Valid(body) {
 		return false
 	}
@@ -102,20 +112,79 @@ func decodeRegistrationFields(body []byte, fields map[string]*string) bool {
 	}
 	for decoder.More() {
 		tok, err := decoder.Token()
-		key, _ := tok.(string)
-		field := fields[key]
-		var value *string
-		if err != nil || field == nil || decoder.Decode(&value) != nil || value == nil {
+		key, ok := tok.(string)
+		if err != nil || !ok {
 			return false
 		}
-		*field = *value
-		delete(fields, key)
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return false
+		}
+		trimmed := bytes.TrimSpace(raw)
+		var value *string
+		if json.Unmarshal(trimmed, &value) != nil || value == nil || !validUnicodeEscapes(trimmed) {
+			return false
+		}
+		if field, ok := required[key]; ok {
+			*field = *value
+			delete(required, key)
+			continue
+		}
+		if field, ok := optional[key]; ok {
+			v := *value
+			*field = &v
+			delete(optional, key)
+			continue
+		}
+		return false
 	}
-	if tok, err := decoder.Token(); err != nil || tok != json.Delim('}') || len(fields) != 0 {
+	if tok, err := decoder.Token(); err != nil || tok != json.Delim('}') || len(required) != 0 {
 		return false
 	}
 	_, err := decoder.Token()
 	return err == io.EOF
+}
+
+func parsePositiveInt64String(s string) (int64, bool) {
+	if len(s) == 0 || s[0] < '1' || s[0] > '9' {
+		return 0, false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	return v, err == nil && v > 0
+}
+
+// encoding/json replaces unpaired surrogate escapes; reject them instead.
+func validUnicodeEscapes(raw []byte) bool {
+	for i := 1; i+1 < len(raw); i++ {
+		if raw[i] != '\\' {
+			continue
+		}
+		i++
+		if raw[i] != 'u' {
+			continue
+		}
+		code, _ := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
+		i += 4
+		if code >= 0xdc00 && code <= 0xdfff {
+			return false
+		}
+		if code >= 0xd800 && code <= 0xdbff {
+			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
+				return false
+			}
+			low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
+			if err != nil || low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+			i += 6
+		}
+	}
+	return true
 }
 
 func writeRegistrationError(c *gin.Context, err error) {
@@ -123,6 +192,8 @@ func writeRegistrationError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, registration.ErrInvalidRequest):
 		writeError(c, http.StatusBadRequest, "invalid_request", "Invalid registration request")
+	case errors.Is(err, registration.ErrInvalidAvatar):
+		writeError(c, http.StatusUnprocessableEntity, "invalid_avatar", "Invalid avatar selection")
 	case errors.Is(err, registration.ErrWrongCredential):
 		writeInvalidCredential(c)
 	case errors.Is(err, clients.ErrWithdrawn):
