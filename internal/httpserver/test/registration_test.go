@@ -41,6 +41,10 @@ func startBody(uuid, dest string) string {
 	return fmt.Sprintf(`{"cpa_uuid":%q,"return_to":%q}`, uuid, dest)
 }
 
+func startBodyWithAvatar(uuid, dest, avatar string) string {
+	return fmt.Sprintf(`{"cpa_uuid":%q,"return_to":%q,"avatar_id":%q}`, uuid, dest, avatar)
+}
+
 type registrationSettings struct {
 	service   registration.Options
 	requests  registration.RequestLimits
@@ -108,7 +112,7 @@ func newRegistrationFixture(t *testing.T, settings registrationSettings) *regist
 	if err := httpserver.MountAvatars(f.router, catalog, files); err != nil {
 		t.Fatal(err)
 	}
-	f.mountRegistration(t, settings, catalog.DefaultID())
+	f.mountRegistration(t, settings, catalog)
 	// 仅测试异常恢复，生产路由没有该端点。
 	f.router.POST("/test/secret-panic", func(c *gin.Context) { panic(c.GetHeader("Authorization")) })
 	f.server = httptest.NewServer(f.router)
@@ -116,10 +120,10 @@ func newRegistrationFixture(t *testing.T, settings registrationSettings) *regist
 	return f
 }
 
-func (f *registrationFixture) mountRegistration(t *testing.T, settings registrationSettings, avatar int64) {
+func (f *registrationFixture) mountRegistration(t *testing.T, settings registrationSettings, catalog *avatars.Catalog) {
 	t.Helper()
 	var err error
-	f.reg, err = registration.NewService(f.db, avatar, settings.service)
+	f.reg, err = registration.NewService(f.db, catalog, settings.service)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,9 +258,9 @@ func (f *registrationFixture) send(t *testing.T, body, secret string, headers ma
 	return f.api(t, "POST", startPath, body, secret, headers)
 }
 
-func (f *registrationFixture) start(t *testing.T, secret, uuid, dest string) string {
+func (f *registrationFixture) startWithBody(t *testing.T, secret, body string) string {
 	t.Helper()
-	r := f.send(t, startBody(uuid, dest), secret, nil)
+	r := f.send(t, body, secret, nil)
 	var reply struct {
 		RequestID string `json:"request_id"`
 		Authorize string `json:"authorize_url"`
@@ -265,6 +269,11 @@ func (f *registrationFixture) start(t *testing.T, secret, uuid, dest string) str
 		t.Fatalf("unexpected registration start response: %d %s", r.status, r.body)
 	}
 	return reply.RequestID
+}
+
+func (f *registrationFixture) start(t *testing.T, secret, uuid, dest string) string {
+	t.Helper()
+	return f.startWithBody(t, secret, startBody(uuid, dest))
 }
 
 func (f *registrationFixture) register(t *testing.T, secret string, githubID int64, name string) publicIdentity {
@@ -470,5 +479,99 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 	}
 	id := f.start(t, secret, cpaUUID, returnURL)
 	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","cpa_uuid":"`+cpaUUID+`"}`, secret, nil), 400, "invalid_request")
+	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","avatar_id":"42"}`, secret, nil), 400, "invalid_request")
 	requireHTTPError(t, f.complete(t, secret, "bad-id"), 400, "invalid_request")
+}
+
+func TestRegistrationHTTPAvatarSelection(t *testing.T) {
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+
+	// 1. Omitting avatar_id creates a seat with default avatar "1".
+	secretDefault := testSecret(1)
+	idDefault := f.start(t, secretDefault, cpaUUID, returnURL)
+	f.approve(t, idDefault, 100, "Default User", "defaultuser", returnURL)
+	rDefault := f.complete(t, secretDefault, idDefault)
+	seatDefault := identity(t, rDefault)
+	if rDefault.status != 201 || seatDefault.AvatarID != 1 {
+		t.Fatalf("default avatar seat: status=%d %+v", rDefault.status, seatDefault)
+	}
+
+	// 2. Explicit valid avatar_id "42" creates a new seat with avatar "42" and persists it.
+	const otherUUID = "550e8400-e29b-41d4-a716-446655440001"
+	secretCustom := testSecret(2)
+	idCustom := f.startWithBody(t, secretCustom, startBodyWithAvatar(otherUUID, returnURL, "42"))
+	var reqAvatar int64
+	if err := f.db.Reader.QueryRow("SELECT avatar_id FROM registration_requests WHERE id=?", idCustom).Scan(&reqAvatar); err != nil || reqAvatar != 42 {
+		t.Fatalf("persisted registration_requests.avatar_id: %d %v", reqAvatar, err)
+	}
+	f.approve(t, idCustom, 200, "Custom User", "customuser", returnURL)
+	rCustom := f.complete(t, secretCustom, idCustom)
+	seatCustom := identity(t, rCustom)
+	if rCustom.status != 201 || seatCustom.AvatarID != 42 || seatCustom.Name != "Custom User" {
+		t.Fatalf("custom avatar seat: status=%d %+v", rCustom.status, seatCustom)
+	}
+	var dbAvatar int64
+	if err := f.db.Reader.QueryRow("SELECT avatar_id FROM clients WHERE id=?", seatCustom.ID).Scan(&dbAvatar); err != nil || dbAvatar != 42 {
+		t.Fatalf("persisted clients.avatar_id: %d %v", dbAvatar, err)
+	}
+
+	// 3. Second writer for the same (github_id, cpa_uuid) with avatar_id "15" returns 200 and preserves original avatar "42" (Strategy A).
+	secretSecondWriter := testSecret(3)
+	idSecondWriter := f.startWithBody(t, secretSecondWriter, startBodyWithAvatar(strings.ToUpper(otherUUID), returnURL, "15"))
+	f.approve(t, idSecondWriter, 200, "Renamed User", "renameduser", returnURL)
+	rSecondWriter := f.complete(t, secretSecondWriter, idSecondWriter)
+	seatReused := identity(t, rSecondWriter)
+	if rSecondWriter.status != 200 || seatReused.ID != seatCustom.ID || seatReused.AvatarID != 42 || seatReused.Name != "Custom User" {
+		t.Fatalf("second writer modified existing seat: status=%d %+v", rSecondWriter.status, seatReused)
+	}
+}
+
+func TestRegistrationHTTPInvalidAvatarInputs(t *testing.T) {
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	secret := testSecret(1)
+	withRawAvatar := func(rawValue string) string {
+		return fmt.Sprintf(`{"cpa_uuid":%q,"return_to":%q,"avatar_id":%s}`, cpaUUID, returnURL, rawValue)
+	}
+	for _, tc := range []struct {
+		name   string
+		body   string
+		status int
+		code   string
+	}{
+		{"null", withRawAvatar(`null`), 400, "invalid_request"},
+		{"number", withRawAvatar(`1`), 400, "invalid_request"},
+		{"bool", withRawAvatar(`true`), 400, "invalid_request"},
+		{"object", withRawAvatar(`{}`), 400, "invalid_request"},
+		{"array", withRawAvatar(`["1"]`), 400, "invalid_request"},
+		{"empty string", withRawAvatar(`""`), 400, "invalid_request"},
+		{"zero", withRawAvatar(`"0"`), 400, "invalid_request"},
+		{"negative", withRawAvatar(`"-1"`), 400, "invalid_request"},
+		{"plus sign", withRawAvatar(`"+1"`), 400, "invalid_request"},
+		{"leading zero", withRawAvatar(`"01"`), 400, "invalid_request"},
+		{"leading space", withRawAvatar(`" 1"`), 400, "invalid_request"},
+		{"trailing space", withRawAvatar(`"1 "`), 400, "invalid_request"},
+		{"non-numeric", withRawAvatar(`"abc"`), 400, "invalid_request"},
+		{"int64 overflow", withRawAvatar(`"9223372036854775808"`), 400, "invalid_request"},
+		{"duplicate avatar_id", fmt.Sprintf(`{"cpa_uuid":%q,"return_to":%q,"avatar_id":"1","avatar_id":"2"}`, cpaUUID, returnURL), 400, "invalid_request"},
+		{"unpaired surrogate in avatar_id", `{"cpa_uuid":"` + cpaUUID + `","return_to":"` + returnURL + `","avatar_id":"\ud800"}`, 400, "invalid_request"},
+		{"unpaired surrogate in return_to", `{"cpa_uuid":"` + cpaUUID + `","return_to":"http://localhost:8080/\ud800"}`, 400, "invalid_request"},
+		{"unlisted 67", withRawAvatar(`"67"`), 422, "invalid_avatar"},
+		{"unlisted 999", withRawAvatar(`"999"`), 422, "invalid_avatar"},
+		{"unlisted max int64", withRawAvatar(`"9223372036854775807"`), 422, "invalid_avatar"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requireHTTPError(t, f.send(t, tc.body, secret, nil), tc.status, tc.code)
+		})
+	}
+	var n int
+	if err := f.db.Reader.QueryRow("SELECT count(*) FROM registration_requests").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("invalid avatar requests allocated state: %d %v", n, err)
+	}
+
+	// Closed registration returns 503 for syntactically valid unlisted avatar, but 400 for malformed avatar.
+	closedSettings := defaultRegistrationSettings()
+	closedSettings.service.Enabled = false
+	closed := newRegistrationFixture(t, closedSettings)
+	requireHTTPError(t, closed.send(t, withRawAvatar(`"999"`), secret, nil), 503, "registration_closed")
+	requireHTTPError(t, closed.send(t, withRawAvatar(`"0"`), secret, nil), 400, "invalid_request")
 }

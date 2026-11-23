@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 import { withTestDatabase } from './database-fixtures'
 import { oauthOrigin } from './test-paths'
@@ -88,4 +89,40 @@ test('registers and safely retries against the real binary without adding accoun
   await page.reload()
   await expect(page.getByText('Browser 🙂')).toBeVisible()
   await expect(page.getByRole('button', { name: /Sign up|Sign in|注册|登录/ })).toHaveCount(0)
+})
+
+test('registers a new seat with an explicit catalog avatar_id and rejects unknown IDs', async ({ request }) => {
+  const secret = randomBytes(32).toString('base64url')
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` }
+  const returnTo = 'http://localhost:8080/settings?tab=ranking'
+
+  const invalid = await request.post(start, {
+    headers,
+    data: { cpa_uuid: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '999' },
+  })
+  expect(invalid.status()).toBe(422)
+  expect(await invalid.json()).toEqual({ error: { code: 'invalid_avatar', message: 'Invalid avatar selection' } })
+
+  const started = await request.post(start, {
+    headers,
+    data: { cpa_uuid: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '42' },
+  })
+  expect(started.status()).toBe(200)
+  const { request_id: requestID } = await started.json() as { request_id: string }
+
+  const auth = await request.get(`/auth/github/authorize?request_id=${requestID}`, { maxRedirects: 0 })
+  expect(auth.status()).toBe(302)
+
+  const approved = withTestDatabase((db) => db.prepare(`UPDATE registration_requests SET stage='approved',
+    github_id=(SELECT coalesce(max(github_id),0)+1 FROM clients),display_name='Custom Avatar',
+    state=NULL,browser_hash=NULL,verifier=NULL WHERE id=? AND stage='authorizing'`).run(requestID).changes)
+  expect(approved).toBe(1)
+
+  const completed = await request.post(complete, { headers, data: { request_id: requestID } })
+  expect(completed.status()).toBe(201)
+  expect(await completed.json()).toEqual({
+    avatar_id: '42',
+    client_id: expect.stringMatching(/^\d+$/),
+    display_name: 'Custom Avatar',
+  })
 })
