@@ -125,4 +125,17 @@ func TestClientSchemaEnforcesCredentialAndStateShape(t *testing.T) {
 	if queryInt(t, db.Reader, "SELECT COUNT(*) FROM clients") != 1 || queryInt(t, db.Reader, "SELECT COUNT(*) FROM client_writers") != 0 {
 		t.Fatal("failed inserts left rows")
 	}
+	const insertReq = `INSERT INTO registration_requests(id,token_hash,server_id,return_to,avatar_id,expires_at_ms,stage) VALUES(?,?,?,?,?,1,'pending')`
+	hash := make([]byte, 32)
+	if _, err := db.Writer.Exec(insertReq, "valid-req", hash, serverID, "https://app.example/cb", 42); err != nil {
+		t.Fatal(err)
+	}
+	for _, avatar := range []any{nil, 0, -1, "nonnumeric", 1.5} {
+		if _, err := db.Writer.Exec(insertReq, "bad-req", hash, serverID, "https://app.example/cb", avatar); err == nil {
+			t.Fatalf("invalid registration_requests.avatar_id %#v persisted", avatar)
+		}
+	}
+	if queryInt(t, db.Reader, "SELECT COUNT(*) FROM registration_requests") != 1 {
+		t.Fatal("failed registration_requests inserts left rows")
+	}
 }

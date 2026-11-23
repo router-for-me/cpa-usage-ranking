@@ -16,12 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"cpa-usage-ranking/internal/avatars"
 	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/storage"
 )
 
 var (
 	ErrInvalidRequest     = errors.New("invalid registration request")
+	ErrInvalidAvatar      = errors.New("invalid avatar selection")
 	ErrWrongCredential    = errors.New("registration credential mismatch")
 	ErrRegistrationClosed = errors.New("new registration is closed")
 	ErrExpired            = errors.New("registration request expired")
@@ -51,20 +53,20 @@ func DefaultOptions() Options {
 }
 
 type Service struct {
-	reader   *sql.DB
-	writer   *sql.DB
-	avatarID int64
-	options  Options
+	reader  *sql.DB
+	writer  *sql.DB
+	catalog *avatars.Catalog
+	options Options
 }
 
-func NewService(db *storage.DB, defaultAvatarID int64, options Options) (*Service, error) {
-	if db == nil || db.Reader == nil || db.Writer == nil || defaultAvatarID <= 0 || options.TTL < time.Millisecond || options.Capacity <= 0 {
+func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Service, error) {
+	if db == nil || db.Reader == nil || db.Writer == nil || catalog == nil || catalog.DefaultID() <= 0 || options.TTL < time.Millisecond || options.Capacity <= 0 {
 		return nil, fmt.Errorf("invalid registration options")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Service{reader: db.Reader, writer: db.Writer, avatarID: defaultAvatarID, options: options}, nil
+	return &Service{reader: db.Reader, writer: db.Writer, catalog: catalog, options: options}, nil
 }
 
 func opaqueToken() string {
@@ -105,13 +107,20 @@ func httpURL(raw string) (*url.URL, bool) {
 	return u, true
 }
 
-// Start 固定 server_id、原样返回地址和凭据摘要，不创建设席或上报端。
-func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, serverID, returnTo string) (string, error) {
+// Start 固定 server_id、原样返回地址、所选头像和凭据摘要，不创建席位或上报端。
+func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, serverID, returnTo string, avatarID *int64) (string, error) {
 	if _, valid := httpURL(returnTo); !valid || !serverIDPattern.MatchString(serverID) || serverID == "00000000-0000-0000-0000-000000000000" {
 		return "", ErrInvalidRequest
 	}
 	if !s.options.Enabled {
 		return "", ErrRegistrationClosed
+	}
+	resolvedAvatarID := s.catalog.DefaultID()
+	if avatarID != nil {
+		resolvedAvatarID = *avatarID
+		if _, ok := s.catalog.Lookup(resolvedAvatarID); !ok {
+			return "", ErrInvalidAvatar
+		}
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -132,8 +141,8 @@ func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, server
 		return "", &LimitError{Code: "registration_capacity", RetryAfter: time.UnixMilli(firstExpiry).Sub(now)}
 	}
 	id := opaqueToken()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,server_id,return_to,expires_at_ms,stage)
-		VALUES(?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(serverID), returnTo, now.Add(s.options.TTL).UnixMilli()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,server_id,return_to,avatar_id,expires_at_ms,stage)
+		VALUES(?,?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(serverID), returnTo, resolvedAvatarID, now.Add(s.options.TTL).UnixMilli()); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -155,13 +164,14 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	var now time.Time
 	var expiry int64
 	var stage, serverID string
+	var avatarID int64
 	var githubID sql.NullInt64
 	var name sql.NullString
 	checkRequest := func(queryRow func(context.Context, string, ...any) *sql.Row) (Result, error) {
 		var savedHash []byte
 		var clientID sql.NullInt64
-		err := queryRow(ctx, `SELECT token_hash,expires_at_ms,stage,server_id,github_id,display_name,client_id
-			FROM registration_requests WHERE id=?`, id).Scan(&savedHash, &expiry, &stage, &serverID, &githubID, &name, &clientID)
+		err := queryRow(ctx, `SELECT token_hash,expires_at_ms,stage,server_id,avatar_id,github_id,display_name,client_id
+			FROM registration_requests WHERE id=?`, id).Scan(&savedHash, &expiry, &stage, &serverID, &avatarID, &githubID, &name, &clientID)
 		if errors.Is(err, sql.ErrNoRows) {
 			// 过期清理后的编号与未签发编号不可区分，也没有额外的找回入口。
 			return Result{}, ErrExpired
@@ -222,7 +232,7 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 		return Result{}, ErrRegistrationClosed
 	}
 	if newSeat {
-		seat = clients.Client{DisplayName: name.String, AvatarID: s.avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
+		seat = clients.Client{DisplayName: name.String, AvatarID: avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
 		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms)
 			VALUES(?,?,?,?,?) RETURNING id`, githubID.Int64, serverID, seat.DisplayName, seat.AvatarID, now.UnixMilli()).Scan(&seat.ID)
 		if err != nil {
