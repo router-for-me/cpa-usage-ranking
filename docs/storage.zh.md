@@ -28,7 +28,7 @@
 | --- | --- |
 | `clients` | 自增正整数 `id`；唯一席位 `(github_id, cpa_uuid)`；`display_name`、`avatar_id`、`created_at_ms`；独立的 `disabled`、`ranking_hidden`、`withdrawn` 标志 |
 | `client_writers` | `(id, client_id)` 与全局唯一 32 字节 `SHA-256` `token_hash`（不存凭据原文，不跨席位改绑） |
-| `registration_requests` | `WITHOUT ROWID`（主键 `id`）；有界 `10m` OAuth 请求（最多 `2,000` 笔未过期），保存 `cpa_uuid`、`return_to`、摘要、state/PKCE 与过期前保留的完成结果 |
+| `registration_requests` | `WITHOUT ROWID`（主键 `id`）；有界 `10m` OAuth 请求（最多 `2,000` 笔未过期），保存 `cpa_uuid`、`return_to`、`avatar_id`、摘要、state/PKCE 与过期前保留的完成结果 |
 | `models` | 稳定正整数 ID 与唯一标准模型名映射（ID `0` 保留给内部总计；别名与价格不入库） |
 | `daily_reports` | `WITHOUT ROWID`（主键 `(day, client_id)`）；席位单日父表（记录 `received_at_ms`），日结删除时级联清理版本与统计行 |
 | `daily_writer_versions` | `WITHOUT ROWID`（主键 `(day, writer_id)`）；各上报端最新 `revision` 与 32 字节内容摘要 |

@@ -10,7 +10,7 @@
 
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA UUID 与 `return_to`，获取 `request_id` 和 `authorize_url` |
+| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA UUID、`return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | 同一 `Bearer <secret>` | GitHub 授权后完成注册 |
 | `POST` | `/v1/clients/withdraw` | 已注册的 `Bearer <secret>` | 退出整个席位（空请求体、无查询参数） |
 | `PUT` | `/v1/clients/report/{utc_day}` | 已注册的 `Bearer <secret>` | 原子替换该席位某个 UTC 日的完整累计快照 |
@@ -49,7 +49,7 @@ sequenceDiagram
     participant R as Ranking 服务端
     participant G as GitHub
     Note over C: 本地生成并持久化 32 字节 Bearer 凭据
-    C->>R: POST /v1/clients/register/start（cpa_uuid、return_to、Bearer）
+    C->>R: POST /v1/clients/register/start（cpa_uuid、return_to、avatar_id?、Bearer）
     R-->>C: 200 {request_id, authorize_url}（此时未建立席位）
     C->>B: 打开完整 authorize_url
     B->>R: GET /auth/github/authorize
@@ -72,12 +72,14 @@ Content-Type: application/json
 
 {
   "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "return_to": "http://localhost:3001/settings?tab=ranking#status"
+  "return_to": "http://localhost:3001/settings?tab=ranking#status",
+  "avatar_id": "12"
 }
 ```
 
 - `cpa_uuid`：由 CPA 实例提供的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写）。同一 CPA 实例下的多个采集端须提交相同 UUID，不要各自随机生成。
 - `return_to`：不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
+- `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`），须存在于 `GET /avatars/catalog.json` 目录中。省略时默认使用目录的 `default_avatar_id`（`"1"`）。类型或格式错误（如 `null`、JSON 数字、`""`、`"0"`、前导零）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
 - `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（固定 10 分钟有效），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
 
 #### 第二步：浏览器授权
@@ -103,12 +105,12 @@ Content-Type: application/json
 成功响应（`client_id` 与 `avatar_id` 均为正 64 位整数的十进制字符串）：
 
 ```json
-{"client_id": "42", "display_name": "Alice", "avatar_id": "1"}
+{"client_id": "42", "display_name": "Alice", "avatar_id": "12"}
 ```
 
 **席位归属、资料与恢复规则：**
 - **席位主键**：由 **`(GitHub 数字用户 ID, CPA UUID)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
-- **初始资料**：新席位取 GitHub `name`（无效或为空时回退至截断后的 `login`），经 Unicode NFKC 规范化与去首尾空白处理，要求 `1`–`32` 码点、`≤128` UTF-8 字节、含可见内容且不含控制或双向控制字符。允许重名，展示时按纯文本转义渲染。头像默认采用目录默认项（不同步 GitHub 头像，无资料修改接口）。
+- **初始资料**：新建席位（`201 Created`）取 GitHub `name`（无效或为空时回退至截断后的 `login`），经 Unicode NFKC 规范化与去首尾空白处理，要求 `1`–`32` 码点、`≤128` UTF-8 字节、含可见内容且不含控制或双向控制字符，并保存 `start` 传入的 `avatar_id`（未传则取目录默认项）。复用已有席位（`200 OK`）时保持原昵称与头像不变。允许重名，展示时按纯文本转义渲染；不同步 GitHub 头像，也无注册后资料修改接口。
 - **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，未过期前用原 `request_id` 和原凭据重试，过期后保留**原凭据**重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 CPA UUID）。
 - **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；在原请求过期前重试同一 `request_id` 仍会返回 `500 internal_error`（过期后返回 `410 registration_request_expired`）。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权。
 - **封禁、退出与撤销授权**：`disabled`（管理员封禁）无法由客户端通过重试或重新授权解除，但可由管理员解封；`withdrawn`（主动退出）为永久状态，客户端与管理员均不可恢复。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
@@ -246,13 +248,15 @@ SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
 CPA_UUID='替换为当前 CPA 实例的持久 UUID'
 
-# 2. 开始注册；保存返回的 request_id，并在浏览器打开 authorize_url
+# 2. 开始注册（avatar_id 可选，省略则使用目录默认头像）
+#    保存返回的 request_id，并在浏览器打开 authorize_url
 curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{
     \"cpa_uuid\": \"$CPA_UUID\",
-    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\"
+    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\",
+    \"avatar_id\": \"12\"
   }"
 
 # 3. 在 GitHub 同意授权后完成注册；加 -i 以便查看空体 202 + Retry-After 或 200/201
@@ -300,7 +304,7 @@ GET /v1/leaderboards/{board}/{period}
 
 ### 头像清单与图片
 
-- `GET /avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`（清单中 `avatar_id` 为 JSON 整数，注册与榜单响应中为十进制字符串）。
+- `GET /avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`。客户端可据此渲染注册头像选择器并默认选中 `default_avatar_id`；注意清单中 `avatar_id` 为 JSON 整数，提交给 `POST /v1/clients/register/start` 时须转为十进制字符串（与注册、榜单响应格式一致）。
 - 将 `path` 相对 `/avatars/` 解析（例如 `/avatars/images/001.webp`），通过 `GET` 获取 `image/webp` 二进制图片或 `HEAD` 检查响应头，切勿按 ID 自行拼接路径。清单和图片均支持 `ETag` 条件请求（`304 Not Modified`）。详见[模型、头像与品牌资源目录](catalogs.zh.md#头像目录)。
 
 ### 完成标志与非保证边界
@@ -327,6 +331,7 @@ GET /v1/leaderboards/{board}/{period}
 | --- | --- | --- |
 | `202` | —（含 `Retry-After` 头） | 等待浏览器授权；按间隔用原 `request_id` 与原 Bearer 重试 `complete` |
 | `400` / `422` | `invalid_request`、`invalid_source`<br>`invalid_parameter`、`invalid_day`<br>`invalid_report`、`too_many_items` | 修正参数或正文，不要原样无限重试 |
+| `422` | `invalid_avatar` | 所选 `avatar_id` 不在 `/avatars/catalog.json` 目录中，刷新目录后重新选择 |
 | `401` | `invalid_credential`<br>（含 `WWW-Authenticate: Bearer`） | 检查入口、凭据与注册状态，不要自动重生成新凭据 |
 | `403` | `github_authorization_denied` | 用户拒绝授权，停止流程且不自动再次拉起授权 |
 | `403` | `client_disabled` | 席位已被管理员封禁，停止上报并联系部署者 |

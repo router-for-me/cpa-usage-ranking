@@ -30,7 +30,7 @@
 
 | 步骤 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `cpa_uuid` 与 `return_to`，获取 `authorize_url` |
+| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `cpa_uuid`、`return_to` 与可选 `avatar_id`，获取 `authorize_url` |
 | 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权） |
 | 上报日快照 | `PUT /v1/clients/report/{utc_day}` | 已注册 `Bearer` | 原子替换席位在 UTC 今日/昨日的完整累计快照 |
 | 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席永久退出（`204`，空请求体） |

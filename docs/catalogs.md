@@ -24,7 +24,7 @@ The server loads `config/models.json` (or the path set in `RANKING_MODELS_PATH`)
 
 ## Avatar Catalog
 
-The binary embeds `internal/avatars/assets/catalog.json` and 66 static `128×128` WebP images (`images/001.webp`–`images/066.webp`, default ID `1`; see [asset provenance](../internal/avatars/assets/PROVENANCE.md)). No external directory is needed at runtime, and there are no user uploads or avatar-selection APIs.
+The binary embeds `internal/avatars/assets/catalog.json` and 66 static `128×128` WebP images (`images/001.webp`–`images/066.webp`, default ID `1`; see [asset provenance](../internal/avatars/assets/PROVENANCE.md)). No external directory is needed at runtime. Clients fetch `/avatars/catalog.json` to render a registration avatar picker and pass an optional decimal-string `avatar_id` to [`POST /v1/clients/register/start`](integration.md#step-1-start-registration); there are no custom image uploads or post-registration avatar-change APIs.
 
 ### Public HTTP Endpoints
 

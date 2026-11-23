@@ -24,7 +24,7 @@
 
 ## 头像目录
 
-服务端二进制内置 `internal/avatars/assets/catalog.json` 与 66 张 `128×128` WebP 静态头像（`images/001.webp`–`images/066.webp`，默认 ID 为 `1`，来源说明见 [PROVENANCE.md](../internal/avatars/assets/PROVENANCE.md)）。运行时无需外部目录，不提供用户上传或头像切换 API。
+服务端二进制内置 `internal/avatars/assets/catalog.json` 与 66 张 `128×128` WebP 静态头像（`images/001.webp`–`images/066.webp`，默认 ID 为 `1`，来源说明见 [PROVENANCE.md](../internal/avatars/assets/PROVENANCE.md)）。运行时无需外部目录；客户端可读取 `/avatars/catalog.json` 渲染注册头像选择器，并在 [`POST /v1/clients/register/start`](integration.zh.md#第一步开始注册start) 提交可选的十进制字符串 `avatar_id`（不支持自定义上传或注册后修改头像）。
 
 ### 公开 HTTP 接口
 

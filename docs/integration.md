@@ -10,7 +10,7 @@ All paths are relative to the deployment's HTTPS origin (for example `https://ra
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA UUID and `return_to`; receive `request_id` and `authorize_url` |
+| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA UUID, `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization |
 | `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat (empty body, no query parameters) |
 | `PUT` | `/v1/clients/report/{utc_day}` | Registered `Bearer <secret>` | Atomically replace the seat's full cumulative snapshot for one UTC day |
@@ -49,7 +49,7 @@ sequenceDiagram
     participant R as Ranking Server
     participant G as GitHub
     Note over C: Generate & persist 32-byte Bearer secret locally
-    C->>R: POST /v1/clients/register/start (cpa_uuid, return_to, Bearer)
+    C->>R: POST /v1/clients/register/start (cpa_uuid, return_to, avatar_id?, Bearer)
     R-->>C: 200 {request_id, authorize_url} (no seat yet)
     C->>B: Open authorize_url
     B->>R: GET /auth/github/authorize
@@ -72,12 +72,14 @@ Content-Type: application/json
 
 {
   "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "return_to": "http://localhost:3001/settings?tab=ranking#status"
+  "return_to": "http://localhost:3001/settings?tab=ranking#status",
+  "avatar_id": "12"
 }
 ```
 
 - `cpa_uuid`: Persistent, nonzero `8-4-4-4-12` hex UUID supplied by the CPA instance (case-insensitive). Multiple collectors reporting for the same CPA instance must submit its shared UUID rather than inventing independent UUIDs.
 - `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
+- `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) matching an entry in `GET /avatars/catalog.json`. Omit to use the catalog's `default_avatar_id` (`"1"`). Malformed types/values (`null`, JSON number, `""`, `"0"`, leading zeros) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
 - `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (fixed 10-minute lifetime) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
 
 #### Step 2: Browser Authorization
@@ -103,12 +105,12 @@ Content-Type: application/json
 Success response (`client_id` and `avatar_id` are positive int64 decimal strings):
 
 ```json
-{"client_id": "42", "display_name": "Alice", "avatar_id": "1"}
+{"client_id": "42", "display_name": "Alice", "avatar_id": "12"}
 ```
 
 **Seat identity, profile, and recovery rules:**
 - **Seat key**: Uniquely identified by **`(GitHub numeric user ID, CPA UUID)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
-- **Initial profile**: New seats normalize GitHub `name` (falling back to truncated `login`) using Unicode NFKC, outer whitespace trimming, `1`–`32` code points / `≤128` UTF-8 bytes, visible content required, and no control or bidi characters. Duplicate names are allowed; always render `display_name` as escaped plain text. Avatars default to the catalog default (no GitHub avatar sync or profile-edit API).
+- **Initial profile**: New seats (`201 Created`) normalize GitHub `name` (falling back to truncated `login`) using Unicode NFKC, outer whitespace trimming, `1`–`32` code points / `≤128` UTF-8 bytes, visible content required, and no control or bidi characters, and save the `avatar_id` submitted in `start` (or the catalog default when omitted). Reusing an existing seat (`200 OK`) keeps its existing display name and avatar unchanged. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or post-registration profile-edit API.
 - **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry; after expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and CPA UUID.
 - **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` until expiry (and `410 registration_request_expired` afterward). Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again.
 - **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. A `withdrawn` seat is permanent and cannot be restored by clients or admins. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
@@ -246,13 +248,15 @@ SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
 CPA_UUID='replace-with-your-cpa-instance-uuid'
 
-# 2. Start registration; save request_id and open authorize_url in a browser
+# 2. Start registration (avatar_id is optional; omit to use the catalog default)
+#    Save request_id and open authorize_url in a browser
 curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{
     \"cpa_uuid\": \"$CPA_UUID\",
-    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\"
+    \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\",
+    \"avatar_id\": \"12\"
   }"
 
 # 3. After approving in GitHub, complete with -i to inspect 202 + Retry-After or 200/201
@@ -300,7 +304,7 @@ GET /v1/leaderboards/{board}/{period}
 
 ### Fetching Avatars
 
-- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}` (`avatar_id` is a JSON integer here, whereas registration/leaderboard responses encode it as a decimal string).
+- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`. Use it to render a registration avatar picker with `default_avatar_id` preselected; note `avatar_id` is a JSON integer in the catalog and must be converted to a decimal string when sent in `POST /v1/clients/register/start` (matching registration and leaderboard responses).
 - Resolve each `path` relative to `/avatars/` (for example `/avatars/images/001.webp`) and request with `GET` (`Content-Type: image/webp`, binary WebP) or `HEAD`. Do not guess image paths from IDs. Both catalog and image endpoints support `ETag` conditional requests (`304 Not Modified`). See [Model, Avatar, and Brand Catalogs](catalogs.md#avatar-catalog).
 
 ### Completion Signals vs. Non-Guarantees
@@ -327,6 +331,7 @@ Business API errors use the JSON envelope below. Branch on HTTP status and `erro
 | --- | --- | --- |
 | `202` | — (`Retry-After` header) | Registration pending browser approval; retry `complete` with same `request_id` and Bearer |
 | `400` / `422` | `invalid_request`, `invalid_source`<br>`invalid_parameter`, `invalid_day`<br>`invalid_report`, `too_many_items` | Fix request payload or path; do not retry unchanged |
+| `422` | `invalid_avatar` | Submitted `avatar_id` is not in `/avatars/catalog.json`; refresh the catalog and choose a valid ID |
 | `401` | `invalid_credential`<br>(`WWW-Authenticate: Bearer`) | Verify origin, Bearer secret, and registration state; do not auto-generate a new secret |
 | `403` | `github_authorization_denied` | User denied authorization; stop and do not auto-restart OAuth |
 | `403` | `client_disabled` | Seat banned by admin; stop reporting and contact the operator |

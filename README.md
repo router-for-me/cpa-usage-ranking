@@ -30,7 +30,7 @@ Clients integrate over standard **HTTPS + uncompressed UTF-8 JSON**, with no SDK
 
 | Step | Endpoint | Auth | Purpose |
 | --- | --- | --- | --- |
-| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `cpa_uuid` and `return_to`; receive `authorize_url` |
+| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `cpa_uuid`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
 | Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending) |
 | Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | Registered `Bearer` | Atomically replace the seat's full UTC today/yesterday snapshot |
 | Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Permanently withdraw the entire seat (`204`, empty body) |
