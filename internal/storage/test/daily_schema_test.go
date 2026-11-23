@@ -13,7 +13,7 @@ func TestDailySnapshotSchemaKeysAndIsolation(t *testing.T) {
 	if err := storage.InitSchema(context.Background(), db.Writer); err != nil {
 		t.Fatal(err)
 	}
-	execSQL(t, db.Writer, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES
+	execSQL(t, db.Writer, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms) VALUES
 		(1,'550e8400-e29b-41d4-a716-446655440000','one',1,0),(2,'550e8400-e29b-41d4-a716-446655440000','two',1,0);
 		INSERT INTO client_writers(id,client_id,token_hash) VALUES(1,1,randomblob(32)),(2,2,randomblob(32)),(3,1,randomblob(32));
 		INSERT INTO models(model_name) VALUES('model');

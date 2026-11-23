@@ -25,7 +25,7 @@ func TestConcurrentStartsCannotExceedOutstandingCapacity(t *testing.T) {
 	for i := range 16 {
 		wg.Go(func() {
 			svc := []*registration.Service{one, two}[i%2]
-			if _, err := svc.Start(ctx, digest(byte(i+1)), uuid, returnTo); err == nil {
+			if _, err := svc.Start(ctx, digest(byte(i+1)), serverID, returnTo, nil); err == nil {
 				admitted.Add(1)
 			} else {
 				requireLimit(t, err, "registration_capacity", 2*time.Minute)
@@ -38,7 +38,7 @@ func TestConcurrentStartsCannotExceedOutstandingCapacity(t *testing.T) {
 	}
 	counts(t, db, 0, 0, 3)
 	now = now.Add(opts.TTL)
-	if _, err := two.Start(ctx, digest(99), uuid, returnTo); err != nil {
+	if _, err := two.Start(ctx, digest(99), serverID, returnTo, nil); err != nil {
 		t.Fatalf("expired requests didn't free capacity: %v", err)
 	}
 	counts(t, db, 0, 0, 1)
@@ -49,7 +49,7 @@ func TestRegistrationDoesNotCapSuccessfulSeatsPerGitHubUser(t *testing.T) {
 	db, svc := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	for i, suffix := range "123456789abc" {
 		hash := digest(byte(i))
-		id, err := svc.Start(ctx, hash, uuid[:35]+string(suffix), returnTo)
+		id, err := svc.Start(ctx, hash, serverID[:35]+string(suffix), returnTo, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,20 +64,23 @@ func TestRegistrationDoesNotCapSuccessfulSeatsPerGitHubUser(t *testing.T) {
 func TestFailedStartsDoNotAllocateRequests(t *testing.T) {
 	ctx := context.Background()
 	db, svc := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
-	if _, err := svc.Start(ctx, digest(1), "bad", returnTo); !errors.Is(err, registration.ErrInvalidRequest) {
+	if _, err := svc.Start(ctx, digest(1), "bad", returnTo, nil); !errors.Is(err, registration.ErrInvalidRequest) {
+		t.Fatal(err)
+	}
+	if _, err := svc.Start(ctx, digest(1), serverID, returnTo, avatarPtr(999)); !errors.Is(err, registration.ErrInvalidAvatar) {
 		t.Fatal(err)
 	}
 	if _, err := db.Writer.Exec(`CREATE TRIGGER reject_request BEFORE INSERT ON registration_requests BEGIN SELECT RAISE(ABORT, 'test failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Start(ctx, digest(1), uuid, returnTo); err == nil {
+	if _, err := svc.Start(ctx, digest(1), serverID, returnTo, nil); err == nil {
 		t.Fatal("failed request was confirmed")
 	}
 	counts(t, db, 0, 0, 0)
 	if _, err := db.Writer.Exec(`DROP TRIGGER reject_request`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Start(ctx, digest(1), uuid, returnTo); err != nil {
+	if _, err := svc.Start(ctx, digest(1), serverID, returnTo, nil); err != nil {
 		t.Fatal(err)
 	}
 	counts(t, db, 0, 0, 1)

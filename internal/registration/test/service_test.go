@@ -5,21 +5,32 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/avatars"
 	"cpa-usage-ranking/internal/clients"
 	"cpa-usage-ranking/internal/registration"
 	"cpa-usage-ranking/internal/storage"
 )
 
-const uuid = "550e8400-e29b-41d4-a716-446655440000"
+const serverID = "550e8400-e29b-41d4-a716-446655440000"
 const returnTo = "http://localhost:8080/settings"
 
-func open(t *testing.T, path string, options registration.Options) (*storage.DB, *registration.Service) {
+func builtinCatalog(t *testing.T) *avatars.Catalog {
+	t.Helper()
+	catalog, err := avatars.Load(avatars.BuiltinFS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func openWithCatalog(t *testing.T, path string, catalog *avatars.Catalog, options registration.Options) (*storage.DB, *registration.Service) {
 	t.Helper()
 	db, err := storage.Open(context.Background(), path)
 	if err != nil {
@@ -29,12 +40,19 @@ func open(t *testing.T, path string, options registration.Options) (*storage.DB,
 	if err := storage.InitSchema(context.Background(), db.Writer); err != nil {
 		t.Fatal(err)
 	}
-	service, err := registration.NewService(db, 1, options)
+	service, err := registration.NewService(db, catalog, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return db, service
 }
+
+func open(t *testing.T, path string, options registration.Options) (*storage.DB, *registration.Service) {
+	t.Helper()
+	return openWithCatalog(t, path, builtinCatalog(t), options)
+}
+
+func avatarPtr(id int64) *int64 { return &id }
 
 func digest(i byte) clients.CredentialHash { return clients.CredentialHash{i} }
 
@@ -63,7 +81,7 @@ func TestConcurrentSafeRetriesAcrossIndependentSQLitePools(t *testing.T) {
 	services := []*registration.Service{one, two}
 	for i, service := range services {
 		var err error
-		ids[i], err = service.Start(ctx, digest(byte(i+1)), uuid, returnTo)
+		ids[i], err = service.Start(ctx, digest(byte(i+1)), serverID, returnTo, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,11 +120,11 @@ func TestConcurrentSafeRetriesAcrossIndependentSQLitePools(t *testing.T) {
 func TestReadOnlyRegistrationWhileWriterBusy(t *testing.T) {
 	db, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	hash := digest(1)
-	pending, err := s.Start(t.Context(), hash, uuid, returnTo)
+	pending, err := s.Start(t.Context(), hash, serverID, returnTo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := s.Start(t.Context(), hash, uuid, returnTo)
+	completed, err := s.Start(t.Context(), hash, serverID, returnTo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +175,7 @@ func TestCallbackDisconnectStillRecordsOutcome(t *testing.T) {
 	}{{"identity received", true}, {"identity not received", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
-			id, err := s.Start(t.Context(), digest(1), uuid, returnTo)
+			id, err := s.Start(t.Context(), digest(1), serverID, returnTo, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -200,7 +218,7 @@ func TestCallbackDisconnectStillRecordsOutcome(t *testing.T) {
 func TestDatabaseFailureAndCancellationLeaveNoPartialIdentity(t *testing.T) {
 	db, service := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	ctx := context.Background()
-	id, err := service.Start(ctx, digest(1), uuid, returnTo)
+	id, err := service.Start(ctx, digest(1), serverID, returnTo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,6 +241,158 @@ func TestDatabaseFailureAndCancellationLeaveNoPartialIdentity(t *testing.T) {
 	counts(t, db, 0, 0, 1)
 	if result, err := service.Complete(ctx, digest(1), id); err != nil || !result.Created {
 		t.Fatalf("retry after rollback: %+v %v", result, err)
+	}
+	counts(t, db, 1, 1, 1)
+}
+
+func TestNewServiceRequiresValidCatalog(t *testing.T) {
+	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "registration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := registration.NewService(db, nil, registration.DefaultOptions()); err == nil {
+		t.Fatal("nil catalog accepted")
+	}
+	if _, err := registration.NewService(db, &avatars.Catalog{}, registration.DefaultOptions()); err == nil {
+		t.Fatal("uninitialized catalog accepted")
+	}
+}
+
+func TestRegistrationAvatarSelectionAndExistingSeatPreservation(t *testing.T) {
+	ctx := context.Background()
+	db, svc := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
+
+	// Omitting avatar_id uses the catalog default (1).
+	defaultID, err := svc.Start(ctx, digest(1), serverID, returnTo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, db, defaultID)
+	defaultSeat, err := svc.Complete(ctx, digest(1), defaultID)
+	if err != nil || !defaultSeat.Created || defaultSeat.Client.AvatarID != 1 {
+		t.Fatalf("default avatar seat: %+v %v", defaultSeat, err)
+	}
+
+	// Explicit valid non-default avatar_id (66) applies to a new seat.
+	const otherServerID = "550e8400-e29b-41d4-a716-446655440001"
+	customID, err := svc.Start(ctx, digest(2), otherServerID, returnTo, avatarPtr(66))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, db, customID)
+	customSeat, err := svc.Complete(ctx, digest(2), customID)
+	if err != nil || !customSeat.Created || customSeat.Client.AvatarID != 66 || customSeat.Client.DisplayName != "GitHub User" {
+		t.Fatalf("custom avatar seat: %+v %v", customSeat, err)
+	}
+
+	// Second writer for the same (github_id, server_id) with a different avatar_id preserves the existing seat (Strategy A).
+	secondWriterID, err := svc.Start(ctx, digest(3), otherServerID, returnTo, avatarPtr(15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='Different Name' WHERE id=?`, secondWriterID); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := svc.Complete(ctx, digest(3), secondWriterID)
+	if err != nil || reused.Created || reused.Client.ID != customSeat.Client.ID || reused.Client.AvatarID != 66 || reused.Client.DisplayName != "GitHub User" {
+		t.Fatalf("existing seat profile mutated: %+v %v", reused, err)
+	}
+	counts(t, db, 2, 3, 3)
+}
+
+func TestRegistrationAvatarValidationAndLargeCatalogIDs(t *testing.T) {
+	ctx := context.Background()
+	db, svc := open(t, filepath.Join(t.TempDir(), "invalid-avatar.db"), registration.DefaultOptions())
+	for _, invalid := range []int64{-1, 0, 67, 999} {
+		if _, err := svc.Start(ctx, digest(1), serverID, returnTo, avatarPtr(invalid)); !errors.Is(err, registration.ErrInvalidAvatar) {
+			t.Fatalf("avatar %d: got %v, want ErrInvalidAvatar", invalid, err)
+		}
+	}
+	counts(t, db, 0, 0, 0)
+
+	// Closed registration takes precedence over avatar catalog lookup.
+	closedOpts := registration.DefaultOptions()
+	closedOpts.Enabled = false
+	_, closedSvc := open(t, filepath.Join(t.TempDir(), "closed-avatar.db"), closedOpts)
+	if _, err := closedSvc.Start(ctx, digest(1), serverID, returnTo, avatarPtr(999)); !errors.Is(err, registration.ErrRegistrationClosed) {
+		t.Fatalf("closed with invalid avatar: got %v, want ErrRegistrationClosed", err)
+	}
+	if _, err := closedSvc.Start(ctx, digest(1), "bad-server-id", returnTo, avatarPtr(999)); !errors.Is(err, registration.ErrInvalidRequest) {
+		t.Fatalf("closed with invalid server_id: got %v, want ErrInvalidRequest", err)
+	}
+
+	// Sparse / large 64-bit avatar IDs from testdata catalog.
+	largeCatalog, err := avatars.Load(os.DirFS(filepath.Join("..", "..", "avatars", "test", "testdata", "catalog")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeDB, largeSvc := openWithCatalog(t, filepath.Join(t.TempDir(), "large-avatar.db"), largeCatalog, registration.DefaultOptions())
+	const largeDefault int64 = 1099511627776
+	const sparseID int64 = 67
+
+	reqDefault, err := largeSvc.Start(ctx, digest(1), serverID, returnTo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, largeDB, reqDefault)
+	seatDefault, err := largeSvc.Complete(ctx, digest(1), reqDefault)
+	if err != nil || !seatDefault.Created || seatDefault.Client.AvatarID != largeDefault {
+		t.Fatalf("large default avatar seat: %+v %v", seatDefault, err)
+	}
+
+	const secondServerID = "550e8400-e29b-41d4-a716-446655440002"
+	reqSparse, err := largeSvc.Start(ctx, digest(2), secondServerID, returnTo, avatarPtr(sparseID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, largeDB, reqSparse)
+	seatSparse, err := largeSvc.Complete(ctx, digest(2), reqSparse)
+	if err != nil || !seatSparse.Created || seatSparse.Client.AvatarID != sparseID {
+		t.Fatalf("sparse avatar seat: %+v %v", seatSparse, err)
+	}
+	if _, err := largeSvc.Start(ctx, digest(3), secondServerID, returnTo, avatarPtr(1)); !errors.Is(err, registration.ErrInvalidAvatar) {
+		t.Fatalf("unlisted avatar in sparse catalog: %v", err)
+	}
+}
+
+func TestConcurrentCompleteRetriesPreserveSelectedAvatar(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "concurrent-avatar.db")
+	db, one := open(t, path, registration.DefaultOptions())
+	_, two := open(t, path, registration.DefaultOptions())
+	id, err := one.Start(ctx, digest(1), serverID, returnTo, avatarPtr(42))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approve(t, db, id)
+	const n = 16
+	results := make(chan registration.Result, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			svc := []*registration.Service{one, two}[i%2]
+			r, err := svc.Complete(ctx, digest(1), id)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			results <- r
+		})
+	}
+	wg.Wait()
+	close(results)
+	created := 0
+	for r := range results {
+		if r.Client.ID != 1 || r.Client.AvatarID != 42 {
+			t.Fatalf("unexpected seat avatar on retry: %+v", r.Client)
+		}
+		if r.Created {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("created %d seats", created)
 	}
 	counts(t, db, 1, 1, 1)
 }

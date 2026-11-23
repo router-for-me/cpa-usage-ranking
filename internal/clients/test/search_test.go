@@ -12,7 +12,7 @@ import (
 
 func TestUnifiedSearchIncludesNumericNamesAndExactIDs(t *testing.T) {
 	db, repository := openRepository(t, filepath.Join(t.TempDir(), "search.db"))
-	_, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,ranking_hidden,created_at_ms) VALUES
+	_, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,ranking_hidden,created_at_ms) VALUES
 	(7,7,'550e8400-e29b-41d4-a716-446655440000','target',1,0,0),(11,11,'550e8400-e29b-41d4-a716-446655440000','7',1,1,0),(12,12,'550e8400-e29b-41d4-a716-446655440000','77',1,1,0),
 	(13,13,'550e8400-e29b-41d4-a716-446655440000','literal %_ quote''',1,0,0),(14,14,'550e8400-e29b-41d4-a716-446655440000','9007199254740993',1,0,0),
 	(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','large-id',1,0,0)`)

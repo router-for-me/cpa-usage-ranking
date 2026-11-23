@@ -107,7 +107,7 @@ func startLifecycle(t *testing.T, dbPath, catalogPath string, clock *atomic.Int6
 	if err := f.router.SetTrustedProxies(nil); err != nil {
 		t.Fatal(err)
 	}
-	f.mountRegistration(t, settings, avatarCatalog.DefaultID())
+	f.mountRegistration(t, settings, avatarCatalog)
 	httpserver.MountWithdraw(f.router, f.repo, f.cache.RequestRefresh)
 	if err := httpserver.MountReports(f.router, auth.NewAuthenticator(f.repo), admission, f.writer, int64(limits.MaxBodyBytes)); err != nil {
 		t.Fatal(err)
