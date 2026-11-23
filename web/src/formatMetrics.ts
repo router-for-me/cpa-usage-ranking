@@ -1,4 +1,4 @@
-// Keeper's K/M/B and adaptive duration presentation, adapted to decimal-string
+// Compact K/M/B and adaptive duration presentation for decimal-string
 // counters. Never pass an int64 counter through Number before scaling it.
 import { getLocale, getMessages, type Locale } from './i18n'
 
