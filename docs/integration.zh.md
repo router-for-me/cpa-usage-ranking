@@ -34,6 +34,7 @@
 
 首次注册前，每个上报端独立生成 **32 字节密码学安全随机数**，编码为 **43 字符无填充 `base64url`**（RFC 4648 URL 字符集 `A–Z a–z 0–9 - _`，不含 `=` 或空白），并先持久化到受保护的本地存储。
 
+- **与 `cpa_uuid` 的区别**：Bearer 凭据是每个上报端用于接口**鉴权的密钥**（注册后日常上报与退出均靠它鉴权，不再请求 GitHub）；`cpa_uuid` 则是 CPA 实例的非机密标识，与 GitHub 用户 ID 组合用于确定排行榜席位。
 - 仅发送单个 `Authorization: Bearer <secret>` 请求头（scheme 不区分大小写，与凭据间以单个空格分隔）。
 - 服务端将 43 字符编码解码回 32 字节后计算 **`SHA-256` 摘要**存储，不保存原文。
 - 同一席位的多个上报端各自持有独立凭据，不得共享同一密钥。
@@ -211,6 +212,18 @@ Content-Type: application/json
 | 本端该日首次提交或更高 `revision` | 原子替换整席当日生效快照，返回 `200 {"revision":"<n>"}` |
 | 同 `revision` 且与顺序无关的内容摘要一致 | 幂等返回 `200 {"revision":"<n>"}`，不覆盖现有数据，也不重新匹配模型目录 |
 | 更低 `revision`，或同 `revision` 但内容不同 | 返回 `409 revision_conflict` 及本端当前十进制字符串 `revision` |
+
+`409 revision_conflict` 会将本端当前 `revision` 放在顶层，与 `error` 并列返回：
+
+```json
+{
+  "error": {
+    "code": "revision_conflict",
+    "message": "Report revision conflicts with the writer's current revision"
+  },
+  "revision": "8"
+}
+```
 
 **客户端可靠性约定：**
 - 发送前先持久化待发的 `{utc_day, revision, payload}`；仅当 HTTP 为 `200` **且**响应中的 `revision` 与本次请求发送的值**数值相等**时才标记成功（例如合法请求 `"001"` 会回执规范形式 `"1"`）。

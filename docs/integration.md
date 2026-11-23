@@ -34,6 +34,7 @@ Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` duri
 
 Before the first registration attempt, each reporting installation generates **32 bytes from a cryptographically secure random source**, encodes them as **43-character unpadded `base64url`** (RFC 4648 URL alphabet `A–Z a–z 0–9 - _`, no `=` or whitespace), and persists the secret durably in protected storage.
 
+- **Distinct from `cpa_uuid`**: The Bearer secret is a per-writer **authentication key** used on every registration, report, and withdrawal request (daily reports do not call GitHub again). By contrast, `cpa_uuid` is a non-secret CPA instance identifier paired with the GitHub user ID to select the ranking seat.
 - Send exactly one `Authorization: Bearer <secret>` header (scheme is case-insensitive, separated by one space).
 - The server decodes the 43-character token and stores only the **32-byte `SHA-256` digest of the decoded bytes**—never the raw secret.
 - Each reporting installation uses its own credential; multiple writers for the same seat must not share a secret.
@@ -211,6 +212,18 @@ Decimal strings must contain nonnegative int64 digits without `+` signs (avoid l
 | First submission or higher `revision` for this writer/day | Atomically replaces the seat's active day snapshot; returns `200 {"revision":"<n>"}` |
 | Same `revision` and identical order-independent content digest | Idempotent `200 {"revision":"<n>"}` without rewriting active data or rematching the model catalog |
 | Lower `revision`, or same `revision` with different content | `409 revision_conflict` returning the writer's current decimal-string `revision` |
+
+`409 revision_conflict` returns `revision` at the top level alongside `error`:
+
+```json
+{
+  "error": {
+    "code": "revision_conflict",
+    "message": "Report revision conflicts with the writer's current revision"
+  },
+  "revision": "8"
+}
+```
 
 **Client reliability rules:**
 - Persist the pending `{utc_day, revision, payload}` locally before sending. Confirm success only when HTTP is `200` **and** the returned `revision` is **numerically equal** to the revision sent in that request (for example, valid `"001"` returns canonical `"1"`).
