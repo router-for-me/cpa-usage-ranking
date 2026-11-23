@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"cpa-usage-ranking/internal/auth"
 	"cpa-usage-ranking/internal/clients"
@@ -36,16 +37,29 @@ func MountReports(router *gin.Engine, authenticator *auth.Authenticator, admissi
 			}
 			return
 		}
-		mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-		if err != nil || mediaType != "application/json" || (c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity") {
-			writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use uncompressed application/json")
+		if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
+			mediaType, _, err := mime.ParseMediaType(ct)
+			if err != nil || mediaType != "application/json" {
+				writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use application/json")
+				return
+			}
+		}
+		encoding, ok := reportContentEncoding(c.Request.Header)
+		if !ok {
+			writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use identity or gzip Content-Encoding")
 			return
 		}
 		if c.Request.ContentLength > maxBodyBytes {
 			writeError(c, http.StatusRequestEntityTooLarge, "request_too_large", "Report body is too large")
 			return
 		}
-		input, err := admission.Decode(c.Request.Body)
+		var input reports.Report
+		var err error
+		if encoding == "gzip" {
+			input, err = admission.DecodeGzip(c.Request.Body)
+		} else {
+			input, err = admission.Decode(c.Request.Body)
+		}
 		switch {
 		case errors.Is(err, reports.ErrDecodeBusy):
 			c.Header("Retry-After", "1")
@@ -87,6 +101,23 @@ func MountReports(router *gin.Engine, authenticator *auth.Authenticator, admissi
 		}
 	})
 	return nil
+}
+
+func reportContentEncoding(header http.Header) (string, bool) {
+	values := header.Values("Content-Encoding")
+	if len(values) == 0 {
+		return "", true
+	}
+	if len(values) > 1 {
+		return "", false
+	}
+	encoding := strings.ToLower(strings.TrimSpace(values[0]))
+	switch encoding {
+	case "", "identity", "gzip":
+		return encoding, true
+	default:
+		return "", false
+	}
 }
 
 func writeReportResult(c *gin.Context, result reports.WriteResult) {

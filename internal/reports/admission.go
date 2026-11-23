@@ -1,6 +1,8 @@
 package reports
 
 import (
+	"bytes"
+	"compress/gzip"
 	"container/list"
 	"errors"
 	"fmt"
@@ -181,7 +183,6 @@ func (a *Admission) Admit(clientID int64) error {
 }
 
 // Decode bounds concurrent body reads/decodes as well as bytes and raw items.
-// The body is never decompressed by this component.
 func (a *Admission) Decode(body io.Reader) (Report, error) {
 	select {
 	case a.decoders <- struct{}{}:
@@ -195,6 +196,39 @@ func (a *Admission) Decode(body io.Reader) (Report, error) {
 	}
 	if len(data) > a.limits.MaxBodyBytes {
 		return Report{}, ErrBodyTooLarge
+	}
+	return DecodeLimited(data, a.limits.MaxItems)
+}
+
+// DecodeGzip 对 gzip 压缩请求体先后限制压缩流与解压后体积，防止压缩炸弹并受同一解码并发槽位约束。
+func (a *Admission) DecodeGzip(body io.Reader) (Report, error) {
+	select {
+	case a.decoders <- struct{}{}:
+	default:
+		return Report{}, ErrDecodeBusy
+	}
+	defer func() { <-a.decoders }()
+	compressed, err := io.ReadAll(io.LimitReader(body, int64(a.limits.MaxBodyBytes)+1))
+	if err != nil {
+		return Report{}, err
+	}
+	if len(compressed) > a.limits.MaxBodyBytes {
+		return Report{}, ErrBodyTooLarge
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return Report{}, ErrInvalid
+	}
+	defer gz.Close()
+	data, err := io.ReadAll(io.LimitReader(gz, int64(a.limits.MaxBodyBytes)+1))
+	if err != nil {
+		return Report{}, ErrInvalid
+	}
+	if len(data) > a.limits.MaxBodyBytes {
+		return Report{}, ErrBodyTooLarge
+	}
+	if err := gz.Close(); err != nil {
+		return Report{}, ErrInvalid
 	}
 	return DecodeLimited(data, a.limits.MaxItems)
 }

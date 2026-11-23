@@ -24,7 +24,7 @@
 
 **传输与隐私要求：**
 - 生产环境必须使用 **HTTPS**；回环 HTTP 仅用于本地调试或受信任的 TLS 反向代理之后。
-- 请求正文使用未压缩的 UTF-8 JSON，设置 `Content-Type: application/json`（允许附带 `charset` 参数，不支持 gzip 等压缩编码）。
+- 请求正文使用 UTF-8 JSON，推荐设置 `Content-Type: application/json`（省略 `Content-Type` 或附带 `charset` 均可接受；上报正文支持 `identity` 与 `gzip` 压缩，且压缩流与解压后体积均受同一上限约束）。
 - 切勿在 URL、请求体、日志、公开页面或代码仓库中暴露 Bearer 凭据，也不要上传上游模型 API Key、提示词或响应正文。
 - 仅展示排行榜的应用无需注册或持有凭据。
 
@@ -187,7 +187,7 @@ Content-Type: application/json
 }
 ```
 
-下表所有字段均必填（即使值为 `0` 或 `null`）。未知字段、重复 JSON 键、非法 UTF-8、孤立代理码点或尾随多余 JSON 均会被拒绝。
+下表给出标准的 13 字段明细口径（推荐用十进制字符串传递 64 位计数以避免前端精度丢失）。为兼容不同客户端实现，服务端同时接受 JSON 整数与十进制字符串形式的计数/修订号，省略的可选计数字段默认为 `0`、省略的均值字段默认为 `null`，并忽略未知扩展字段（含旧版 `service_tier`）；非法 UTF-8、类型错误、负数、整数溢出或尾随多余 JSON 仍会被拒绝。
 
 | 字段 | 层级 | JSON 类型 | 约束说明 |
 | --- | --- | --- | --- |
@@ -341,7 +341,7 @@ GET /v1/leaderboards/{board}/{period}
 | `410` | `registration_request_expired` | 保留原凭据，如需继续参榜则重新开始注册并授权 |
 | `410` | `expired_day` | 停止补报该日期，不得把数据挪到其他日期 |
 | `413` | `request_too_large` | 精简正文体积，不得拆成增量 `PUT` |
-| `415` | `unsupported_media_type` | 改用未压缩的 `application/json` |
+| `415` | `unsupported_media_type` | 改用 `application/json` 及 `identity` 或 `gzip` 编码 |
 | `429` | `registration_rate_limited`<br>`registration_capacity`<br>`report_rate_limited`、`report_capacity` | 至少等待 `Retry-After` 秒并叠加随机抖动后重试 |
 | `503` | `report_overloaded` | 保留原 `revision` 与正文，遵守 `Retry-After` 指数退避重试 |
 | `503` | `registration_closed` | 暂停新注册；不影响已有端上报，也不影响未过期注册请求的完成恢复 |

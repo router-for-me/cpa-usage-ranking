@@ -24,7 +24,7 @@ Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` duri
 
 **Transport and privacy requirements:**
 - Always use **HTTPS** in production. Loopback HTTP is only for local development or behind a trusted TLS-terminating reverse proxy.
-- Send uncompressed UTF-8 JSON with `Content-Type: application/json` (`charset` parameter is accepted; no `Content-Encoding` other than `identity`).
+- Send UTF-8 JSON with `Content-Type: application/json` (omitting `Content-Type` or adding `charset` is accepted; report bodies support `identity` and `gzip` `Content-Encoding` within the same size limit).
 - Never place Bearer secrets in URLs, request bodies, logs, public pages, or source repositories. Never upload upstream model API keys, prompts, or response payloads.
 - Clients that only display leaderboards need no registration or credentials.
 
@@ -187,7 +187,7 @@ Content-Type: application/json
 }
 ```
 
-Every field below is required (even when `0` or `null`). Unknown fields, duplicate JSON keys, invalid UTF-8, unpaired surrogates, and trailing JSON values are rejected.
+The canonical 13-field item schema is shown below (sending decimal strings for 64-bit counts avoids JavaScript precision issues). For compatibility, the server also accepts JSON integers for count/revision fields, defaults omitted optional item counters to `0` and omitted latency averages to `null`, and ignores unknown extension fields (such as legacy `service_tier`). Invalid UTF-8, wrong JSON types, negative values, overflow, and trailing JSON values are still rejected.
 
 | Field | Scope | JSON Type | Constraints |
 | --- | --- | --- | --- |
@@ -341,7 +341,7 @@ Business API errors use the JSON envelope below. Branch on HTTP status and `erro
 | `410` | `registration_request_expired` | Keep the original secret and start a new registration if still desired |
 | `410` | `expired_day` | Stop retrying that UTC day; never move its data into another date |
 | `413` | `request_too_large` | Reduce payload size; never split one day into incremental `PUT`s |
-| `415` | `unsupported_media_type` | Send uncompressed `application/json` |
+| `415` | `unsupported_media_type` | Send `application/json` with `identity` or `gzip` encoding |
 | `429` | `registration_rate_limited`<br>`registration_capacity`<br>`report_rate_limited`, `report_capacity` | Wait at least `Retry-After` seconds plus random jitter before retrying |
 | `503` | `report_overloaded` | Keep original `revision` and payload; obey `Retry-After` with exponential backoff |
 | `503` | `registration_closed` | Pause new registrations; existing writers and unexpired recovery retries continue |
