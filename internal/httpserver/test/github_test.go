@@ -21,9 +21,18 @@ func TestGitHubReturnToWithoutReferer(t *testing.T) {
 	for i, dest := range returns {
 		secret := testSecret(byte(i + 1))
 		id := f.start(t, secret, serverID, dest)
-		f.approve(t, id, int64(i+1), strings.Repeat("x", 33), "fallback", dest)
+		if i == 0 {
+			// 超长 GitHub name 应安全截断至 32 个码点，而不是整段丢弃。
+			f.approve(t, id, int64(i+1), strings.Repeat("x", 33), "fallback", dest)
+			if got := identity(t, f.complete(t, secret, id)); got.Name != strings.Repeat("x", 32) {
+				t.Fatalf("long GitHub name was not truncated: got %q", got.Name)
+			}
+			continue
+		}
+		// 空白或无可见字符的 GitHub name 仍应回退到 login。
+		f.approve(t, id, int64(i+1), "   ", "fallback", dest)
 		if got := identity(t, f.complete(t, secret, id)); got.Name != "fallback" {
-			t.Fatal("invalid GitHub name did not fall back to login")
+			t.Fatalf("empty GitHub name did not fall back to login: got %q", got.Name)
 		}
 	}
 	if calls, _ := f.github.counts(); calls != 2*len(returns) {

@@ -58,7 +58,7 @@ docker compose -p cpa-ranking up -d --no-build
 - **脱敏代理日志**：禁止记录 `Authorization` 请求头、Cookie、请求体以及 `/auth/github/*` 的完整查询串（OAuth 路由仅记录路径）。
 - **可信代理（`RANKING_TRUSTED_PROXIES`）**：默认未设置，服务端忽略一切转发头并仅使用连接 `RemoteAddr`。部署在反代之后时，仅填入实际代理 IP 或 CIDR（如 `127.0.0.1,10.2.0.0/24`）；只有来自可信代理的连接才会解析 `X-Forwarded-For`（从右向左取首个非受信任跳）或 `X-Real-IP`，格式异常时回退为 `RemoteAddr`。切勿信任 `0.0.0.0/0` 或客户端可达网段。
 - **IPv6 来源归并（`RANKING_REGISTRATION_IPV6_64`）**：默认开启（`true`），注册与管理员登录限流将原生 IPv6 地址按 `/64` 前缀归并（IPv4 映射的 IPv6 还原为 IPv4）。来源键仅用于防滥用限流，不代表身份或席位归属。
-- **两层注册准入限流**：`POST /v1/clients/register/start` 在校验 Bearer 与正文**之前**先经过进程内每来源/全局固定窗口限流（重启清零）；被单来源限额或内存来源表满拒绝（`429 registration_capacity`）时不会消耗全局额度。通过初筛的合法请求再写入固定 `10m` 有效、最多 `2,000` 笔未过期记录的 SQLite 注册事务表（固定常量，不可通过环境变量修改）；命中该 SQLite 上限时同样返回 `429 registration_capacity`（此时已消耗来源与全局额度），且不会驱逐有效条目。
+- **两层注册准入限流**：`POST /v1/clients/register/start` 在校验 Bearer 与正文**之前**先经过进程内每来源/全局固定窗口限流（重启清零）；被单来源限额或内存来源表满拒绝（`429 registration_capacity`）时不会消耗全局额度。通过初筛的合法请求再写入固定 `10m` 有效、最多 `2,000` 笔未过期记录的 SQLite 注册事务表（固定常量，不可通过环境变量修改）；表满时会优先清理已终结的 `denied`/`failed` 记录，再按需淘汰最早到期的 `completed` 记录，仅当活跃进行中的注册请求达到上限时返回 `429 registration_capacity`（此时已消耗来源与全局额度）。
 
 ## 环境变量参考
 

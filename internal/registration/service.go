@@ -128,7 +128,6 @@ func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, server
 	}
 	defer tx.Rollback()
 	now := s.options.Now()
-	// 限额包含未过期的办结结果；不为新请求逐出仍可丢包恢复的编号。
 	if _, err := tx.ExecContext(ctx, `DELETE FROM registration_requests WHERE expires_at_ms<=?`, now.UnixMilli()); err != nil {
 		return "", err
 	}
@@ -136,6 +135,27 @@ func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, server
 	var firstExpiry int64
 	if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(min(expires_at_ms),0) FROM registration_requests`).Scan(&count, &firstExpiry); err != nil {
 		return "", err
+	}
+	if count >= s.options.Capacity {
+		// 表满时优先清理已终结的拒绝或失败事务，避免异常记录占用活跃注册容量。
+		if _, err := tx.ExecContext(ctx, `DELETE FROM registration_requests WHERE stage IN ('denied','failed')`); err != nil {
+			return "", err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(min(expires_at_ms),0) FROM registration_requests`).Scan(&count, &firstExpiry); err != nil {
+			return "", err
+		}
+	}
+	if count >= s.options.Capacity {
+		// 若仍满，按最早到期顺序淘汰必要的已完成事务，仅活跃未完成请求打满容量时才拒绝。
+		evict := count - s.options.Capacity + 1
+		if _, err := tx.ExecContext(ctx, `DELETE FROM registration_requests WHERE id IN (
+			SELECT id FROM registration_requests WHERE stage='completed' ORDER BY expires_at_ms ASC, id ASC LIMIT ?
+		)`, evict); err != nil {
+			return "", err
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT count(*),coalesce(min(expires_at_ms),0) FROM registration_requests`).Scan(&count, &firstExpiry); err != nil {
+			return "", err
+		}
 	}
 	if count >= s.options.Capacity {
 		return "", &LimitError{Code: "registration_capacity", RetryAfter: time.UnixMilli(firstExpiry).Sub(now)}

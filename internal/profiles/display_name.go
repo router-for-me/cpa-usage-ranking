@@ -14,20 +14,46 @@ import (
 var ErrInvalidDisplayName = errors.New("invalid display name")
 
 // NormalizeDisplayName 返回应保存及展示的 NFKC 昵称；失败时不返回部分结果。
+// 对控制字符、行/段分隔符与双向控制符进行清理，并对超长文本按完整 rune 边界截断。
 func NormalizeDisplayName(name string) (string, error) {
 	if !utf8.ValidString(name) {
 		return "", fmt.Errorf("%w: must be valid UTF-8", ErrInvalidDisplayName)
 	}
 	name = norm.NFKC.String(name)
-	// 在裁剪前拒绝禁止字符，避免把首尾换行等控制内容静默当作普通空白。
+	var cleaned strings.Builder
+	cleaned.Grow(len(name))
+	dropped := false
 	for _, r := range name {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Bidi_Control) {
-			return "", fmt.Errorf("%w: control, line/paragraph separator or bidi control character", ErrInvalidDisplayName)
+			if unicode.IsSpace(r) {
+				cleaned.WriteByte(' ')
+			} else {
+				dropped = true
+			}
+			continue
 		}
+		cleaned.WriteRune(r)
+	}
+	name = cleaned.String()
+	if dropped {
+		// 过滤不可见控制符后重新做一次 NFKC，确保结果满足幂等归一化。
+		name = norm.NFKC.String(name)
 	}
 	name = strings.TrimSpace(name)
-	if count := utf8.RuneCountInString(name); count < 1 || count > 32 || len(name) > 128 {
-		return "", fmt.Errorf("%w: must contain 1–32 code points and at most 128 bytes", ErrInvalidDisplayName)
+	// 按完整 Unicode 码点边界安全截断至最多 32 个码点且不超过 128 UTF-8 字节。
+	var truncated strings.Builder
+	runes := 0
+	for _, r := range name {
+		rLen := utf8.RuneLen(r)
+		if runes >= 32 || truncated.Len()+rLen > 128 {
+			break
+		}
+		truncated.WriteRune(r)
+		runes++
+	}
+	name = strings.TrimSpace(truncated.String())
+	if name == "" {
+		return "", fmt.Errorf("%w: must contain visible content", ErrInvalidDisplayName)
 	}
 	for _, r := range name {
 		// 格式字符、附加标记和默认可忽略字符可以保留，但不能独自构成可见昵称。

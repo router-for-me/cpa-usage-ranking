@@ -13,15 +13,22 @@ import (
 
 var ErrInvalidCredential = errors.New("invalid client credential")
 
-// HashCredential accepts only the canonical, unpadded base64url encoding of
-// exactly 32 bytes. Clients must generate these bytes with a CSPRNG and persist
-// the secret before registration; the server cannot prove their entropy source.
+// HashCredential decodes a 32-byte base64url (or standard base64) client secret
+// with optional single '=' padding and surrounding whitespace, and returns the
+// SHA-256 digest of the decoded 32 bytes. Canonical 43-character unpadded
+// base64url remains the recommended client format and yields the exact same hash.
 func HashCredential(text string) (clients.CredentialHash, error) {
-	if len(text) != 43 {
+	trimmed := strings.TrimSpace(text)
+	// 32 字节编码为 43 字符，标准填充形式仅含单个尾随 '='。
+	unpadded := strings.TrimSuffix(trimmed, "=")
+	if len(unpadded) != 43 {
 		return clients.CredentialHash{}, ErrInvalidCredential
 	}
-	decoded, err := base64.RawURLEncoding.Strict().DecodeString(text)
-	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != text {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(unpadded)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.Strict().DecodeString(unpadded)
+	}
+	if err != nil || len(decoded) != 32 {
 		return clients.CredentialHash{}, ErrInvalidCredential
 	}
 	return clients.CredentialHash(sha256.Sum256(decoded)), nil
@@ -34,9 +41,9 @@ func BearerHash(header http.Header) (clients.CredentialHash, error) {
 	if len(values) != 1 {
 		return clients.CredentialHash{}, ErrInvalidCredential
 	}
-	scheme, text, ok := strings.Cut(values[0], " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
+	fields := strings.Fields(values[0])
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
 		return clients.CredentialHash{}, ErrInvalidCredential
 	}
-	return HashCredential(text)
+	return HashCredential(fields[1])
 }
