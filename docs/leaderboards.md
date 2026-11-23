@@ -55,7 +55,7 @@ Only `overall` entries include an additional `details` object computed from the 
 | `ttft_mean_ms` | `ttft_sum / ttft_samples` in milliseconds; `null` when unmeasured |
 | `latency_mean_ms` | `latency_sum / latency_samples` in milliseconds; `null` when unmeasured |
 
-Percentages (`"0.00"`–`"100.00"`) and means are decimal strings rounded to two decimal places. Cross-day means weight sums by sample counts rather than averaging daily averages. Measured zero stays `"0.00"`; missing values are explicit JSON `null` (rendered as `—`). Other boards do not include `details`.
+Percentages (`"0.00"`–`"100.00"`, clamped to `[0, 100%]`) and means are decimal strings rounded to two decimal places. Cross-day means weight sums by sample counts rather than averaging daily averages. Measured zero stays `"0.00"`; missing values are explicit JSON `null` (rendered as `—`). Other boards do not include `details`.
 
 ## Periods and Eligibility
 

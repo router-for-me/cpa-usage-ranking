@@ -151,7 +151,7 @@ sequenceDiagram
 
 - `{utc_day}` 须为 **UTC 时区**的 `YYYY-MM-DD`（非客户端本地日期），且仅允许 **UTC 今日或昨日**。未来日期返回 `422 invalid_day`，已封窗的历史日期返回 `410 expired_day`。
 - 每次 `PUT` 必须提交该席位、该 UTC 日的**完整累计统计**，而非单条事件或本次增量。客户端重启后须恢复当日完整汇总后再上报。
-- 须先按标准模型合并所有本地来源，每个标准模型只能出现一次（不再接受 `service_tier` 字段，即使传 `"default"` 或 `null` 也会返回 `422`）。指向同一标准模型的重复项或别名会导致整份快照被拒绝。
+- 推荐先在本地按标准模型合并来源，每个标准模型汇总为一条记录（旧版 `service_tier` 字段会被静默忽略）。若同一份快照中出现多条指向同一标准模型的明细（含重复名称、前缀差异或别名），服务端会按加法自动合并。
 - `ttft_avg_ms` 与 `latency_avg_ms` 须按耗时总和除以各自真实样本数计算（合并分组时按样本加权，切勿对各组均值再求平均）；无样本时均值传 `null`、样本数传 `"0"`，切勿补零。
 - 模型名去除最后一个 `/` 之前的前缀后，按**精确、区分大小写**匹配[模型目录](catalogs.zh.md#模型目录)。合法但未匹配的模型会被静默跳过、不计入总量，服务端不返回被忽略列表；任一项格式非法（含未知模型）均会拒绝整份快照。
 
@@ -203,7 +203,7 @@ Content-Type: application/json
 | `ttft_avg_ms`<br>`latency_avg_ms` | 明细项 | 数字或 `null` | 有样本时有限且 `>= 0`；样本数为 `"0"` 时必须为 `null` |
 | `ttft_samples`<br>`latency_samples` | 明细项 | 十进制字符串 | 各自 `<= request_count` |
 
-十进制字符串不得带 `+` 号（建议不带前导零）。整数或浮点聚合溢出将拒绝整份快照。
+十进制字符串不得带 `+` 号（建议不带前导零）。若因上游统计口径差异导致非负字段之间出现轻微不一致（如 `cache_read_tokens + cache_write_tokens > input_tokens`、`reasoning_tokens > output_tokens`、`input_tokens + output_tokens > total_tokens`、`success_count > request_count`、样本数与均值/请求数不匹配或有正用量但 `request_count` 为 `"0"`），服务端会自动执行下界补齐与安全钳制而不再整包拒收；负数、非有限浮点数以及整数或浮点聚合溢出仍会拒绝整份快照。
 
 ### 修订号（`revision`）、幂等与冲突处理
 

@@ -19,7 +19,7 @@ The server loads `config/models.json` (or the path set in `RANKING_MODELS_PATH`)
 - Top-level fields: optional reference metadata `currency` (defaults to `"USD"`) and `price_unit` (defaults to `"per_million_tokens"`), plus required `models` (array of `{model_name, alias?, prices?}`; `alias` and `prices` may be omitted).
 - Names must be unique across models; an alias cannot occupy another model's canonical name.
 - `prices` optionally maps `default`, `priority`, and `flex` tiers to `{input, output, cache_read, cache_write}` non-negative decimal strings (`null`/omitted means unknown, `"0"` means explicitly free; missing tiers do not inherit `default`; unknown or `null` tier entries are ignored).
-- Price tiers are reference metadata only—they are **not** a reporting or statistics dimension (`service_tier` is not accepted in daily reports), and no billing or cost calculation is performed.
+- Price tiers are reference metadata only—they are **not** a reporting or statistics dimension (any `service_tier` field in daily reports is ignored), and no billing or cost calculation is performed.
 - `config/model-sources.json` records provenance URLs and capture dates for shipped reference prices; only `config/models.json` is loaded at runtime.
 
 ## Avatar Catalog

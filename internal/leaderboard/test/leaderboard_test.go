@@ -211,3 +211,38 @@ func TestInvalidAndExtremeMeasurements(t *testing.T) {
 		t.Fatal("canceled build accepted")
 	}
 }
+
+func TestClampedInconsistentMetricsNeverPanicOrFail(t *testing.T) {
+	s := snapshot()
+	// 极端越界分子（包括 MaxInt64 / 1）在 roundRatio 中必须安全钳制到上限，不得触发 bits.Div64 panic。
+	add(&s, 1, reports.Metrics{
+		TotalTokens:     100,
+		InputTokens:     1,
+		CacheReadTokens: math.MaxInt64,
+		RequestCount:    2,
+		SuccessCount:    10,
+		TTFTSamples:     5,
+		TTFTSumMS:       250,
+	})
+	add(&s, 2, reports.Metrics{
+		TotalTokens:     50,
+		InputTokens:     10,
+		CacheReadTokens: 20,
+		RequestCount:    1,
+		SuccessCount:    1,
+		TTFTSamples:     0,
+		TTFTSumMS:       123,
+	})
+	b := build(t, s)
+	row1 := find(t, b[leaderboard.Overall], 1)
+	if row1.Details == nil || row1.Details.SuccessRate != "100.00" || row1.Details.CacheReadRate == nil || *row1.Details.CacheReadRate != "100.00" {
+		t.Fatalf("row1 details not clamped: %+v", row1.Details)
+	}
+	if find(t, b[leaderboard.Cache], 1).Metric != "100.00" || find(t, b[leaderboard.Cache], 2).Metric != "100.00" {
+		t.Fatalf("cache board not clamped: %+v", b[leaderboard.Cache])
+	}
+	row2 := find(t, b[leaderboard.Overall], 2)
+	if row2.Details == nil || row2.Details.TTFTMeanMS != nil {
+		t.Fatalf("zero-sample residual TTFT should be nil: %+v", row2.Details)
+	}
+}

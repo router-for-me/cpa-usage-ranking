@@ -31,24 +31,24 @@ func Derive(m reports.Metrics) (Derived, error) {
 			return Derived{}, ErrInvalidMetrics
 		}
 	}
-	if m.ReasoningTokens > m.OutputTokens || m.SuccessCount > m.RequestCount || m.TTFTSamples > m.RequestCount || m.LatencySamples > m.RequestCount ||
-		!finiteNonnegative(m.TTFTSumMS) || !finiteNonnegative(m.LatencySumMS) ||
-		(m.TTFTSamples == 0 && m.TTFTSumMS != 0) || (m.LatencySamples == 0 && m.LatencySumMS != 0) {
+	if !finiteNonnegative(m.TTFTSumMS) || !finiteNonnegative(m.LatencySumMS) {
 		return Derived{}, ErrInvalidMetrics
 	}
 	var d Derived
-	d.NonReasoningOutput = m.OutputTokens - m.ReasoningTokens
-	d.CacheReadRate = ratio(float64(m.CacheReadTokens), float64(m.InputTokens))
-	d.CacheWriteRate = ratio(float64(m.CacheWriteTokens), float64(m.InputTokens))
-	d.ReasoningRate = ratio(float64(m.ReasoningTokens), float64(m.OutputTokens))
-	d.OutputRate = ratio(float64(m.OutputTokens), float64(m.TotalTokens))
+	if m.OutputTokens > m.ReasoningTokens {
+		d.NonReasoningOutput = m.OutputTokens - m.ReasoningTokens
+	}
+	d.CacheReadRate = clampedRatio(float64(m.CacheReadTokens), float64(m.InputTokens))
+	d.CacheWriteRate = clampedRatio(float64(m.CacheWriteTokens), float64(m.InputTokens))
+	d.ReasoningRate = clampedRatio(float64(m.ReasoningTokens), float64(m.OutputTokens))
+	d.OutputRate = clampedRatio(float64(m.OutputTokens), float64(m.TotalTokens))
 	d.TotalPerRequest = ratio(float64(m.TotalTokens), float64(m.RequestCount))
 	d.OutputPerRequest = ratio(float64(m.OutputTokens), float64(m.RequestCount))
-	d.SuccessRate = ratio(float64(m.SuccessCount), float64(m.RequestCount))
+	d.SuccessRate = clampedRatio(float64(m.SuccessCount), float64(m.RequestCount))
 	d.TTFTMeanMS = ratio(m.TTFTSumMS, float64(m.TTFTSamples))
 	d.LatencyMeanMS = ratio(m.LatencySumMS, float64(m.LatencySamples))
-	d.TTFTCoverage = ratio(float64(m.TTFTSamples), float64(m.RequestCount))
-	d.LatencyCoverage = ratio(float64(m.LatencySamples), float64(m.RequestCount))
+	d.TTFTCoverage = clampedRatio(float64(m.TTFTSamples), float64(m.RequestCount))
+	d.LatencyCoverage = clampedRatio(float64(m.LatencySamples), float64(m.RequestCount))
 	if m.RequestCount > 0 && m.LatencySamples == m.RequestCount {
 		d.OutputRatePerSecond = ratio(float64(m.OutputTokens)*1000, m.LatencySumMS)
 		if m.TTFTSamples == m.RequestCount && m.LatencySumMS > m.TTFTSumMS {
@@ -75,5 +75,18 @@ func ratio(n, denominator float64) Optional {
 		return Optional{}
 	}
 	return Optional{Value: n / denominator, Valid: true}
+}
+
+func clampedRatio(n, denominator float64) Optional {
+	r := ratio(n, denominator)
+	if !r.Valid {
+		return r
+	}
+	if r.Value < 0 {
+		r.Value = 0
+	} else if r.Value > 1 {
+		r.Value = 1
+	}
+	return r
 }
 func finiteNonnegative(n float64) bool { return n >= 0 && !math.IsInf(n, 0) && !math.IsNaN(n) }

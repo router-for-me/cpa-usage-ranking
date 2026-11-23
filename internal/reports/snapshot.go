@@ -1,10 +1,11 @@
 package reports
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/json"
 	"math"
-	"sort"
+	"slices"
 
 	"cpa-usage-ranking/internal/models"
 )
@@ -29,14 +30,11 @@ func Prepare(report Report) (Prepared, error) {
 	}
 	items := make([]Item, len(report.Items))
 	copy(items, report.Items)
-	seen := make(map[string]bool, len(items))
 	for i := range items {
 		item := &items[i]
-		name, err := models.NormalizeReportedName(item.Model)
-		if err != nil || seen[name] {
+		if _, err := models.NormalizeReportedName(item.Model); err != nil {
 			return Prepared{}, ErrInvalid
 		}
-		seen[name] = true
 		// Copy pointers and normalize signed zero, so semantically equal JSON
 		// numeric spellings and later caller mutations cannot change the input.
 		if item.TTFTAvgMS != nil {
@@ -54,7 +52,8 @@ func Prepare(report Report) (Prepared, error) {
 			item.LatencyAvgMS = &v
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Model < items[j].Model })
+	// 允许同名 Model 多项并存，按全部字段确定性全序排列，确保乱序重发时 Digest() 完全一致。
+	slices.SortFunc(items, compareItem)
 	encoded, err := json.Marshal(struct {
 		SchemaVersion int
 		Revision      int64
@@ -66,6 +65,59 @@ func Prepare(report Report) (Prepared, error) {
 	return Prepared{revision: report.Revision, items: items, digest: sha256.Sum256(encoded), valid: true}, nil
 }
 
+func compareItem(a, b Item) int {
+	if c := cmp.Compare(a.Model, b.Model); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.TotalTokens, b.TotalTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.InputTokens, b.InputTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.OutputTokens, b.OutputTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.CacheReadTokens, b.CacheReadTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.CacheWriteTokens, b.CacheWriteTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.ReasoningTokens, b.ReasoningTokens); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.RequestCount, b.RequestCount); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.SuccessCount, b.SuccessCount); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.TTFTSamples, b.TTFTSamples); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(a.LatencySamples, b.LatencySamples); c != 0 {
+		return c
+	}
+	if c := compareOptionalFloat(a.TTFTAvgMS, b.TTFTAvgMS); c != 0 {
+		return c
+	}
+	return compareOptionalFloat(a.LatencyAvgMS, b.LatencyAvgMS)
+}
+
+func compareOptionalFloat(a, b *float64) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return -1
+	case b == nil:
+		return 1
+	default:
+		return cmp.Compare(*a, *b)
+	}
+}
+
 // Key identifies a stored row. ModelID 0 is reserved for the all-model total;
 // real catalog model IDs are positive.
 type Key struct {
@@ -74,10 +126,9 @@ type Key struct {
 
 // Aggregate uses the current registry only for a new replacement. Valid
 // unknown and zero-execution items remain in the digest but not the rows.
+// Duplicate names or aliases resolving to the same canonical model are merged additively.
 func (p Prepared) Aggregate(registry *models.Registry) (map[Key]Metrics, error) {
 	rows := make(map[Key]Metrics)
-	seen := make(map[int64]bool)
-	var total Metrics
 	for _, item := range p.items {
 		resolved, err := registry.Resolve(item.Model)
 		if err != nil {
@@ -86,21 +137,37 @@ func (p Prepared) Aggregate(registry *models.Registry) (map[Key]Metrics, error) 
 		if !resolved.Matched {
 			continue
 		}
-		if seen[resolved.ID] {
-			return nil, ErrInvalid
-		}
-		seen[resolved.ID] = true
-		if item.RequestCount == 0 {
-			continue
-		}
 		metric, err := itemMetrics(item)
 		if err != nil {
 			return nil, ErrInvalid
 		}
+		if metric.RequestCount == 0 {
+			continue
+		}
 		key := Key{ModelID: resolved.ID}
-		rows[key] = metric
+		if existing, ok := rows[key]; ok {
+			merged, ok := addMetrics(existing, metric)
+			if !ok {
+				return nil, ErrInvalid
+			}
+			rows[key] = merged
+		} else {
+			rows[key] = metric
+		}
+	}
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	// 按模型 ID 固定顺序累加全模型总计，消除 map 遍历随机顺序对浮点耗时和的微小影响。
+	keys := make([]int64, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key.ModelID)
+	}
+	slices.Sort(keys)
+	var total Metrics
+	for _, id := range keys {
 		var ok bool
-		total, ok = addMetrics(total, metric)
+		total, ok = addMetrics(total, rows[Key{ModelID: id}])
 		if !ok {
 			return nil, ErrInvalid
 		}

@@ -88,9 +88,6 @@ func Build(ctx context.Context, s statistics.Snapshot) (map[string][]Entry, erro
 		if m.RequestCount == 0 {
 			continue
 		}
-		if m.CacheReadTokens > m.InputTokens {
-			return nil, statistics.ErrInvalidMetrics
-		}
 		c := &candidate{id: id, profile: p, metrics: m, derived: d, wilson: wilson(m.SuccessCount, m.RequestCount)}
 		all = append(all, c)
 		if m.TotalTokens > 0 {
@@ -209,6 +206,10 @@ func Build(ctx context.Context, s statistics.Snapshot) (map[string][]Entry, erro
 }
 
 func wilson(success, requests int64) float64 {
+	if requests <= 0 {
+		return 0
+	}
+	success = min(max(int64(0), success), requests)
 	const z = 1.959963984540054
 	n := float64(requests)
 	p := float64(success) / n
@@ -220,6 +221,13 @@ func wilson(success, requests int64) float64 {
 // 以已计算的有限 float64 均值为输入，用有理数合并表现和精确覆盖率，
 // 避免多次浮点乘除将恰好半分的贡献舍低。无正参照时取中性 0.5。
 func responseContribution(reference *big.Rat, mean float64, samples, requests int64) int64 {
+	if requests <= 0 {
+		return 0
+	}
+	samples = min(max(int64(0), samples), requests)
+	if samples == 0 {
+		return 0
+	}
 	if reference == nil {
 		return int64(roundRatio(samples, requests, 500))
 	}
@@ -241,9 +249,14 @@ func responseContribution(reference *big.Rat, mean float64, samples, requests in
 	return numerator.Quo(numerator, denominator).Int64()
 }
 
-// 原始计数是 int64；128 位中间值保留精确半分且不溢出。
-// 已验证 0 <= numerator <= denominator，因而商不超过 multiplier。
+// 原始计数是 int64；内部先对越界比例做安全钳制，再用 128 位中间值保留精确半分并杜绝 bits.Div64 商超界 panic。
 func roundRatio(numerator, denominator int64, multiplier uint64) uint64 {
+	if denominator <= 0 || numerator <= 0 {
+		return 0
+	}
+	if numerator >= denominator {
+		return multiplier
+	}
 	d := uint64(denominator)
 	hi, lo := bits.Mul64(uint64(numerator), multiplier)
 	lo, carry := bits.Add64(lo, d/2, 0)

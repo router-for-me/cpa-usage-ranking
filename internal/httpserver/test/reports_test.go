@@ -191,20 +191,26 @@ func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 	}
 }
 
-func TestReportHTTPIgnoresLegacyTierAndRejectsDuplicateModels(t *testing.T) {
+func TestReportHTTPIgnoresLegacyTierAndMergesDuplicateModels(t *testing.T) {
 	f := reportSetup(t, defaultRegistrationSettings(), generousReportLimits(), nil)
 	secret := testSecret(1)
-	f.seed(t, secret)
+	client := f.seed(t, secret)
 	for i, value := range []string{`"default"`, `null`} {
 		rev := strconv.Itoa(i + 1)
 		body := strings.Replace(strings.Replace(reportJSON, `"revision":"1"`, `"revision":"`+rev+`"`, 1), `"model":"alpha"`, `"model":"alpha","service_tier":`+value, 1)
 		expectRevision(t, f.report(t, "2026-11-01", secret, body, nil), 200, rev)
 	}
 	item := strings.TrimSuffix(strings.SplitN(reportJSON, `"items":[`, 2)[1], `]}`)
-	for _, name := range []string{"alias", "route/alpha"} {
-		duplicate := strings.Replace(item, `"model":"alpha"`, `"model":"`+name+`"`, 1)
-		body := strings.TrimSuffix(strings.Replace(reportJSON, `"revision":"1"`, `"revision":"3"`, 1), `]}`) + `,` + duplicate + `]}`
-		requireHTTPError(t, f.report(t, "2026-11-01", secret, body, nil), 422, "invalid_report")
+	aliasItem := strings.Replace(item, `"model":"alpha"`, `"model":"alias"`, 1)
+	prefixedItem := strings.Replace(item, `"model":"alpha"`, `"model":"route/alpha"`, 1)
+	mergedBody := strings.TrimSuffix(strings.Replace(reportJSON, `"revision":"1"`, `"revision":"3"`, 1), `]}`) + `,` + aliasItem + `,` + prefixedItem + `]}`
+	expectRevision(t, f.report(t, "2026-11-01", secret, mergedBody, nil), 200, "3")
+	var totalTokens, reqCount int64
+	if err := f.db.Reader.QueryRow(`SELECT total_tokens, request_count FROM daily_stats WHERE client_id=? AND day='2026-11-01' AND model_id=0`, client.ID).Scan(&totalTokens, &reqCount); err != nil {
+		t.Fatal(err)
+	}
+	if totalTokens != 30 || reqCount != 6 {
+		t.Fatalf("duplicate models were not merged: tokens=%d requests=%d", totalTokens, reqCount)
 	}
 }
 

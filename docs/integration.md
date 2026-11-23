@@ -151,7 +151,7 @@ sequenceDiagram
 
 - `{utc_day}` must be `YYYY-MM-DD` in **UTC** (never local timezone) and within the open window: **UTC today or UTC yesterday**. Future dates return `422 invalid_day`; closed older dates return `410 expired_day`.
 - Every `PUT` sends the **complete cumulative snapshot** for that seat and UTC day—not per-request events or incremental deltas. After restarting, a client must reconstruct the full day's totals before reporting.
-- Merge all local sources for the same canonical model into **one item per model** (no `service_tier` field is accepted, not even `"default"` or `null`). Duplicate normalized model names or aliases resolving to the same canonical model reject the entire snapshot.
+- Prefer merging local sources for the same canonical model into **one item per model** (legacy `service_tier` fields are ignored). If multiple items resolve to the same canonical model (including duplicate names, prefixes, or aliases), the server merges them additively.
 - Compute `ttft_avg_ms` and `latency_avg_ms` from summed durations divided by their own sample counts (sample-weighted when merging groups; never average group averages equally). When no sample exists, send `null` with `"0"` samples—never fabricate zero latency.
 - Model names are stripped through the final `/` and matched **exact, case-sensitive** against the [model catalog](catalogs.md#model-catalog). Valid unmatched models are skipped from totals without error and are not returned; any malformed item (even an unknown model) rejects the whole snapshot.
 
@@ -203,7 +203,7 @@ The canonical 13-field item schema is shown below (sending decimal strings for 6
 | `ttft_avg_ms`<br>`latency_avg_ms` | Item | Number or `null` | Finite and `>= 0` when samples `> 0`; must be `null` when samples `== "0"` |
 | `ttft_samples`<br>`latency_samples` | Item | Decimal string | Each `<= request_count` |
 
-Decimal strings must contain nonnegative int64 digits without `+` signs (avoid leading zeros). Integer or floating-point aggregation overflow rejects the snapshot.
+Decimal strings must contain nonnegative int64 digits without `+` signs (avoid leading zeros). For upstream accounting quirks where non-negative cross-field invariants diverge slightly (for example `cache_read_tokens + cache_write_tokens > input_tokens`, `reasoning_tokens > output_tokens`, `input_tokens + output_tokens > total_tokens`, `success_count > request_count`, sample/average mismatches, or positive usage with `request_count: "0"`), the server applies safe lower-bound normalization and clamping rather than rejecting the whole snapshot. Negative counts, non-finite floats, and integer or floating-point aggregation overflow still reject the snapshot.
 
 ### Revisions, Idempotency, and Conflicts
 
