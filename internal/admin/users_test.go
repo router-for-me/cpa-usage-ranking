@@ -17,7 +17,7 @@ import (
 
 func seedRankedUsers(t *testing.T, s *Service) {
 	t.Helper()
-	_, err := s.writer.Exec(`INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','one',1,123),(2,2,'550e8400-e29b-41d4-a716-446655440000','two',2,456);
+	_, err := s.writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','one',1,123),(2,2,'550e8400-e29b-41d4-a716-446655440000','two',2,456);
 	INSERT INTO client_writers(id,client_id,token_hash) VALUES(1,1,randomblob(32)),(2,2,randomblob(32));
 	INSERT INTO daily_reports VALUES('2026-11-17',1,789),('2026-11-18',1,789),('2026-11-17',2,789),('2026-11-18',2,789);
 	INSERT INTO daily_writer_versions(day,writer_id,client_id,revision,digest)
@@ -45,7 +45,7 @@ func TestBanOnlyUpdatesTargetStateAndRechecksDeletedActor(t *testing.T) {
 	s, _ := serviceDB(t)
 	seedRankedUsers(t, s)
 	var before string
-	query := `SELECT hex(w.token_hash)||github_id||cpa_uuid||display_name||avatar_id||created_at_ms FROM clients c JOIN client_writers w ON c.id=w.client_id WHERE c.id=1`
+	query := `SELECT hex(w.token_hash)||github_id||server_id||display_name||avatar_id||created_at_ms FROM clients c JOIN client_writers w ON c.id=w.client_id WHERE c.id=1`
 	if err := s.reader.QueryRow(query).Scan(&before); err != nil {
 		t.Fatal(err)
 	}

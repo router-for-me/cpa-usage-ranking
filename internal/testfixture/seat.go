@@ -16,7 +16,7 @@ func Seat(ctx context.Context, db *sql.DB, hash clients.CredentialHash, name str
 	}
 	defer tx.Rollback()
 	seat := clients.Client{DisplayName: name, AvatarID: avatar, CreatedAt: time.Now().UTC().Truncate(time.Millisecond)}
-	if err := tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
+	if err := tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms)
 		SELECT coalesce(max(github_id),0)+1,'550e8400-e29b-41d4-a716-446655440000',?,?,? FROM clients RETURNING id`,
 		name, avatar, seat.CreatedAt.UnixMilli()).Scan(&seat.ID); err != nil {
 		return clients.Writer{}, err

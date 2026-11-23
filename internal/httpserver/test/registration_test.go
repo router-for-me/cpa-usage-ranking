@@ -31,14 +31,14 @@ const (
 	startPath    = "/v1/clients/register/start"
 	completePath = "/v1/clients/register/complete"
 	withdrawPath = "/v1/clients/withdraw"
-	cpaUUID      = "550e8400-e29b-41d4-a716-446655440000"
+	serverID     = "550e8400-e29b-41d4-a716-446655440000"
 	returnURL    = "http://localhost:8080/settings?tab=ranking&aaa=xxx#status"
 )
 
-var validStartBody = startBody(cpaUUID, returnURL)
+var validStartBody = startBody(serverID, returnURL)
 
-func startBody(uuid, dest string) string {
-	return fmt.Sprintf(`{"cpa_uuid":%q,"return_to":%q}`, uuid, dest)
+func startBody(id, dest string) string {
+	return fmt.Sprintf(`{"server_id":%q,"return_to":%q}`, id, dest)
 }
 
 type registrationSettings struct {
@@ -254,9 +254,9 @@ func (f *registrationFixture) send(t *testing.T, body, secret string, headers ma
 	return f.api(t, "POST", startPath, body, secret, headers)
 }
 
-func (f *registrationFixture) start(t *testing.T, secret, uuid, dest string) string {
+func (f *registrationFixture) start(t *testing.T, secret, id, dest string) string {
 	t.Helper()
-	r := f.send(t, startBody(uuid, dest), secret, nil)
+	r := f.send(t, startBody(id, dest), secret, nil)
 	var reply struct {
 		RequestID string `json:"request_id"`
 		Authorize string `json:"authorize_url"`
@@ -269,7 +269,7 @@ func (f *registrationFixture) start(t *testing.T, secret, uuid, dest string) str
 
 func (f *registrationFixture) register(t *testing.T, secret string, githubID int64, name string) publicIdentity {
 	t.Helper()
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	f.approve(t, id, githubID, name, "test", returnURL)
 	return identity(t, f.complete(t, secret, id))
 }
@@ -370,7 +370,7 @@ func (f *registrationFixture) seed(t *testing.T, secret string) clients.Client {
 func TestRegistrationHTTPCreateAndSafeRetry(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	requireHTTPError(t, f.complete(t, testSecret(2), id), 401, "invalid_credential")
 	pending := f.complete(t, secret, id)
 	if pending.status != 202 || pending.header.Get("Retry-After") == "" || len(pending.body) != 0 {
@@ -396,12 +396,12 @@ func TestRegistrationHTTPCreateAndSafeRetry(t *testing.T) {
 			t.Fatalf("retry modified seat/profile: %+v", current)
 		}
 	}
-	second := f.start(t, testSecret(2), strings.ToUpper(cpaUUID), returnURL)
+	second := f.start(t, testSecret(2), strings.ToUpper(serverID), returnURL)
 	f.approve(t, second, 1<<54, "Changed GitHub Name", "new-login", returnURL)
 	if current := identity(t, f.complete(t, testSecret(2), second)); current.ID != created.ID || current.Name != "Current" {
-		t.Fatal("same numeric identity and canonical UUID did not reuse profile")
+		t.Fatal("same numeric identity and canonical server_id did not reuse profile")
 	}
-	other := f.start(t, testSecret(3), cpaUUID, returnURL)
+	other := f.start(t, testSecret(3), serverID, returnURL)
 	f.approve(t, other, 1<<54+1, "Current", "alice", returnURL)
 	if identity(t, f.complete(t, testSecret(3), other)).ID == created.ID {
 		t.Fatal("same public profile claimed another seat")
@@ -448,10 +448,12 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 		{validStartBody + ` {}`, secret, nil, 400, "invalid_request"},
 		{strings.TrimSuffix(validStartBody, "}") + `,"return_to":"https://another.example"}`, secret, nil, 400, "invalid_request"},
 		{strings.Replace(validStartBody, `"return_to"`, `"RETURN_TO"`, 1), secret, nil, 400, "invalid_request"},
-		{`{"client_id":"1","cpa_uuid":"` + cpaUUID + `"}`, secret, nil, 400, "invalid_request"},
+		{`{"client_id":"1","server_id":"` + serverID + `"}`, secret, nil, 400, "invalid_request"},
 		{`{"source":"192.0.2.1","return_to":"https://app.example"}`, secret, nil, 400, "invalid_request"},
 		{`{"display_name":"Valid","avatar_id":1}`, secret, nil, 400, "invalid_request"},
-		{`{"cpa_uuid":null}`, secret, nil, 400, "invalid_request"},
+		{`{"server_id":null}`, secret, nil, 400, "invalid_request"},
+		// 旧字段 cpa_uuid 不再提供兼容，必须返回 400 invalid_request。
+		{`{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"https://client.example/done"}`, secret, nil, 400, "invalid_request"},
 		{"{\"return_to\":\"\xff\"}", secret, nil, 400, "invalid_request"},
 		{startBody("not-a-uuid", returnURL), secret, nil, 400, "invalid_request"},
 		{startBody("00000000-0000-0000-0000-000000000000", returnURL), secret, nil, 400, "invalid_request"},
@@ -461,14 +463,14 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 		requireHTTPError(t, f.send(t, tc.body, tc.token, tc.headers), tc.status, tc.code)
 	}
 	for _, dest := range []string{"", "//host.example/a", "https:///outside", "https://?x", "javascript:alert(1)", "https://login@host.example", "https://host\\outside", "https://host/\r\nLocation:x", "http://host:65536", "http://[not-an-ip]"} {
-		body, _ := json.Marshal(map[string]string{"cpa_uuid": cpaUUID, "return_to": dest})
+		body, _ := json.Marshal(map[string]string{"server_id": serverID, "return_to": dest})
 		requireHTTPError(t, f.send(t, string(body), secret, nil), 400, "invalid_request")
 	}
 	var n int
 	if err := f.db.Reader.QueryRow("SELECT count(*) FROM registration_requests").Scan(&n); err != nil || n != 0 {
 		t.Fatalf("invalid request allocated state: %d %v", n, err)
 	}
-	id := f.start(t, secret, cpaUUID, returnURL)
-	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","cpa_uuid":"`+cpaUUID+`"}`, secret, nil), 400, "invalid_request")
+	id := f.start(t, secret, serverID, returnURL)
+	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","server_id":"`+serverID+`"}`, secret, nil), 400, "invalid_request")
 	requireHTTPError(t, f.complete(t, secret, "bad-id"), 400, "invalid_request")
 }

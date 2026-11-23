@@ -32,7 +32,7 @@ var (
 
 const PendingRetryAfter = 2 * time.Second
 
-var cpaUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var serverIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type Result struct {
 	Client  clients.Client
@@ -105,9 +105,9 @@ func httpURL(raw string) (*url.URL, bool) {
 	return u, true
 }
 
-// Start 固定 UUID、原样返回地址和凭据摘要，不创建设席或上报端。
-func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, cpaUUID, returnTo string) (string, error) {
-	if _, valid := httpURL(returnTo); !valid || !cpaUUIDPattern.MatchString(cpaUUID) || cpaUUID == "00000000-0000-0000-0000-000000000000" {
+// Start 固定 server_id、原样返回地址和凭据摘要，不创建设席或上报端。
+func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, serverID, returnTo string) (string, error) {
+	if _, valid := httpURL(returnTo); !valid || !serverIDPattern.MatchString(serverID) || serverID == "00000000-0000-0000-0000-000000000000" {
 		return "", ErrInvalidRequest
 	}
 	if !s.options.Enabled {
@@ -132,8 +132,8 @@ func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, cpaUUI
 		return "", &LimitError{Code: "registration_capacity", RetryAfter: time.UnixMilli(firstExpiry).Sub(now)}
 	}
 	id := opaqueToken()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,cpa_uuid,return_to,expires_at_ms,stage)
-		VALUES(?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(cpaUUID), returnTo, now.Add(s.options.TTL).UnixMilli()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,server_id,return_to,expires_at_ms,stage)
+		VALUES(?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(serverID), returnTo, now.Add(s.options.TTL).UnixMilli()); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -154,14 +154,14 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	}
 	var now time.Time
 	var expiry int64
-	var stage, cpaUUID string
+	var stage, serverID string
 	var githubID sql.NullInt64
 	var name sql.NullString
 	checkRequest := func(queryRow func(context.Context, string, ...any) *sql.Row) (Result, error) {
 		var savedHash []byte
 		var clientID sql.NullInt64
-		err := queryRow(ctx, `SELECT token_hash,expires_at_ms,stage,cpa_uuid,github_id,display_name,client_id
-			FROM registration_requests WHERE id=?`, id).Scan(&savedHash, &expiry, &stage, &cpaUUID, &githubID, &name, &clientID)
+		err := queryRow(ctx, `SELECT token_hash,expires_at_ms,stage,server_id,github_id,display_name,client_id
+			FROM registration_requests WHERE id=?`, id).Scan(&savedHash, &expiry, &stage, &serverID, &githubID, &name, &clientID)
 		if errors.Is(err, sql.ErrNoRows) {
 			// 过期清理后的编号与未签发编号不可区分，也没有额外的找回入口。
 			return Result{}, ErrExpired
@@ -210,7 +210,7 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Result{}, err
 	}
-	seat, err := readSeat(tx.QueryRowContext(ctx, seatFields+` WHERE github_id=? AND cpa_uuid=?`, githubID.Int64, cpaUUID))
+	seat, err := readSeat(tx.QueryRowContext(ctx, seatFields+` WHERE github_id=? AND server_id=?`, githubID.Int64, serverID))
 	newSeat := errors.Is(err, sql.ErrNoRows)
 	if boundID != 0 && (newSeat || (seat.ID != 0 && seat.ID != boundID)) {
 		return Result{}, ErrWrongCredential
@@ -223,8 +223,8 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	}
 	if newSeat {
 		seat = clients.Client{DisplayName: name.String, AvatarID: s.avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
-		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
-			VALUES(?,?,?,?,?) RETURNING id`, githubID.Int64, cpaUUID, seat.DisplayName, seat.AvatarID, now.UnixMilli()).Scan(&seat.ID)
+		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms)
+			VALUES(?,?,?,?,?) RETURNING id`, githubID.Int64, serverID, seat.DisplayName, seat.AvatarID, now.UnixMilli()).Scan(&seat.ID)
 		if err != nil {
 			return Result{}, err
 		}

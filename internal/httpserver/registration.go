@@ -27,8 +27,8 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 		return fmt.Errorf("invalid registration HTTP configuration")
 	}
 	mountExact(router, http.MethodPost, "/v1/clients/register/start", RegistrationAdmission(limiter, options.GroupIPv6By64), func(c *gin.Context) {
-		var cpaUUID, returnTo string
-		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"cpa_uuid": &cpaUUID, "return_to": &returnTo})
+		var serverID, returnTo string
+		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"server_id": &serverID, "return_to": &returnTo})
 		if !ok {
 			return
 		}
@@ -36,7 +36,7 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 			writeRegistrationError(c, registration.ErrRegistrationClosed)
 			return
 		}
-		id, err := service.Start(c.Request.Context(), hash, cpaUUID, returnTo)
+		id, err := service.Start(c.Request.Context(), hash, serverID, returnTo)
 		if err != nil {
 			writeRegistrationError(c, err)
 			return

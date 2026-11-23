@@ -18,7 +18,7 @@ func InitSchema(ctx context.Context, writer *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS clients (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		github_id INTEGER NOT NULL CHECK (typeof(github_id) = 'integer' AND github_id > 0),
-		cpa_uuid TEXT NOT NULL CHECK (length(cpa_uuid) = 36),
+		server_id TEXT NOT NULL CHECK (length(server_id) = 36),
 		display_name TEXT NOT NULL,
 		avatar_id INTEGER NOT NULL CHECK (avatar_id > 0),
 		disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
@@ -26,7 +26,7 @@ func InitSchema(ctx context.Context, writer *sql.DB) error {
 		ranking_hidden INTEGER NOT NULL DEFAULT 0 CHECK (ranking_hidden IN (0, 1)),
 		withdrawn INTEGER NOT NULL DEFAULT 0 CHECK (withdrawn IN (0, 1))
 	);
-	CREATE UNIQUE INDEX IF NOT EXISTS clients_github_cpa ON clients(github_id, cpa_uuid);
+	CREATE UNIQUE INDEX IF NOT EXISTS clients_github_server_id ON clients(github_id, server_id);
 	CREATE INDEX IF NOT EXISTS clients_ranking_hidden_id ON clients(ranking_hidden, id);
 	CREATE TABLE IF NOT EXISTS client_writers (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +38,7 @@ func InitSchema(ctx context.Context, writer *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS registration_requests (
 		id TEXT PRIMARY KEY,
 		token_hash BLOB NOT NULL CHECK (typeof(token_hash) = 'blob' AND length(token_hash) = 32),
-		cpa_uuid TEXT NOT NULL CHECK (length(cpa_uuid) = 36),
+		server_id TEXT NOT NULL CHECK (length(server_id) = 36),
 		return_to TEXT NOT NULL,
 		expires_at_ms INTEGER NOT NULL,
 		stage TEXT NOT NULL CHECK (stage IN ('pending', 'authorizing', 'verifying', 'approved', 'denied', 'failed', 'completed')),

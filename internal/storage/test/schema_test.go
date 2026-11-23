@@ -35,7 +35,7 @@ func TestCurrentSchemaInitializesAndReopens(t *testing.T) {
 		queryInt(t, db.Reader, "SELECT count(*) FROM clients") != 0 || queryInt(t, db.Reader, "SELECT count(*) FROM models") != 0 {
 		t.Fatal("initialization created a ledger or seeded data")
 	}
-	execSQL(t, db.Writer, `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','preserved',1,123)`)
+	execSQL(t, db.Writer, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','preserved',1,123)`)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -63,16 +63,43 @@ func TestSchemaInitializationRollsBackOnError(t *testing.T) {
 }
 
 func TestFormerClientSchemaIsNotMigratedOrBackfilled(t *testing.T) {
-	db := openDatabase(t, filepath.Join(t.TempDir(), "legacy.db"))
-	execSQL(t, db.Writer, `CREATE TABLE clients(id INTEGER PRIMARY KEY, token_hash BLOB NOT NULL UNIQUE);
-		INSERT INTO clients VALUES(42,zeroblob(32))`)
-	if err := storage.InitSchema(context.Background(), db.Writer); err == nil {
-		t.Fatal("former client table was accepted")
-	}
-	if queryInt(t, db.Reader, "SELECT count(*) FROM clients WHERE id=42 AND token_hash=zeroblob(32)") != 1 ||
-		queryInt(t, db.Reader, "SELECT count(*) FROM sqlite_schema WHERE name IN ('client_writers','registration_requests')") != 0 {
-		t.Fatal("failed initialization touched the old schema or data")
-	}
+	t.Run("legacy token_hash clients table", func(t *testing.T) {
+		db := openDatabase(t, filepath.Join(t.TempDir(), "legacy.db"))
+		execSQL(t, db.Writer, `CREATE TABLE clients(id INTEGER PRIMARY KEY, token_hash BLOB NOT NULL UNIQUE);
+			INSERT INTO clients VALUES(42,zeroblob(32))`)
+		if err := storage.InitSchema(context.Background(), db.Writer); err == nil {
+			t.Fatal("former client table was accepted")
+		}
+		if queryInt(t, db.Reader, "SELECT count(*) FROM clients WHERE id=42 AND token_hash=zeroblob(32)") != 1 ||
+			queryInt(t, db.Reader, "SELECT count(*) FROM sqlite_schema WHERE name IN ('client_writers','registration_requests')") != 0 {
+			t.Fatal("failed initialization touched the old schema or data")
+		}
+	})
+
+	// 仅含旧 cpa_uuid 列（无 server_id 列）的 clients 表必须被拒绝并完整回滚。
+	t.Run("legacy cpa_uuid clients table", func(t *testing.T) {
+		db := openDatabase(t, filepath.Join(t.TempDir(), "legacy-cpa-uuid.db"))
+		execSQL(t, db.Writer, `CREATE TABLE clients(
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			github_id INTEGER NOT NULL,
+			cpa_uuid TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			avatar_id INTEGER NOT NULL,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			created_at_ms INTEGER NOT NULL,
+			ranking_hidden INTEGER NOT NULL DEFAULT 0,
+			withdrawn INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
+			VALUES(7,100,'550e8400-e29b-41d4-a716-446655440000','legacy',1,456)`)
+		if err := storage.InitSchema(context.Background(), db.Writer); err == nil {
+			t.Fatal("legacy cpa_uuid client table was accepted")
+		}
+		if queryInt(t, db.Reader, "SELECT count(*) FROM clients WHERE id=7 AND github_id=100 AND cpa_uuid='550e8400-e29b-41d4-a716-446655440000' AND display_name='legacy' AND created_at_ms=456") != 1 ||
+			queryInt(t, db.Reader, "SELECT count(*) FROM sqlite_schema WHERE name IN ('client_writers','registration_requests','clients_github_server_id')") != 0 {
+			t.Fatal("failed initialization touched the legacy cpa_uuid schema or data")
+		}
+	})
 }
 
 func TestClientSchemaEnforcesCredentialAndStateShape(t *testing.T) {
@@ -80,12 +107,12 @@ func TestClientSchemaEnforcesCredentialAndStateShape(t *testing.T) {
 	if err := storage.InitSchema(context.Background(), db.Writer); err != nil {
 		t.Fatal(err)
 	}
-	const insert = `INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,disabled,withdrawn,created_at_ms) VALUES(?,?,'test',1,?,?,0)`
-	const uuid = "550e8400-e29b-41d4-a716-446655440000"
-	if _, err := db.Writer.Exec(insert, 42, uuid, 0, 0); err != nil {
+	const insert = `INSERT INTO clients(github_id,server_id,display_name,avatar_id,disabled,withdrawn,created_at_ms) VALUES(?,?,'test',1,?,?,0)`
+	const serverID = "550e8400-e29b-41d4-a716-446655440000"
+	if _, err := db.Writer.Exec(insert, 42, serverID, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]any{{42, uuid, 0, 0}, {0, uuid, 0, 0}, {"nonnumeric", uuid, 0, 0}, {43, "bad", 0, 0}, {43, uuid, 2, 0}, {43, uuid, 0, 2}} {
+	for _, args := range [][]any{{42, serverID, 0, 0}, {0, serverID, 0, 0}, {"nonnumeric", serverID, 0, 0}, {43, "bad", 0, 0}, {43, serverID, 2, 0}, {43, serverID, 0, 2}} {
 		if _, err := db.Writer.Exec(insert, args...); err == nil {
 			t.Fatal("invalid or duplicate seat persisted")
 		}

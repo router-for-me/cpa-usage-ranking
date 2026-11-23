@@ -16,7 +16,7 @@ import (
 	"cpa-usage-ranking/internal/storage"
 )
 
-const uuid = "550e8400-e29b-41d4-a716-446655440000"
+const serverID = "550e8400-e29b-41d4-a716-446655440000"
 const returnTo = "http://localhost:8080/settings"
 
 func open(t *testing.T, path string, options registration.Options) (*storage.DB, *registration.Service) {
@@ -63,7 +63,7 @@ func TestConcurrentSafeRetriesAcrossIndependentSQLitePools(t *testing.T) {
 	services := []*registration.Service{one, two}
 	for i, service := range services {
 		var err error
-		ids[i], err = service.Start(ctx, digest(byte(i+1)), uuid, returnTo)
+		ids[i], err = service.Start(ctx, digest(byte(i+1)), serverID, returnTo)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,11 +102,11 @@ func TestConcurrentSafeRetriesAcrossIndependentSQLitePools(t *testing.T) {
 func TestReadOnlyRegistrationWhileWriterBusy(t *testing.T) {
 	db, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	hash := digest(1)
-	pending, err := s.Start(t.Context(), hash, uuid, returnTo)
+	pending, err := s.Start(t.Context(), hash, serverID, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := s.Start(t.Context(), hash, uuid, returnTo)
+	completed, err := s.Start(t.Context(), hash, serverID, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestCallbackDisconnectStillRecordsOutcome(t *testing.T) {
 	}{{"identity received", true}, {"identity not received", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, s := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
-			id, err := s.Start(t.Context(), digest(1), uuid, returnTo)
+			id, err := s.Start(t.Context(), digest(1), serverID, returnTo)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -200,7 +200,7 @@ func TestCallbackDisconnectStillRecordsOutcome(t *testing.T) {
 func TestDatabaseFailureAndCancellationLeaveNoPartialIdentity(t *testing.T) {
 	db, service := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
 	ctx := context.Background()
-	id, err := service.Start(ctx, digest(1), uuid, returnTo)
+	id, err := service.Start(ctx, digest(1), serverID, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}

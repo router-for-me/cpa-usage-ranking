@@ -13,7 +13,7 @@ test('registers and safely retries against the real binary without adding accoun
     localStorage.setItem('registration-test-secret', secret)
     const response = await fetch(startPath, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ cpa_uuid: '550e8400-e29b-41d4-a716-446655440000', return_to: `${location.origin}/?from=client#settings` }),
+      body: JSON.stringify({ server_id: '550e8400-e29b-41d4-a716-446655440000', return_to: `${location.origin}/?from=client#settings` }),
     })
     return { status: response.status, cache: response.headers.get('Cache-Control'), body: await response.json() as { request_id: string; authorize_url: string } }
   }, start)

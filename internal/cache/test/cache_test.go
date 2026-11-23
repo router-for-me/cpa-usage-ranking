@@ -31,7 +31,7 @@ func cacheFixture(t *testing.T) (*storage.DB, *statistics.Reader) {
 	if err = storage.InitSchema(context.Background(), db.Writer); err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Writer.Exec(`INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','a',1,0);
+	_, err = db.Writer.Exec(`INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms) VALUES(1,'550e8400-e29b-41d4-a716-446655440000','a',1,0);
  INSERT INTO client_writers(id,client_id,token_hash) VALUES(1,1,randomblob(32));
  INSERT INTO daily_reports(day,client_id,received_at_ms) VALUES('2026-12-31',1,0);
  INSERT INTO daily_writer_versions VALUES('2026-12-31',1,1,1,randomblob(32));

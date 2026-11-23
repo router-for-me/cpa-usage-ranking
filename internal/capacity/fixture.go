@@ -224,7 +224,7 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 				return e
 			}
 			defer tx.Rollback()
-			cs, e := tx.PrepareContext(ctx, `INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,created_at_ms)
+			cs, e := tx.PrepareContext(ctx, `INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,created_at_ms)
 				VALUES(?,?,'550e8400-e29b-41d4-a716-446655440000',?,1,?)`)
 			if e != nil {
 				return e

@@ -269,7 +269,7 @@ func compareSustainedDatabases(ctx context.Context, seedPath, expectedPath strin
 	}
 	counts := map[string]int64{"closed": int64(len(finalClosed))}
 	queries := []struct{ name, query string }{
-		{"clients", "SELECT id,github_id,cpa_uuid,display_name,avatar_id,disabled,ranking_hidden,withdrawn,created_at_ms FROM clients ORDER BY id"},
+		{"clients", "SELECT id,github_id,server_id,display_name,avatar_id,disabled,ranking_hidden,withdrawn,created_at_ms FROM clients ORDER BY id"},
 		{"client_writers", "SELECT id,client_id,token_hash FROM client_writers ORDER BY id"},
 		{"models", "SELECT id,model_name FROM models ORDER BY id"},
 		{"report_window", "SELECT id,closed_before_day FROM report_window ORDER BY id"},

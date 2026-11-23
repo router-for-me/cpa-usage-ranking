@@ -22,7 +22,7 @@ class SmokeSafetyTests(unittest.TestCase):
         db = sqlite3.connect(":memory:")
         self.addCleanup(db.close)
         db.executescript("""
-            CREATE TABLE clients(id INTEGER PRIMARY KEY, github_id INTEGER, cpa_uuid TEXT, withdrawn INTEGER, ranking_hidden INTEGER);
+            CREATE TABLE clients(id INTEGER PRIMARY KEY, github_id INTEGER, server_id TEXT, withdrawn INTEGER, ranking_hidden INTEGER);
             CREATE TABLE client_writers(id INTEGER);
             CREATE TABLE registration_requests(id TEXT);
             CREATE TABLE models(id INTEGER);
@@ -44,6 +44,17 @@ class SmokeSafetyTests(unittest.TestCase):
         db.execute("CREATE TABLE admin_accounts(id INTEGER)")
         db.execute("CREATE TABLE schema_migrations(version INTEGER)")
         with self.assertRaisesRegex(AssertionError, "unexpected database schema"):
+            docker_smoke.require_current_schema(db)
+
+    def test_current_schema_rejects_legacy_cpa_uuid_column(self):
+        # 旧列 cpa_uuid 无论替代或并存于 clients 表都必须触发断言失败。
+        db = self.schema_fixture()
+        db.execute("DROP TABLE clients")
+        db.execute("CREATE TABLE clients(id INTEGER PRIMARY KEY, github_id INTEGER, cpa_uuid TEXT, withdrawn INTEGER, ranking_hidden INTEGER)")
+        with self.assertRaisesRegex(AssertionError, "unexpected seat columns"):
+            docker_smoke.require_current_schema(db)
+        db.execute("ALTER TABLE clients ADD COLUMN server_id TEXT")
+        with self.assertRaisesRegex(AssertionError, "unexpected seat columns"):
             docker_smoke.require_current_schema(db)
 
     def test_cleanup_refuses_unowned_container_and_volume(self):

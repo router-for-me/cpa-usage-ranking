@@ -22,7 +22,7 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := service.Start(ctx, hash, uuid, returnTo)
+	id, err := service.Start(ctx, hash, serverID, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if err != nil || !first.Created {
 		t.Fatal(first, err)
 	}
-	other, err := service.Start(ctx, digest(1), uuid, returnTo)
+	other, err := service.Start(ctx, digest(1), serverID, returnTo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if err != nil || r.Created || r.Client.ID != first.Client.ID {
 		t.Fatalf("closed retry: %+v %v", r, err)
 	}
-	if _, err := closed.Start(ctx, hash, uuid, returnTo); !errors.Is(err, registration.ErrRegistrationClosed) {
+	if _, err := closed.Start(ctx, hash, serverID, returnTo); !errors.Is(err, registration.ErrRegistrationClosed) {
 		t.Fatalf("new start accepted when closed: %v", err)
 	}
 	if _, err := closed.Complete(ctx, digest(1), other); !errors.Is(err, registration.ErrRegistrationClosed) {

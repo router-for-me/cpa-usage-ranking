@@ -67,7 +67,8 @@ def require_current_schema(db):
                 "daily_reports", "daily_writer_versions", "daily_stats", "period_stats", "admin_accounts"}
     require(expected <= tables and "schema_migrations" not in tables, f"unexpected database schema: {tables}")
     columns = {row[1] for row in db.execute("PRAGMA table_info(clients)")}
-    require({"github_id", "cpa_uuid", "withdrawn", "ranking_hidden"} <= columns and "token_hash" not in columns,
+    require({"github_id", "server_id", "withdrawn", "ranking_hidden"} <= columns
+            and "token_hash" not in columns and "cpa_uuid" not in columns,
             "unexpected seat columns")
 
 
@@ -282,7 +283,7 @@ class Smoke:
         raw_secret = secrets.token_bytes(32)
         secret = base64.urlsafe_b64encode(raw_secret).decode().rstrip("=")
         start, complete = "/v1/clients/register/start", "/v1/clients/register/complete"
-        registration = {"cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
+        registration = {"server_id": "550e8400-e29b-41d4-a716-446655440000",
                         "return_to": "http://localhost:3001/settings?tab=ranking#status"}
         ticket = expect_json(base, start, 200, "POST", registration, secret)
         request_id = ticket["request_id"]

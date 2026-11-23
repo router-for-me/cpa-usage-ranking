@@ -20,7 +20,7 @@ func TestGitHubReturnToWithoutReferer(t *testing.T) {
 	}
 	for i, dest := range returns {
 		secret := testSecret(byte(i + 1))
-		id := f.start(t, secret, cpaUUID, dest)
+		id := f.start(t, secret, serverID, dest)
 		f.approve(t, id, int64(i+1), strings.Repeat("x", 33), "fallback", dest)
 		if got := identity(t, f.complete(t, secret, id)); got.Name != "fallback" {
 			t.Fatal("invalid GitHub name did not fall back to login")
@@ -34,7 +34,7 @@ func TestGitHubReturnToWithoutReferer(t *testing.T) {
 func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	browser := f.open(t, id)
 	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+id+"&return_to=https://evil.example", "", "", nil), 400, "invalid_request")
 	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", nil), 400, "invalid_request")
@@ -60,7 +60,7 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	requireHTTPError(t, f.complete(t, secret, id), 403, "github_authorization_denied")
 	requireHTTPError(t, f.callback(t, browser.state, browser.cookie, "code=not-a-grant"), 400, "invalid_request")
 
-	next := f.start(t, secret, cpaUUID, returnURL)
+	next := f.start(t, secret, serverID, returnURL)
 	browser = f.open(t, next)
 	f.github.setGrant("concurrent-code", fakeGrant{challenge: browser.challenge, userJSON: `{"id":42,"login":"test"}`})
 	status := make(chan int, 8)
@@ -84,14 +84,14 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	identity(t, f.complete(t, secret, next))
 }
 
-func TestRegistrationCannotRebindWriterAndDifferentUUIDIsDistinct(t *testing.T) {
+func TestRegistrationCannotRebindWriterAndDifferentServerIDIsDistinct(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
-	const otherUUID = "550e8400-e29b-41d4-a716-446655440001"
+	const otherServerID = "550e8400-e29b-41d4-a716-446655440001"
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	f.approve(t, id, 10, "Name", "login", returnURL)
 	one := identity(t, f.complete(t, secret, id))
-	newPair := f.start(t, secret, otherUUID, returnURL)
+	newPair := f.start(t, secret, otherServerID, returnURL)
 	f.approve(t, newPair, 10, "Name", "login", returnURL)
 	requireHTTPError(t, f.complete(t, secret, newPair), 401, "invalid_credential")
 	var n int
@@ -99,13 +99,13 @@ func TestRegistrationCannotRebindWriterAndDifferentUUIDIsDistinct(t *testing.T) 
 		t.Fatalf("rebind created orphan seat: %d %v", n, err)
 	}
 	other := testSecret(2)
-	twoID := f.start(t, other, otherUUID, returnURL)
+	twoID := f.start(t, other, otherServerID, returnURL)
 	f.approve(t, twoID, 10, "Name", "login", returnURL)
 	two := identity(t, f.complete(t, other, twoID))
 	if two.ID == one.ID {
-		t.Fatal("different CPA UUID did not allocate another seat")
+		t.Fatal("different server_id did not allocate another seat")
 	}
-	intoExisting := f.start(t, secret, otherUUID, returnURL)
+	intoExisting := f.start(t, secret, otherServerID, returnURL)
 	f.approve(t, intoExisting, 10, "Name", "login", returnURL)
 	requireHTTPError(t, f.complete(t, secret, intoExisting), 401, "invalid_credential")
 	if got := identity(t, f.complete(t, secret, id)); got.ID != one.ID {
@@ -121,7 +121,7 @@ func TestExpiredGitHubCallbackDoesNotReadOrRedirect(t *testing.T) {
 	settings.service.Now = func() time.Time { return time.UnixMilli(now.Load()) }
 	f := newRegistrationFixture(t, settings)
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	browser := f.open(t, id)
 	now.Add(settings.service.TTL.Milliseconds())
 	r := f.callback(t, browser.state, browser.cookie, "code=late-code")
@@ -135,7 +135,7 @@ func TestExpiredGitHubCallbackDoesNotReadOrRedirect(t *testing.T) {
 func TestGitHubFailureClosedAndNotRetried(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	browser := f.open(t, id)
 	f.github.setGrant("redirect-code", fakeGrant{challenge: browser.challenge, tokenStatus: 307})
 	r := f.callback(t, browser.state, browser.cookie, "code=redirect-code")
