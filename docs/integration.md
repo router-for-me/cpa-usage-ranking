@@ -10,7 +10,7 @@ All paths are relative to the deployment's HTTPS origin (for example `https://ra
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA UUID, `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
+| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA `server_id`, `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization |
 | `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat (empty body, no query parameters) |
 | `PUT` | `/v1/clients/report/{utc_day}` | Registered `Bearer <secret>` | Atomically replace the seat's full cumulative snapshot for one UTC day |
@@ -34,7 +34,7 @@ Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` duri
 
 Before the first registration attempt, each reporting installation generates **32 bytes from a cryptographically secure random source**, encodes them as **43-character unpadded `base64url`** (RFC 4648 URL alphabet `A–Z a–z 0–9 - _`, no `=` or whitespace), and persists the secret durably in protected storage.
 
-- **Distinct from `cpa_uuid`**: The Bearer secret is a per-writer **authentication key** used on every registration, report, and withdrawal request (daily reports do not call GitHub again). By contrast, `cpa_uuid` is a non-secret CPA instance identifier paired with the GitHub user ID to select the ranking seat.
+- **Distinct from `server_id`**: The Bearer secret is a per-writer **authentication key** used on every registration, report, and withdrawal request (daily reports do not call GitHub again). By contrast, `server_id` is a non-secret CPA instance identifier paired with the GitHub user ID to select the ranking seat.
 - Send exactly one `Authorization: Bearer <secret>` header (scheme is case-insensitive, separated by one space).
 - The server decodes the 43-character token and stores only the **32-byte `SHA-256` digest of the decoded bytes**—never the raw secret.
 - Each reporting installation uses its own credential; multiple writers for the same seat must not share a secret.
@@ -49,7 +49,7 @@ sequenceDiagram
     participant R as Ranking Server
     participant G as GitHub
     Note over C: Generate & persist 32-byte Bearer secret locally
-    C->>R: POST /v1/clients/register/start (cpa_uuid, return_to, avatar_id?, Bearer)
+    C->>R: POST /v1/clients/register/start (server_id, return_to, avatar_id?, Bearer)
     R-->>C: 200 {request_id, authorize_url} (no seat yet)
     C->>B: Open authorize_url
     B->>R: GET /auth/github/authorize
@@ -71,13 +71,13 @@ Authorization: Bearer <secret>
 Content-Type: application/json
 
 {
-  "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "server_id": "550e8400-e29b-41d4-a716-446655440000",
   "return_to": "http://localhost:3001/settings?tab=ranking#status",
   "avatar_id": "12"
 }
 ```
 
-- `cpa_uuid`: Persistent, nonzero `8-4-4-4-12` hex UUID supplied by the CPA instance (case-insensitive). Multiple collectors reporting for the same CPA instance must submit its shared UUID rather than inventing independent UUIDs.
+- `server_id`: Persistent, nonzero `8-4-4-4-12` hex UUID identifying the CPA instance (case-insensitive, stored lowercase; matches CPA's `server.server-id`, readable from CPA's `GET /v8/management/server/server-id` or the `X-CPA-SERVER-ID` header on authenticated management responses). Multiple collectors reporting for the same CPA instance must submit its shared `server_id` rather than inventing independent UUIDs.
 - `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
 - `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) matching an entry in `GET /avatars/catalog.json`. Omit to use the catalog's `default_avatar_id` (`"1"`). Malformed types/values (`null`, JSON number, `""`, `"0"`, leading zeros) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
 - `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (fixed 10-minute lifetime) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
@@ -109,9 +109,9 @@ Success response (`client_id` and `avatar_id` are positive int64 decimal strings
 ```
 
 **Seat identity, profile, and recovery rules:**
-- **Seat key**: Uniquely identified by **`(GitHub numeric user ID, CPA UUID)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
+- **Seat key**: Uniquely identified by **`(GitHub numeric user ID, server_id)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
 - **Initial profile**: New seats (`201 Created`) normalize GitHub `name` (falling back to truncated `login`) using Unicode NFKC, outer whitespace trimming, `1`–`32` code points / `≤128` UTF-8 bytes, visible content required, and no control or bidi characters, and save the `avatar_id` submitted in `start` (or the catalog default when omitted). Reusing an existing seat (`200 OK`) keeps its existing display name and avatar unchanged. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or post-registration profile-edit API.
-- **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry; after expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and CPA UUID.
+- **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry; after expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and `server_id`.
 - **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` until expiry (and `410 registration_request_expired` afterward). Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again.
 - **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. A `withdrawn` seat is permanent and cannot be restored by clients or admins. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
 
@@ -124,7 +124,7 @@ Authorization: Bearer <registered-writer-secret>
 
 - Send no request body or query parameters. `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat).
 - Withdrawal preserves historical statistics and admin flags, immediately blocks **every writer** of that seat from reporting or retrying (`403 client_withdrawn`), and removes the seat from all leaderboards and scoring references on the next successful cache build.
-- Other seats (for example a different CPA UUID under the same GitHub account) remain unaffected. There is no public rejoin API.
+- Other seats (for example a different `server_id` under the same GitHub account) remain unaffected. There is no public rejoin API.
 
 ## Daily Cumulative Snapshot Reporting
 
@@ -246,7 +246,7 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
-CPA_UUID='replace-with-your-cpa-instance-uuid'
+SERVER_ID='replace-with-your-cpa-server-id'
 
 # 2. Start registration (avatar_id is optional; omit to use the catalog default)
 #    Save request_id and open authorize_url in a browser
@@ -254,7 +254,7 @@ curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{
-    \"cpa_uuid\": \"$CPA_UUID\",
+    \"server_id\": \"$SERVER_ID\",
     \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\",
     \"avatar_id\": \"12\"
   }"

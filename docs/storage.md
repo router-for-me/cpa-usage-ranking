@@ -26,9 +26,9 @@ Schema initialization runs inside one transaction on startup and is idempotent o
 
 | Table | Key & Purpose |
 | --- | --- |
-| `clients` | Positive `AUTOINCREMENT` `id`; unique `(github_id, cpa_uuid)` seat; `display_name`, `avatar_id`, `created_at_ms`; independent `disabled`, `ranking_hidden`, `withdrawn` flags |
+| `clients` | Positive `AUTOINCREMENT` `id`; unique `(github_id, server_id)` seat; `display_name`, `avatar_id`, `created_at_ms`; independent `disabled`, `ranking_hidden`, `withdrawn` flags |
 | `client_writers` | `(id, client_id)` and globally unique 32-byte `SHA-256` `token_hash` per writer (never raw credentials, never rebound across seats) |
-| `registration_requests` | `WITHOUT ROWID` keyed by `id`; bounded `10m` OAuth requests (max `2,000` unexpired) storing `cpa_uuid`, `return_to`, `avatar_id`, writer digest, state/PKCE, and retained completion result |
+| `registration_requests` | `WITHOUT ROWID` keyed by `id`; bounded `10m` OAuth requests (max `2,000` unexpired) storing `server_id`, `return_to`, `avatar_id`, writer digest, state/PKCE, and retained completion result |
 | `models` | Stable positive integer IDs mapped to unique canonical model names (ID `0` reserved for internal totals; aliases and prices are not persisted) |
 | `daily_reports` | `WITHOUT ROWID` keyed by `(day, client_id)`; seat/day parent row (`received_at_ms`) cascading deletes to versions and stats on settlement |
 | `daily_writer_versions` | `WITHOUT ROWID` keyed by `(day, writer_id)`; each writer's latest `revision` and 32-byte snapshot digest |

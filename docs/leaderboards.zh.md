@@ -29,7 +29,7 @@
 - `generated_at` 为本轮缓存构建的 UTC 开始时间，而非客户端最后上报时间。
 - `client_id`、`avatar_id` 与 `metric` 均为十进制字符串以保留完整精度；除 `usage` 为整数外，其余指标保留两位小数。`rank` 为 JSON 整数。昵称按纯文本渲染，头像 ID 对应[头像目录](catalogs.zh.md#头像目录)。
 - 空榜返回 `200` 与 `entries: []`；首轮缓存构建完成前返回 `503`（`leaderboard_unavailable`）；非法参数或附带查询串返回 `400`（`invalid_parameter`）。后续刷新失败时保留上一轮完整快照及其原始周期边界与 `generated_at`。
-- 响应不暴露凭据、摘要、GitHub ID、CPA UUID、IP 地址或各分项得分拆解。
+- 响应不暴露凭据、摘要、GitHub ID、CPA `server_id`、IP 地址或各分项得分拆解。
 
 ### 综合总榜明细（`details`）
 

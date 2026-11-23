@@ -10,7 +10,7 @@
 
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA UUID、`return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
+| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA `server_id`、`return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | 同一 `Bearer <secret>` | GitHub 授权后完成注册 |
 | `POST` | `/v1/clients/withdraw` | 已注册的 `Bearer <secret>` | 退出整个席位（空请求体、无查询参数） |
 | `PUT` | `/v1/clients/report/{utc_day}` | 已注册的 `Bearer <secret>` | 原子替换该席位某个 UTC 日的完整累计快照 |
@@ -34,7 +34,7 @@
 
 首次注册前，每个上报端独立生成 **32 字节密码学安全随机数**，编码为 **43 字符无填充 `base64url`**（RFC 4648 URL 字符集 `A–Z a–z 0–9 - _`，不含 `=` 或空白），并先持久化到受保护的本地存储。
 
-- **与 `cpa_uuid` 的区别**：Bearer 凭据是每个上报端用于接口**鉴权的密钥**（注册后日常上报与退出均靠它鉴权，不再请求 GitHub）；`cpa_uuid` 则是 CPA 实例的非机密标识，与 GitHub 用户 ID 组合用于确定排行榜席位。
+- **与 `server_id` 的区别**：Bearer 凭据是每个上报端用于接口**鉴权的密钥**（注册后日常上报与退出均靠它鉴权，不再请求 GitHub）；`server_id` 则是 CPA 实例的非机密标识，与 GitHub 用户 ID 组合用于确定排行榜席位。
 - 仅发送单个 `Authorization: Bearer <secret>` 请求头（scheme 不区分大小写，与凭据间以单个空格分隔）。
 - 服务端将 43 字符编码解码回 32 字节后计算 **`SHA-256` 摘要**存储，不保存原文。
 - 同一席位的多个上报端各自持有独立凭据，不得共享同一密钥。
@@ -49,7 +49,7 @@ sequenceDiagram
     participant R as Ranking 服务端
     participant G as GitHub
     Note over C: 本地生成并持久化 32 字节 Bearer 凭据
-    C->>R: POST /v1/clients/register/start（cpa_uuid、return_to、avatar_id?、Bearer）
+    C->>R: POST /v1/clients/register/start（server_id、return_to、avatar_id?、Bearer）
     R-->>C: 200 {request_id, authorize_url}（此时未建立席位）
     C->>B: 打开完整 authorize_url
     B->>R: GET /auth/github/authorize
@@ -71,13 +71,13 @@ Authorization: Bearer <secret>
 Content-Type: application/json
 
 {
-  "cpa_uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "server_id": "550e8400-e29b-41d4-a716-446655440000",
   "return_to": "http://localhost:3001/settings?tab=ranking#status",
   "avatar_id": "12"
 }
 ```
 
-- `cpa_uuid`：由 CPA 实例提供的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写）。同一 CPA 实例下的多个采集端须提交相同 UUID，不要各自随机生成。
+- `server_id`：CPA 实例的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写，落盘转小写；对应 CPA 配置项 `server.server-id`，可通过 CPA 的 `GET /v8/management/server/server-id` 或任意已鉴权管理接口响应头 `X-CPA-SERVER-ID` 获取）。同一 CPA 实例下的多个采集端须提交相同 `server_id`，不要各自随机生成。
 - `return_to`：不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
 - `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`），须存在于 `GET /avatars/catalog.json` 目录中。省略时默认使用目录的 `default_avatar_id`（`"1"`）。类型或格式错误（如 `null`、JSON 数字、`""`、`"0"`、前导零）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
 - `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（固定 10 分钟有效），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
@@ -109,9 +109,9 @@ Content-Type: application/json
 ```
 
 **席位归属、资料与恢复规则：**
-- **席位主键**：由 **`(GitHub 数字用户 ID, CPA UUID)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
+- **席位主键**：由 **`(GitHub 数字用户 ID, server_id)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
 - **初始资料**：新建席位（`201 Created`）取 GitHub `name`（无效或为空时回退至截断后的 `login`），经 Unicode NFKC 规范化与去首尾空白处理，要求 `1`–`32` 码点、`≤128` UTF-8 字节、含可见内容且不含控制或双向控制字符，并保存 `start` 传入的 `avatar_id`（未传则取目录默认项）。复用已有席位（`200 OK`）时保持原昵称与头像不变。允许重名，展示时按纯文本转义渲染；不同步 GitHub 头像，也无注册后资料修改接口。
-- **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，未过期前用原 `request_id` 和原凭据重试，过期后保留**原凭据**重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 CPA UUID）。
+- **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，未过期前用原 `request_id` 和原凭据重试，过期后保留**原凭据**重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 `server_id`）。
 - **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；在原请求过期前重试同一 `request_id` 仍会返回 `500 internal_error`（过期后返回 `410 registration_request_expired`）。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权。
 - **封禁、退出与撤销授权**：`disabled`（管理员封禁）无法由客户端通过重试或重新授权解除，但可由管理员解封；`withdrawn`（主动退出）为永久状态，客户端与管理员均不可恢复。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
 
@@ -124,7 +124,7 @@ Authorization: Bearer <已注册的 Bearer 凭据>
 
 - 不传请求体或查询参数。返回 `204 No Content` 表示整席退出已落库（同一席位任意上报端重复调用均幂等返回 `204`）。
 - 退出保留历史统计与管理员标记，但会立即阻止该席位**所有上报端**继续上报或重试（返回 `403 client_withdrawn`），并在下一次成功发布榜单缓存后从全部榜单与评分参考样本中移除。
-- 同一 GitHub 账号下其他 CPA UUID 的席位不受影响。退出后不提供公开重新加入接口。
+- 同一 GitHub 账号下其他 `server_id` 的席位不受影响。退出后不提供公开重新加入接口。
 
 ## UTC 日累计快照上报
 
@@ -246,7 +246,7 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 SECRET=$(cat "$SECRET_FILE")
 BASE=https://ranking.example.com
-CPA_UUID='替换为当前 CPA 实例的持久 UUID'
+SERVER_ID='替换为当前 CPA 实例的 server-id'
 
 # 2. 开始注册（avatar_id 可选，省略则使用目录默认头像）
 #    保存返回的 request_id，并在浏览器打开 authorize_url
@@ -254,7 +254,7 @@ curl -sS -X POST "$BASE/v1/clients/register/start" \
   -H "Authorization: Bearer $SECRET" \
   -H 'Content-Type: application/json' \
   -d "{
-    \"cpa_uuid\": \"$CPA_UUID\",
+    \"server_id\": \"$SERVER_ID\",
     \"return_to\": \"http://localhost:3001/settings?tab=ranking#status\",
     \"avatar_id\": \"12\"
   }"

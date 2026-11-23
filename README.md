@@ -26,11 +26,11 @@
 Clients integrate over standard **HTTPS + uncompressed UTF-8 JSON**, with no SDK requirement or coupling to any specific client codebase:
 
 - **Read-only dashboards**: Call `GET /v1/leaderboards/{board}/{period}` and `/avatars/*` directly—no registration or credentials required.
-- **Usage reporters**: Persist one 32-byte `base64url` Bearer secret per installation, bind `(GitHub user ID, CPA UUID)` through GitHub OAuth, and upload complete UTC daily cumulative snapshots.
+- **Usage reporters**: Persist one 32-byte `base64url` Bearer secret per installation, bind `(GitHub user ID, CPA server ID)` through GitHub OAuth, and upload complete UTC daily cumulative snapshots.
 
 | Step | Endpoint | Auth | Purpose |
 | --- | --- | --- | --- |
-| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `cpa_uuid`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
+| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `server_id`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
 | Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending) |
 | Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | Registered `Bearer` | Atomically replace the seat's full UTC today/yesterday snapshot |
 | Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Permanently withdraw the entire seat (`204`, empty body) |
@@ -38,7 +38,7 @@ Clients integrate over standard **HTTPS + uncompressed UTF-8 JSON**, with no SDK
 | Fetch avatars | `GET /avatars/catalog.json`, `/avatars/{path}` | None | Read the avatar catalog and static WebP images (`ETag` supported) |
 
 **Key protocol guarantees:**
-- **Client-owned credentials**: Only the `SHA-256` digest of each 32-byte secret is stored; multiple writers for one `(GitHub ID, CPA UUID)` seat hold independent credentials.
+- **Client-owned credentials**: Only the `SHA-256` digest of each 32-byte secret is stored; multiple writers for one `(GitHub ID, server_id)` seat hold independent credentials.
 - **Idempotent full snapshots**: Each writer maintains its own per-day `revision`; retries with matching content confirm safely without double-counting or overwriting newer data.
 - **Privacy-minimal**: Only aggregated per-model token counts, execution/success counts, and mean latencies are accepted—never upstream API keys, prompts, or response payloads.
 
