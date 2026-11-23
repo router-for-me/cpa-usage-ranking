@@ -357,8 +357,8 @@ Deployers can tune configurable defaults via [environment variables](deployment.
 | Registration request body | `4,096` bytes | Yes |
 | Registration start rate | `20`/source and `200` global per `1m` window; max `10,000` sources | Yes |
 | Pending registration transactions | `10m` lifetime; max `2,000` unexpired transactions server-wide | Fixed |
-| Report body and items | `131,072` bytes; `128` raw items (before catalog matching) | Yes |
-| Report rate per seat (shared by writers) | `1` token per `1m`, burst `2` (retries consume budget) | Yes |
+| Report body and items | `131,072` bytes; `1,024` raw items (before catalog matching) | Yes |
+| Report rate per seat (shared by writers) | `1` token per `10s`, burst `10` (per-seat rejections do not consume global budget) | Yes |
 | Global report rate | `1` token per `5ms`, burst `400` | Yes |
 
 **Explicit boundaries:**

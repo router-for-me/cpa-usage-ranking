@@ -99,13 +99,13 @@ docker compose -p cpa-ranking up -d --no-build
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | 单次上报未压缩 JSON 正文最大字节数 |
-| `RANKING_REPORT_MAX_ITEMS` | `128` | 单次上报原始模型项上限（匹配目录前） |
+| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | 单次上报 JSON 正文最大字节数（gzip 压缩流与解压后体积均受此限制） |
+| `RANKING_REPORT_MAX_ITEMS` | `1024` | 单次上报原始模型项上限（匹配目录前） |
 | `RANKING_REPORT_DECODE_CONCURRENCY` | `16` | 上报正文并发读取与解码上限 |
 | `RANKING_REPORT_QUEUE_CAPACITY` | `128` | 串行上报写队列待处理容量 |
 | `RANKING_REPORT_TRANSACTION_TIMEOUT` | `5s` | 单笔上报或后台维护 SQLite 事务超时 |
-| `RANKING_REPORT_CLIENT_INTERVAL` | `1m` | 单席位令牌补充周期（同席所有上报端共用） |
-| `RANKING_REPORT_CLIENT_BURST` | `2` | 单席位令牌桶突发容量 |
+| `RANKING_REPORT_CLIENT_INTERVAL` | `10s` | 单席位令牌补充周期（同席所有上报端共用；单席限流或容量拒绝不消耗全局令牌） |
+| `RANKING_REPORT_CLIENT_BURST` | `10` | 单席位令牌桶突发容量 |
 | `RANKING_REPORT_GLOBAL_INTERVAL` | `5ms` | 全局上报令牌补充周期 |
 | `RANKING_REPORT_GLOBAL_BURST` | `400` | 全局上报令牌桶突发容量 |
 | `RANKING_REPORT_MAX_CLIENTS` | `100000` | 内存中最多跟踪的席位限流状态数 |

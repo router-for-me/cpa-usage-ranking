@@ -34,7 +34,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.HTTPAddr != "127.0.0.1:8080" || cfg.ShutdownTimeout != 10*time.Second || cfg.WebDir != "" || cfg.SQLitePath != "data/ranking.db" || cfg.ModelsPath != "config/models.json" || len(cfg.TrustedProxies) != 0 || !cfg.RegistrationIPv6By64 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-	if cfg.ReportIngestion.MaxBodyBytes != 128<<10 || cfg.ReportIngestion.MaxItems != 128 || cfg.ReportIngestion.ConcurrentDecodes != 16 || cfg.ReportIngestion.ClientInterval != time.Minute || cfg.ReportIngestion.ClientBurst != 2 || cfg.ReportWriter.QueueCapacity != 128 || cfg.DailyRetentionDays != 31 {
+	if cfg.ReportIngestion.MaxBodyBytes != 128<<10 || cfg.ReportIngestion.MaxItems != 1024 || cfg.ReportIngestion.ConcurrentDecodes != 16 || cfg.ReportIngestion.ClientInterval != 10*time.Second || cfg.ReportIngestion.ClientBurst != 10 || cfg.ReportWriter.QueueCapacity != 128 || cfg.DailyRetentionDays != 31 {
 		t.Fatalf("unexpected report defaults: %+v %+v", cfg.ReportIngestion, cfg.ReportWriter)
 	}
 }

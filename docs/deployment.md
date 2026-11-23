@@ -99,13 +99,13 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | Max uncompressed JSON body bytes per report |
-| `RANKING_REPORT_MAX_ITEMS` | `128` | Max raw model items per report (before catalog matching) |
+| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | Max JSON body bytes per report (applies to compressed and decompressed gzip bodies) |
+| `RANKING_REPORT_MAX_ITEMS` | `1024` | Max raw model items per report (before catalog matching) |
 | `RANKING_REPORT_DECODE_CONCURRENCY` | `16` | Max concurrent request body reads and decodes |
 | `RANKING_REPORT_QUEUE_CAPACITY` | `128` | Pending serialized report write queue length |
 | `RANKING_REPORT_TRANSACTION_TIMEOUT` | `5s` | Execution timeout per report or maintenance SQLite transaction |
-| `RANKING_REPORT_CLIENT_INTERVAL` | `1m` | Per-seat token refill interval (shared by all writers of a seat) |
-| `RANKING_REPORT_CLIENT_BURST` | `2` | Per-seat token bucket burst capacity |
+| `RANKING_REPORT_CLIENT_INTERVAL` | `10s` | Per-seat token refill interval (shared by all writers of a seat; rejected client attempts do not spend global tokens) |
+| `RANKING_REPORT_CLIENT_BURST` | `10` | Per-seat token bucket burst capacity |
 | `RANKING_REPORT_GLOBAL_INTERVAL` | `5ms` | Global report token refill interval |
 | `RANKING_REPORT_GLOBAL_BURST` | `400` | Global report token bucket burst capacity |
 | `RANKING_REPORT_MAX_CLIENTS` | `100000` | Max tracked in-memory per-seat rate states |

@@ -289,11 +289,12 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 	limited.GlobalBurst = 100
 	g := reportSetup(t, defaultRegistrationSettings(), limited, nil)
 	g.seed(t, secret)
-	expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
-	expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
+	for range limited.ClientBurst {
+		expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
+	}
 	response := g.report(t, day, secret, reportJSON, nil)
 	requireHTTPError(t, response, 429, "report_rate_limited")
-	if response.header.Get("Retry-After") != "60" {
+	if response.header.Get("Retry-After") != "10" {
 		t.Fatalf("retry-after: %s", response.header.Get("Retry-After"))
 	}
 	health, err := g.server.Client().Get(g.server.URL + "/healthz")
