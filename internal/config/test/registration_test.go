@@ -36,6 +36,13 @@ func TestRegistrationRequestConfiguration(t *testing.T) {
 
 func TestOAuthConfigurationIsOptionalAllOrNoneAndHTTPS(t *testing.T) {
 	clearEnvironment(t)
+	t.Setenv("RANKING_PUBLIC_ORIGIN", "  ")
+	t.Setenv("RANKING_GITHUB_CLIENT_ID", "")
+	t.Setenv("RANKING_GITHUB_CLIENT_SECRET", " ")
+	if cfg, err := config.Load(); err != nil || cfg.GitHub != nil {
+		t.Fatalf("all-blank OAuth configuration should disable OAuth: %+v, %v", cfg.GitHub, err)
+	}
+	clearEnvironment(t)
 	const fake = "fixture-value-never-log"
 	t.Setenv("RANKING_GITHUB_CLIENT_SECRET", fake)
 	if _, err := config.Load(); err == nil || !strings.Contains(err.Error(), "RANKING_PUBLIC_ORIGIN") || strings.Contains(err.Error(), fake) {

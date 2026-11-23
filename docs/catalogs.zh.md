@@ -16,9 +16,9 @@
 
 ### 文件格式与参考价格
 
-- 顶层字段：`currency`（固定 `"USD"`）、`price_unit`（固定 `"per_million_tokens"`）以及 `models`（包含 `model_name`、`alias`、`prices` 的数组）。
+- 顶层字段：可选参考元数据 `currency`（默认 `"USD"`）、`price_unit`（默认 `"per_million_tokens"`）以及必填 `models`（每项包含必填 `model_name` 与可选 `alias`、`prices`）。
 - 模型名与别名全局无冲突，别名不能占用其他模型的标准名。
-- `prices` 将 `default`、`priority`、`flex` 映射为 `{input, output, cache_read, cache_write}` 非负十进制字符串（缺失或 `null` 表示未知，`"0"` 表示显式免费；缺失的档位不继承 `default`）。
+- `prices` 可选地将 `default`、`priority`、`flex` 映射为 `{input, output, cache_read, cache_write}` 非负十进制字符串（缺失或 `null` 表示未知，`"0"` 表示显式免费；缺失的档位不继承 `default`；未知档位或 `null` 档位会被忽略）。
 - 价格档位仅作目录元数据参考，**不是**上报或统计维度（日快照不接受 `service_tier`），服务端不执行计费或成本估算。
 - `config/model-sources.json` 记录随库发布参考价格的来源链接与采集日期；运行时仅加载 `config/models.json`。
 

@@ -50,7 +50,7 @@ docker compose -p cpa-ranking up -d --no-build
 2. 在运行时同时传入 `RANKING_PUBLIC_ORIGIN`、`RANKING_GITHUB_CLIENT_ID` 与 `RANKING_GITHUB_CLIENT_SECRET`（切勿写入仓库或镜像）。`compose.yaml` 会自动透传这三个变量及可选的 `RANKING_REGISTRATION_ENABLED`。
 3. 将公网 HTTPS 下的 `/auth/github/*` 与 `/v1/*` 路由到同一 Ranking 实例，并确保容器可经 HTTPS 访问 `github.com` 与 `api.github.com`（服务端不会主动请求客户端 `return_to`）。
 
-三个 OAuth 变量均未设置或 `RANKING_REGISTRATION_ENABLED=false` 时，新注册关闭，但公开读榜、已有上报端写入与主动退出仍正常工作；仅配置部分 OAuth 变量会在启动时报错退出。
+三个 OAuth 变量均未设置或为空白，或 `RANKING_REGISTRATION_ENABLED=false` 时，新注册关闭，但公开读榜、已有上报端写入与主动退出仍正常工作；仅配置部分 OAuth 变量会在启动时报错退出。
 
 ## 反向代理、安全与来源识别
 
@@ -62,7 +62,7 @@ docker compose -p cpa-ranking up -d --no-build
 
 ## 环境变量参考
 
-容器部署须通过 Compose `environment` 或 `docker run -e` 传入配置（仅在宿主机 shell `export` 不会自动进入容器，除非 `compose.yaml` 显式透传）。显式空值或非法格式会在启动时直接报错退出。
+容器部署须通过 Compose `environment` 或 `docker run -e` 传入配置（仅在宿主机 shell `export` 不会自动进入容器，除非 `compose.yaml` 显式透传）。未设置或空白值会自动回退为默认值；非法格式会在启动时直接报错退出。
 
 ### 核心运行与健康检查
 
@@ -115,8 +115,8 @@ docker compose -p cpa-ranking up -d --no-build
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RANKING_ADMIN_CONFIG_FILE` | 未设置（关闭后台） | 位于 `RANKING_WEB_DIR` 之外的主管理员私有 JSON（权限 `0600`/`0640` 或更严格只读），详见[管理员控制台](admin.zh.md) |
-| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | 仅本机回环测试开关，要求监听字面量 loopback 地址 |
+| `RANKING_ADMIN_CONFIG_FILE` | 未设置（关闭后台） | 位于 `RANKING_WEB_DIR` 之外的主管理员私有 JSON（建议权限 `0600`/`0640`，权限过宽时仅在启动日志告警），详见[管理员控制台](admin.zh.md) |
+| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | 本地或容器 HTTP 测试开关，允许非 HTTPS 管理员 Cookie 与会话（切勿对公网开启） |
 
 ## 数据权限、停机与离线备份
 

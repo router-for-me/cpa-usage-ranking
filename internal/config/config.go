@@ -33,10 +33,11 @@ type Config struct {
 	DailyRetentionDays       int
 	CacheRefreshInterval     time.Duration
 	AdminOwner               *admin.Owner
+	AdminConfigInsecurePerm  bool
 	AdminAllowLocalHTTP      bool
 }
 
-// Load reads environment variables. Explicitly empty values are invalid.
+// Load reads environment variables. Unset or whitespace-only values keep defaults.
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr: "127.0.0.1:8080", ShutdownTimeout: 10 * time.Second, SQLitePath: "data/ranking.db", ModelsPath: "config/models.json",
@@ -46,47 +47,33 @@ func Load() (Config, error) {
 		DailyRetentionDays:   reports.DefaultMaintenanceOptions().DailyRetentionDays,
 		CacheRefreshInterval: cache.DefaultRefreshInterval,
 	}
-	if value, ok := os.LookupEnv("RANKING_HTTP_ADDR"); ok {
-		cfg.HTTPAddr = strings.TrimSpace(value)
+	if value, ok := lookupTrimmed("RANKING_HTTP_ADDR"); ok {
+		cfg.HTTPAddr = value
 	}
 	host, port, err := net.SplitHostPort(cfg.HTTPAddr)
 	if err != nil || strings.ContainsAny(host, "/\\ \t\r\n") || port == "" {
 		return Config{}, fmt.Errorf("RANKING_HTTP_ADDR must be a host:numeric-port address")
 	}
-	for _, char := range port {
-		if char < '0' || char > '9' {
-			return Config{}, fmt.Errorf("RANKING_HTTP_ADDR port must contain digits only")
-		}
-	}
 	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return Config{}, fmt.Errorf("RANKING_HTTP_ADDR port must be between 0 and 65535")
 	}
-	if value, ok := os.LookupEnv("RANKING_SHUTDOWN_TIMEOUT"); ok {
-		duration, err := time.ParseDuration(strings.TrimSpace(value))
+	if value, ok := lookupTrimmed("RANKING_SHUTDOWN_TIMEOUT"); ok {
+		duration, err := time.ParseDuration(value)
 		if err != nil || duration <= 0 {
 			return Config{}, fmt.Errorf("RANKING_SHUTDOWN_TIMEOUT must be a positive duration")
 		}
 		cfg.ShutdownTimeout = duration
 	}
-	if value, ok := os.LookupEnv("RANKING_WEB_DIR"); ok {
-		cfg.WebDir = strings.TrimSpace(value)
-		if cfg.WebDir == "" {
-			return Config{}, fmt.Errorf("RANKING_WEB_DIR must be a non-empty directory path when set")
-		}
+	if value, ok := lookupTrimmed("RANKING_WEB_DIR"); ok {
+		cfg.WebDir = value
 	}
-	if value, ok := os.LookupEnv("RANKING_SQLITE_PATH"); ok {
-		cfg.SQLitePath = strings.TrimSpace(value)
-		if cfg.SQLitePath == "" {
-			return Config{}, fmt.Errorf("RANKING_SQLITE_PATH must be a non-empty file path")
-		}
+	if value, ok := lookupTrimmed("RANKING_SQLITE_PATH"); ok {
+		cfg.SQLitePath = value
 	}
-	if value, ok := os.LookupEnv("RANKING_MODELS_PATH"); ok {
-		cfg.ModelsPath = strings.TrimSpace(value)
-		if cfg.ModelsPath == "" {
-			return Config{}, fmt.Errorf("RANKING_MODELS_PATH must be a non-empty file path")
-		}
+	if value, ok := lookupTrimmed("RANKING_MODELS_PATH"); ok {
+		cfg.ModelsPath = value
 	}
-	if value, ok := os.LookupEnv("RANKING_TRUSTED_PROXIES"); ok {
+	if value, ok := lookupTrimmed("RANKING_TRUSTED_PROXIES"); ok {
 		for _, entry := range strings.Split(value, ",") {
 			entry = strings.TrimSpace(entry)
 			if net.ParseIP(entry) == nil {
@@ -97,15 +84,15 @@ func Load() (Config, error) {
 			cfg.TrustedProxies = append(cfg.TrustedProxies, entry)
 		}
 	}
-	if value, ok := os.LookupEnv("RANKING_REGISTRATION_IPV6_64"); ok {
-		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if value, ok := lookupTrimmed("RANKING_REGISTRATION_IPV6_64"); ok {
+		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			return Config{}, fmt.Errorf("RANKING_REGISTRATION_IPV6_64 must be a boolean")
 		}
 		cfg.RegistrationIPv6By64 = parsed
 	}
-	if value, ok := os.LookupEnv("RANKING_REGISTRATION_ENABLED"); ok {
-		parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if value, ok := lookupTrimmed("RANKING_REGISTRATION_ENABLED"); ok {
+		parsed, err := strconv.ParseBool(value)
 		if err != nil {
 			return Config{}, fmt.Errorf("RANKING_REGISTRATION_ENABLED must be a boolean")
 		}
@@ -162,10 +149,22 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+func lookupTrimmed(key string) (string, bool) {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}
+
 func loadGitHub(cfg *Config) error {
-	origin, hasOrigin := os.LookupEnv("RANKING_PUBLIC_ORIGIN")
-	id, hasID := os.LookupEnv("RANKING_GITHUB_CLIENT_ID")
-	secret, hasSecret := os.LookupEnv("RANKING_GITHUB_CLIENT_SECRET")
+	origin, hasOrigin := lookupTrimmed("RANKING_PUBLIC_ORIGIN")
+	id, hasID := lookupTrimmed("RANKING_GITHUB_CLIENT_ID")
+	secret, hasSecret := lookupTrimmed("RANKING_GITHUB_CLIENT_SECRET")
 	if !hasOrigin && !hasID && !hasSecret {
 		return nil
 	}
@@ -178,8 +177,8 @@ func loadGitHub(cfg *Config) error {
 }
 
 func positiveInt(key string, target *int) error {
-	if value, ok := os.LookupEnv(key); ok {
-		parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if value, ok := lookupTrimmed(key); ok {
+		parsed, err := strconv.Atoi(value)
 		if err != nil || parsed <= 0 {
 			return fmt.Errorf("%s must be a positive integer", key)
 		}
@@ -189,8 +188,8 @@ func positiveInt(key string, target *int) error {
 }
 
 func positiveDuration(key string, target *time.Duration) error {
-	if value, ok := os.LookupEnv(key); ok {
-		parsed, err := time.ParseDuration(strings.TrimSpace(value))
+	if value, ok := lookupTrimmed(key); ok {
+		parsed, err := time.ParseDuration(value)
 		if err != nil || parsed <= 0 {
 			return fmt.Errorf("%s must be a positive duration", key)
 		}

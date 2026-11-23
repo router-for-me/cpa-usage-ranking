@@ -50,7 +50,7 @@ Use `--no-build` so Compose does not rebuild locally. Registry tags can still be
 2. Supply `RANKING_PUBLIC_ORIGIN`, `RANKING_GITHUB_CLIENT_ID`, and `RANKING_GITHUB_CLIENT_SECRET` together as private runtime environment variables (never commit them or bake them into images). `compose.yaml` forwards these three variables and optional `RANKING_REGISTRATION_ENABLED` from the deployment environment.
 3. Route `/auth/github/*` and `/v1/*` on the same HTTPS origin to the same Ranking instance. Ensure Ranking can reach `github.com` and `api.github.com` over HTTPS; it never calls client `return_to` URLs.
 
-If all three OAuth variables are unset—or `RANKING_REGISTRATION_ENABLED=false`—new registrations stay closed while public reads, existing writer reports, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
+If all three OAuth variables are unset or blank—or `RANKING_REGISTRATION_ENABLED=false`—new registrations stay closed while public reads, existing writer reports, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
 
 ## Reverse Proxy, Security, and Source Resolution
 
@@ -62,7 +62,7 @@ If all three OAuth variables are unset—or `RANKING_REGISTRATION_ENABLED=false`
 
 ## Configuration Reference
 
-Pass environment variables via Compose `environment` or `docker run -e` (host shell exports are not automatically forwarded unless referenced in `compose.yaml`). Explicitly empty or malformed values fail startup.
+Pass environment variables via Compose `environment` or `docker run -e` (host shell exports are not automatically forwarded unless referenced in `compose.yaml`). Unset or blank values fall back to defaults; malformed values fail startup.
 
 ### Core Service and Health
 
@@ -115,8 +115,8 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600`/`0640` or stricter read-only); see [Administrator Console](admin.md) |
-| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | Local loopback test override only; requires literal loopback listen address |
+| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600`/`0640` recommended; broader permissions log a startup warning); see [Administrator Console](admin.md) |
+| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | Local or container HTTP test override allowing non-HTTPS admin cookies/sessions (do not enable on public internet) |
 
 ## Data Permissions, Stopping, and Backups
 

@@ -43,6 +43,9 @@ func run(logger *slog.Logger) (err error) {
 	if err != nil {
 		return err
 	}
+	if cfg.AdminConfigInsecurePerm {
+		logger.Warn("administrator configuration file has broad permissions; 0600 or 0640 recommended")
+	}
 	modelCatalog, err := models.Load(cfg.ModelsPath)
 	if err != nil {
 		return err

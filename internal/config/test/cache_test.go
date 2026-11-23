@@ -12,7 +12,14 @@ func TestCacheRefreshInterval(t *testing.T) {
 	if err != nil || cfg.CacheRefreshInterval != 5*time.Minute {
 		t.Fatal(cfg.CacheRefreshInterval, err)
 	}
-	for _, value := range []string{"", "0", "-1s", "bad"} {
+	for _, value := range []string{"", "   "} {
+		t.Setenv("RANKING_CACHE_REFRESH_INTERVAL", value)
+		cfg, err := config.Load()
+		if err != nil || cfg.CacheRefreshInterval != 5*time.Minute {
+			t.Fatalf("blank value %q should keep default: %v, %v", value, cfg.CacheRefreshInterval, err)
+		}
+	}
+	for _, value := range []string{"0", "-1s", "bad"} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("RANKING_CACHE_REFRESH_INTERVAL", value)
 			if _, err := config.Load(); err == nil {

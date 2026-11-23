@@ -17,7 +17,7 @@ Create a private JSON file outside `RANKING_WEB_DIR`, point `RANKING_ADMIN_CONFI
 
 - **Username**: `3`–`64` ASCII letters, digits, `_`, `.`, or `-`, starting with a letter or digit (case-sensitive).
 - **Password**: `12`–`72` bytes (bcrypt maximum); there is no default password.
-- **File permissions**: Must be `0600` or `0640` (or stricter read-only modes such as `0400`/`0440` readable by the service user; no world read, no group write) and reside outside `RANKING_WEB_DIR` (symlinks pointing into `RANKING_WEB_DIR` are also rejected). Missing, malformed, or insecurely readable config fails startup without echoing file contents. Account edits take effect on restart (no hot reload).
+- **File permissions**: `0600` or `0640` (or stricter read-only modes such as `0400`/`0440` readable by the service user) is recommended; broader permissions emit a startup warning rather than blocking startup. The file must reside outside `RANKING_WEB_DIR` (symlinks pointing into `RANKING_WEB_DIR` are also rejected). Missing or malformed config fails startup without echoing file contents. Account edits take effect on restart (no hot reload).
 
 When enabled, the header shows **Sign in** and switches to **Console** (`/admin/leaderboards`) while authenticated. `GET /v1/admin/session` exposes only whether admin is enabled/signed in to anonymous callers.
 

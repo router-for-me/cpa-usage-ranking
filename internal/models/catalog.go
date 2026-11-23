@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -57,46 +56,6 @@ type Catalog struct {
 	byName map[string]int
 }
 
-type catalogName string
-
-// UnmarshalJSON refuses unpaired surrogate escapes instead of accepting the
-// replacement rune that encoding/json would silently substitute.
-func (name *catalogName) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return fmt.Errorf("name must be a string")
-	}
-	for i := 1; i+1 < len(data); i++ {
-		if data[i] != '\\' {
-			continue
-		}
-		i++
-		if data[i] != 'u' {
-			continue
-		}
-		code, _ := strconv.ParseUint(string(data[i+1:i+5]), 16, 16) // JSON syntax already checked.
-		i += 4
-		if code >= 0xdc00 && code <= 0xdfff {
-			return fmt.Errorf("unpaired Unicode surrogate")
-		}
-		if code >= 0xd800 && code <= 0xdbff {
-			if i+6 >= len(data) || data[i+1] != '\\' || data[i+2] != 'u' {
-				return fmt.Errorf("unpaired Unicode surrogate")
-			}
-			low, err := strconv.ParseUint(string(data[i+3:i+7]), 16, 16)
-			if err != nil || low < 0xdc00 || low > 0xdfff {
-				return fmt.Errorf("unpaired Unicode surrogate")
-			}
-			i += 6
-		}
-	}
-	*name = catalogName(value)
-	return nil
-}
-
 type catalogFile struct {
 	Currency  string         `json:"currency"`
 	PriceUnit string         `json:"price_unit"`
@@ -104,8 +63,8 @@ type catalogFile struct {
 }
 
 type catalogItem struct {
-	Name    catalogName                `json:"model_name"`
-	Aliases *[]catalogName             `json:"alias"`
+	Name    string                     `json:"model_name"`
+	Aliases []string                   `json:"alias"`
 	Prices  map[string]json.RawMessage `json:"prices"`
 }
 
@@ -123,8 +82,12 @@ func Load(path string) (*Catalog, error) {
 	if err := decodeJSON(data, &input); err != nil {
 		return nil, fmt.Errorf("decode model catalog %q: %w", path, err)
 	}
-	if input.Currency != "USD" || input.PriceUnit != "per_million_tokens" {
-		return nil, fmt.Errorf("model catalog: currency must be USD and price_unit must be per_million_tokens")
+	// currency 与 price_unit 仅为非运行时参考元数据，缺省时补齐默认值，不阻止服务启动。
+	if strings.TrimSpace(input.Currency) == "" {
+		input.Currency = "USD"
+	}
+	if strings.TrimSpace(input.PriceUnit) == "" {
+		input.PriceUnit = "per_million_tokens"
 	}
 	if input.Models == nil {
 		return nil, fmt.Errorf("model catalog: models must be an array")
@@ -132,23 +95,19 @@ func Load(path string) (*Catalog, error) {
 	catalog := &Catalog{models: make([]Model, len(*input.Models)), byName: make(map[string]int)}
 	// 先占用所有标准名，再处理别名，避免配置顺序影响冲突检查。
 	for i, item := range *input.Models {
-		name := string(item.Name)
+		name := item.Name
 		if err := validateName(name); err != nil {
 			return nil, fmt.Errorf("model %d: invalid model_name: %w", i, err)
 		}
 		if _, exists := catalog.byName[name]; exists {
 			return nil, fmt.Errorf("model catalog: duplicate model_name %q", name)
 		}
-		if item.Aliases == nil {
-			return nil, fmt.Errorf("model %q: alias must be an array", name)
-		}
 		catalog.models[i] = Model{Name: name, Prices: make(map[Tier]Price)}
 		catalog.byName[name] = i
 	}
 	for i, item := range *input.Models {
 		model := &catalog.models[i]
-		for _, rawAlias := range *item.Aliases {
-			alias := string(rawAlias)
+		for _, alias := range item.Aliases {
 			if err := validateName(alias); err != nil {
 				return nil, fmt.Errorf("model %q: invalid alias: %w", model.Name, err)
 			}
@@ -161,10 +120,10 @@ func Load(path string) (*Catalog, error) {
 		for key, raw := range item.Prices {
 			tier, err := ParseTier(key)
 			if err != nil {
-				return nil, fmt.Errorf("model %q: %w", model.Name, err)
+				continue
 			}
 			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-				return nil, fmt.Errorf("model %q: prices for %s must be an object", model.Name, key)
+				continue
 			}
 			var price Price
 			if err := decodeJSON(raw, &price); err != nil {
@@ -183,7 +142,6 @@ func Load(path string) (*Catalog, error) {
 
 func decodeJSON(data []byte, dst any) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		return err
 	}
