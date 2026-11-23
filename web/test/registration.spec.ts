@@ -14,7 +14,7 @@ test('registers and safely retries against the real binary without adding accoun
     localStorage.setItem('registration-test-secret', secret)
     const response = await fetch(startPath, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
-      body: JSON.stringify({ cpa_uuid: '550e8400-e29b-41d4-a716-446655440000', return_to: `${location.origin}/?from=client#settings` }),
+      body: JSON.stringify({ server_id: '550e8400-e29b-41d4-a716-446655440000', return_to: `${location.origin}/?from=client#settings` }),
     })
     return { status: response.status, cache: response.headers.get('Cache-Control'), body: await response.json() as { request_id: string; authorize_url: string } }
   }, start)
@@ -98,14 +98,14 @@ test('registers a new seat with an explicit catalog avatar_id and rejects unknow
 
   const invalid = await request.post(start, {
     headers,
-    data: { cpa_uuid: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '999' },
+    data: { server_id: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '999' },
   })
   expect(invalid.status()).toBe(422)
   expect(await invalid.json()).toEqual({ error: { code: 'invalid_avatar', message: 'Invalid avatar selection' } })
 
   const started = await request.post(start, {
     headers,
-    data: { cpa_uuid: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '42' },
+    data: { server_id: '550e8400-e29b-41d4-a716-446655440001', return_to: returnTo, avatar_id: '42' },
   })
   expect(started.status()).toBe(200)
   const { request_id: requestID } = await started.json() as { request_id: string }

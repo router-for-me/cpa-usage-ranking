@@ -35,12 +35,12 @@ func TestRegistrationHTTPResponsesAndLogsRedactSecrets(t *testing.T) {
 	if err := f.repo.SetDisabled(context.Background(), seeded.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	f.approve(t, id, 1, "Name", "name", returnURL)
 	r := f.complete(t, secret, id)
 	requireHTTPError(t, r, 403, "client_disabled")
 	responses.Write(r.body)
-	otherID := f.start(t, otherSecret, cpaUUID, returnURL)
+	otherID := f.start(t, otherSecret, serverID, returnURL)
 	f.approve(t, otherID, 2, "Name", "name", returnURL)
 	if _, err := f.db.Writer.Exec(fmt.Sprintf(`CREATE TRIGGER sensitive_failure BEFORE INSERT ON client_writers BEGIN SELECT RAISE(ABORT, '%s'); END`, otherSecret)); err != nil {
 		t.Fatal(err)

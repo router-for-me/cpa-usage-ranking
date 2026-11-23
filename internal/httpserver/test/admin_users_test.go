@@ -9,7 +9,7 @@ import (
 
 func TestAdminUserListHTTP(t *testing.T) {
 	router, service, db := adminDatabaseRouter(t)
-	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,cpa_uuid,display_name,avatar_id,disabled,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','no reports',1,0,123),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','literal %_ <img>',1,1,456)`); err != nil {
+	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,disabled,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','no reports',1,0,123),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','literal %_ <img>',1,1,456)`); err != nil {
 		t.Fatal(err)
 	}
 	ownerCookie, owner := adminLoginCookie(t, service, "owner", "isolated-test-password")

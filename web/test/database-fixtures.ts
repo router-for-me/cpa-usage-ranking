@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { databasePath } from './test-paths'
 
-const cpaUUID = '550e8400-e29b-41d4-a716-446655440000'
+const serverID = '550e8400-e29b-41d4-a716-446655440000'
 
 export function withTestDatabase<T>(write: (db: DatabaseSync) => T): T {
   if (!existsSync(databasePath)) throw new Error('Expected the isolated Playwright database')
@@ -17,10 +17,10 @@ export function withTestDatabase<T>(write: (db: DatabaseSync) => T): T {
 }
 
 export function insertTestSeat(db: DatabaseSync, name: string, avatar: number, disabled = false) {
-  const insert = db.prepare(`INSERT INTO clients(github_id,cpa_uuid,display_name,avatar_id,disabled,created_at_ms)
+  const insert = db.prepare(`INSERT INTO clients(github_id,server_id,display_name,avatar_id,disabled,created_at_ms)
     SELECT coalesce(max(github_id),0)+1,?,?,?,?,? FROM clients`)
   insert.setReadBigInts(true)
-  return insert.run(cpaUUID, name, avatar, Number(disabled), Date.now()).lastInsertRowid
+  return insert.run(serverID, name, avatar, Number(disabled), Date.now()).lastInsertRowid
 }
 
 // UI tests submit real reports but do not exercise OAuth. External OAuth is

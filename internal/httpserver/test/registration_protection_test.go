@@ -19,7 +19,7 @@ func TestRegistrationHTTPConcurrentSafeRetries(t *testing.T) {
 	secrets := []string{testSecret(1), testSecret(2)}
 	var ids []string
 	for _, secret := range secrets {
-		id := f.start(t, secret, cpaUUID, returnURL)
+		id := f.start(t, secret, serverID, returnURL)
 		f.approve(t, id, 42, "Concurrent", "concurrent", returnURL)
 		ids = append(ids, id)
 	}
@@ -133,7 +133,7 @@ func TestRegistrationHTTPCapacityRetainsResultUntilExpiryAndRecovers(t *testing.
 	settings.service.Now = func() time.Time { return time.Unix(0, now.Load()) }
 	f := newRegistrationFixture(t, settings)
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	const login = "this-is-a-github-login-longer-than-32"
 	f.approve(t, id, 7, "", login, returnURL)
 	first := identity(t, f.complete(t, secret, id))
@@ -156,7 +156,7 @@ func TestRegistrationHTTPCapacityRetainsResultUntilExpiryAndRecovers(t *testing.
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
 	now.Add(int64(30 * time.Second))
-	fresh := f.start(t, secret, cpaUUID, returnURL)
+	fresh := f.start(t, secret, serverID, returnURL)
 	f.approve(t, fresh, 7, "Changed", "different-login", returnURL)
 	if r := f.complete(t, secret, fresh); r.status != 200 || identity(t, r) != first {
 		t.Fatal("same seat recovery after expiry failed")
@@ -175,14 +175,14 @@ func TestRegistrationHTTPClosedDisabledWithdrawnAndStorageFailure(t *testing.T) 
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	httpserver.MountWithdraw(f.router, f.repo, nil)
 	secret := testSecret(1)
-	id := f.start(t, secret, cpaUUID, returnURL)
+	id := f.start(t, secret, serverID, returnURL)
 	f.approve(t, id, 9, "Name", "test", returnURL)
 	first := identity(t, f.complete(t, secret, id))
 	if err := f.repo.SetDisabled(context.Background(), first.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 403, "client_disabled")
-	other := f.start(t, testSecret(2), cpaUUID, returnURL)
+	other := f.start(t, testSecret(2), serverID, returnURL)
 	f.approve(t, other, 9, "Other", "test", returnURL)
 	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_disabled")
 	if r := f.api(t, "POST", withdrawPath, "", secret, nil); r.status != 204 {
@@ -190,7 +190,7 @@ func TestRegistrationHTTPClosedDisabledWithdrawnAndStorageFailure(t *testing.T) 
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 403, "client_withdrawn")
 	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_withdrawn")
-	third := f.start(t, secret, cpaUUID, returnURL)
+	third := f.start(t, secret, serverID, returnURL)
 	f.approve(t, third, 9, "Other", "test", returnURL)
 	requireHTTPError(t, f.complete(t, secret, third), 403, "client_withdrawn")
 	seat, err := f.repo.ByID(context.Background(), first.ID)
@@ -225,5 +225,5 @@ func TestRegistrationHTTPBodyBoundForKnownAndChunkedLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, registrationResponse{status: response.StatusCode, body: body, header: response.Header}, 413, "request_too_large")
-	f.start(t, testSecret(1), cpaUUID, returnURL)
+	f.start(t, testSecret(1), serverID, returnURL)
 }
