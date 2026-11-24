@@ -33,4 +33,9 @@ describe('adaptive durations', () => {
     expect(exactMetric('20.65', 'points')).toBe('20.65 pts')
     expect(exactMetric('20.65', 'points', 'zh')).toBe('20.65 分')
   })
+  it('falls back safely without throwing on non-integer count or non-numeric duration', () => {
+    expect(formatCount('12.34')).toBe('12.34')
+    expect(exactMetric('12.34', 'count')).toBe('12.34')
+    expect(formatDuration('N/A')).toBe('N/A')
+  })
 })
