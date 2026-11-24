@@ -169,6 +169,7 @@ func run(logger *slog.Logger) (err error) {
 	}
 	registrationOptions := registration.DefaultOptions()
 	registrationOptions.Enabled = cfg.RegistrationEnabled && github != nil
+	registrationOptions.RequestRefresh = cacheService.RequestRefresh
 	registrationService, err := registration.NewService(db, catalog, registrationOptions)
 	if err != nil {
 		return err

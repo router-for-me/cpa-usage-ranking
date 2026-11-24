@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/auth"
 	"cpa-usage-ranking/internal/httpserver"
 )
 
@@ -197,18 +198,65 @@ func TestRegistrationHTTPClosedDisabledWithdrawnAndStorageFailure(t *testing.T) 
 		t.Fatalf("disabled holder couldn't withdraw: %d %s", r.status, r.body)
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 403, "client_withdrawn")
-	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_withdrawn")
+	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_disabled")
 	third := f.start(t, secret, serverID, returnURL)
 	f.approve(t, third, 9, "Other", "test", returnURL)
-	requireHTTPError(t, f.complete(t, secret, third), 403, "client_withdrawn")
+	requireHTTPError(t, f.complete(t, secret, third), 403, "client_disabled")
 	seat, err := f.repo.ByID(context.Background(), first.ID)
 	if err != nil || !seat.Withdrawn || !seat.Disabled {
 		t.Fatal("withdraw or retry changed the management flag")
+	}
+	var writers int
+	if err := f.db.Reader.QueryRow("SELECT count(*) FROM client_writers").Scan(&writers); err != nil || writers != 1 {
+		t.Fatalf("banned seat: writers=%d err=%v", writers, err)
 	}
 	if err := f.db.Writer.Close(); err != nil {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, f.complete(t, secret, third), 500, "internal_error")
+}
+
+func TestRegistrationHTTPRejoinWithdrawnSeat(t *testing.T) {
+	original := testSecret(1)
+	for _, tc := range []struct{ name, secret string }{{"original bearer", original}, {"new bearer", testSecret(2)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var refreshes atomic.Int32
+			settings := defaultRegistrationSettings()
+			settings.service.RequestRefresh = func() { refreshes.Add(1) }
+			f := newRegistrationFixture(t, settings)
+			httpserver.MountWithdraw(f.router, f.repo, nil)
+			id := f.startWithBody(t, original, startBodyWithAvatar(serverID, returnURL, "66"))
+			f.approve(t, id, 9, "Original", "test", returnURL)
+			first := identity(t, f.complete(t, original, id))
+			if _, err := f.db.Writer.Exec("UPDATE clients SET ranking_hidden=1 WHERE id=?", first.ID); err != nil {
+				t.Fatal(err)
+			}
+			if r := f.api(t, "POST", withdrawPath, "", original, nil); r.status != 204 {
+				t.Fatalf("withdraw: %d %s", r.status, r.body)
+			}
+			requireHTTPError(t, f.complete(t, original, id), 403, "client_withdrawn")
+			if got := refreshes.Load(); got != 0 {
+				t.Fatalf("registration refreshes before rejoin: %d", got)
+			}
+
+			fresh := f.start(t, tc.secret, serverID, returnURL)
+			f.approve(t, fresh, 9, "Changed", "test", returnURL)
+			r := f.complete(t, tc.secret, fresh)
+			if r.status != 200 || identity(t, r) != first || refreshes.Load() != 1 {
+				t.Fatalf("rejoin: %d %s, refreshes=%d", r.status, r.body, refreshes.Load())
+			}
+			authenticator := auth.NewAuthenticator(f.repo)
+			for _, secret := range []string{original, tc.secret} {
+				writer, err := authenticator.Authenticate(t.Context(), http.Header{"Authorization": {"Bearer " + secret}})
+				if err != nil || writer.ID != first.ID || !writer.RankingHidden {
+					t.Fatalf("writer after rejoin: %+v, err=%v", writer, err)
+				}
+			}
+			if identity(t, f.complete(t, tc.secret, fresh)) != first || f.register(t, tc.secret, 9, "Changed") != first || refreshes.Load() != 1 {
+				t.Fatalf("retry or active seat reuse changed identity or requested another refresh (count=%d)", refreshes.Load())
+			}
+		})
+	}
 }
 
 func TestRegistrationHTTPBodyBoundForKnownAndChunkedLength(t *testing.T) {

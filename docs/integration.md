@@ -113,7 +113,7 @@ Success response (`client_id` and `avatar_id` are positive int64 decimal strings
 - **Initial profile**: New seats (`201 Created`) normalize GitHub `name` (falling back to `login` when empty or invisible) using Unicode NFKC, cleaning control/line-separator/bidi characters, trimming outer whitespace, and safely truncating to `≤32` code points / `≤128` UTF-8 bytes on rune boundaries (requiring at least one visible character), and save the `avatar_id` submitted in `start` (or the catalog default when omitted). Reusing an existing seat (`200 OK`) keeps its existing display name and avatar unchanged. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or post-registration profile-edit API.
 - **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret while the record is retained; if it has expired or was evicted early when the 2,000-transaction table filled (`410 registration_request_expired`), keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and `server_id` (no need to wait out the 10 minutes).
 - **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` while the record remains retained, or `410 registration_request_expired` once expired or evicted early under capacity pressure. Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again without waiting out the 10-minute window.
-- **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. A `withdrawn` seat is permanent and cannot be restored by clients or admins. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
+- **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. If a withdrawn seat is also banned, completing a new registration returns `403 client_disabled`. Unbanning does not itself restore the seat. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
 
 ### Withdraw an Entire Seat
 
@@ -123,8 +123,8 @@ Authorization: Bearer <registered-writer-secret>
 ```
 
 - `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat; any optional query parameters or small request body such as `{}` are ignored and never override Bearer authentication).
-- Withdrawal preserves historical statistics and admin flags, immediately blocks **every writer** of that seat from reporting or retrying (`403 client_withdrawn`), and removes the seat from all leaderboards and scoring references on the next successful cache build.
-- Other seats (for example a different `server_id` under the same GitHub account) remain unaffected. There is no public rejoin API.
+- Withdrawal immediately blocks reports from **every writer** on the seat. Retrying an already completed registration while the seat is withdrawn returns `403 client_withdrawn` and does not restore it. The next successful cache build excludes the seat from all leaderboards and scoring references. Other seats are unaffected.
+- **To rejoin**, run `start` → GitHub authorization → `complete` with the same GitHub account and `server_id`, using an existing writer's Bearer or a new one. For an unbanned seat, `complete` returns `200` with the original `client_id`. All bound writers can report again; the profile, `ranking_hidden`, historical stats, and existing writers' revisions are unchanged.
 
 ## Daily Cumulative Snapshot Reporting
 
@@ -317,7 +317,7 @@ GET /v1/leaderboards/{board}/{period}
 | Withdraw | `204` | Old leaderboard cache already replaced |
 | Read leaderboard | `200` with `entries`, `start`/`end`, `generated_at` | Non-empty entries or guaranteed cache freshness |
 
-Ordinary reports do not trigger immediate cache rebuilds (default refresh interval is `5m`; withdrawals trigger an asynchronous rebuild). Display `generated_at` when polling and never use the leaderboard API to confirm a report write.
+Ordinary reports do not trigger immediate cache rebuilds (default refresh interval is `5m`; withdrawals and successful rejoins request an asynchronous rebuild). Display `generated_at` when polling and never use the leaderboard API to confirm a report write.
 
 ## Error Contract, Retries, and Limits
 
@@ -335,7 +335,7 @@ Business API errors use the JSON envelope below. Branch on HTTP status and `erro
 | `401` | `invalid_credential`<br>(`WWW-Authenticate: Bearer`) | Verify origin, Bearer secret, and registration state; do not auto-generate a new secret |
 | `403` | `github_authorization_denied` | GitHub authorization was not approved (e.g., denied by user or restricted OAuth app); stop without automatic retry |
 | `403` | `client_disabled` | Seat banned by admin; stop reporting and contact the operator |
-| `403` | `client_withdrawn` | Seat withdrawn; stop all registration retries and reporting on every writer |
+| `403` | `client_withdrawn` | Stop reporting and retrying the completed request; start a new registration only if the user wants to rejoin |
 | `404` / `405` | `not_found`, `method_not_allowed` | Verify endpoint URL and HTTP method |
 | `409` | `revision_conflict` (includes `revision`) | Reconcile local state and concurrent writers before revising |
 | `410` | `registration_request_expired` | Request expired or terminal record was evicted early; keep the original secret and start a new registration if still desired (no need to wait 10 minutes) |
@@ -363,5 +363,5 @@ Deployers can tune configurable defaults via [environment variables](deployment.
 
 **Explicit boundaries:**
 - Serialize scheduling per writer and persist pending jobs across restarts.
-- The server provides no credential recovery/rotation, profile edit, public rejoin, seat merge, single-client stats, submitted-snapshot query, closed-day backfill, per-model query, or built-in CORS layer (handle browser cross-origin policies at the reverse proxy, or report from a trusted backend/local process).
+- The server provides no credential recovery/rotation, profile edit, seat merge, single-client stats, submitted-snapshot query, closed-day backfill, per-model query, or built-in CORS layer (handle browser cross-origin policies at the reverse proxy, or report from a trusted backend/local process).
 - `/healthz` and `/readyz` are operator probes, not part of client registration or reporting workflows.

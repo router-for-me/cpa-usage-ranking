@@ -42,10 +42,11 @@ type Result struct {
 }
 
 type Options struct {
-	Enabled  bool
-	TTL      time.Duration
-	Capacity int
-	Now      func() time.Time
+	Enabled        bool
+	TTL            time.Duration
+	Capacity       int
+	Now            func() time.Time
+	RequestRefresh func()
 }
 
 func DefaultOptions() Options {
@@ -213,10 +214,19 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 			return Result{}, ErrGitHub
 		case "completed":
 			seat, err := readSeat(queryRow(ctx, seatFields+` WHERE id=?`, clientID.Int64))
-			if err == nil && expiry <= s.options.Now().UnixMilli() {
+			if err != nil {
+				return Result{}, err
+			}
+			if seat.Withdrawn {
+				return Result{}, clients.ErrWithdrawn
+			}
+			if seat.Disabled {
+				return Result{}, clients.ErrDisabled
+			}
+			if expiry <= s.options.Now().UnixMilli() {
 				return Result{}, ErrExpired
 			}
-			return Result{Client: seat}, err
+			return Result{Client: seat}, nil
 		case "approved":
 			return Result{}, nil
 		default:
@@ -248,9 +258,13 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	if err != nil && !newSeat {
 		return Result{}, err
 	}
+	if seat.Disabled {
+		return Result{}, clients.ErrDisabled
+	}
 	if boundID == 0 && !s.options.Enabled {
 		return Result{}, ErrRegistrationClosed
 	}
+	rejoined := seat.Withdrawn
 	if newSeat {
 		seat = clients.Client{DisplayName: name.String, AvatarID: avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
 		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms)
@@ -258,6 +272,11 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 		if err != nil {
 			return Result{}, err
 		}
+	} else if rejoined {
+		if _, err := tx.ExecContext(ctx, `UPDATE clients SET withdrawn=0 WHERE id=?`, seat.ID); err != nil {
+			return Result{}, err
+		}
+		seat.Withdrawn = false
 	}
 	if boundID == 0 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO client_writers(client_id,token_hash) VALUES(?,?)`, seat.ID, hash[:]); err != nil {
@@ -273,6 +292,9 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	if err := tx.Commit(); err != nil {
 		return Result{}, err
 	}
+	if rejoined && s.options.RequestRefresh != nil {
+		s.options.RequestRefresh()
+	}
 	return Result{Client: seat, Created: newSeat}, nil
 }
 
@@ -285,11 +307,5 @@ func readSeat(row *sql.Row) (clients.Client, error) {
 		return clients.Client{}, err
 	}
 	c.CreatedAt = time.UnixMilli(created).UTC()
-	if c.Withdrawn {
-		return c, clients.ErrWithdrawn
-	}
-	if c.Disabled {
-		return c, clients.ErrDisabled
-	}
 	return c, nil
 }
