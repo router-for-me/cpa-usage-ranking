@@ -23,7 +23,7 @@
 
 ## Client Integration
 
-Clients integrate over standard **HTTPS + uncompressed UTF-8 JSON**, with no SDK requirement or coupling to any specific client codebase:
+Clients integrate over standard **HTTPS + UTF-8 JSON (optional gzip on registration and reports)**, with no SDK requirement or coupling to any specific client codebase:
 
 - **Read-only dashboards**: Call `GET /v1/leaderboards/{board}/{period}` and `/avatars/*` directly—no registration or credentials required.
 - **Usage reporters**: Persist one 32-byte `base64url` Bearer secret per installation, bind `(GitHub user ID, CPA server ID)` through GitHub OAuth, and upload complete UTC daily cumulative snapshots.
@@ -33,7 +33,7 @@ Clients integrate over standard **HTTPS + uncompressed UTF-8 JSON**, with no SDK
 | Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `server_id`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
 | Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending) |
 | Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | Registered `Bearer` | Atomically replace the seat's full UTC today/yesterday snapshot |
-| Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Permanently withdraw the entire seat (`204`, empty body) |
+| Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Permanently withdraw the entire seat (`204`, no response body) |
 | Read leaderboards | `GET /v1/leaderboards/{board}/{period}` | None | Fetch the published Top-100 cached standings |
 | Fetch avatars | `GET /avatars/catalog.json`, `/avatars/{path}` | None | Read the avatar catalog and static WebP images (`ETag` supported) |
 

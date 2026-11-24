@@ -23,7 +23,7 @@
 
 ## 客户端接入
 
-接入方通过标准 **HTTPS + 未压缩 UTF-8 JSON** 与服务端通信，无需专用 SDK，也不依赖特定客户端实现：
+接入方通过标准 **HTTPS + UTF-8 JSON（注册与上报请求体支持可选 gzip）** 与服务端通信，无需专用 SDK，也不依赖特定客户端实现：
 
 - **只读展示端**：直接匿名调用 `GET /v1/leaderboards/{board}/{period}` 与 `/avatars/*`，无需注册或凭据。
 - **用量上报端**：每个安装实例本地持久化一份 32 字节 `base64url` Bearer 凭据，经 GitHub OAuth 绑定 `(GitHub 用户 ID, CPA server_id)` 席位后，按 UTC 自然日上报完整累计快照。
@@ -33,7 +33,7 @@
 | 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `server_id`、`return_to` 与可选 `avatar_id`，获取 `authorize_url` |
 | 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权） |
 | 上报日快照 | `PUT /v1/clients/report/{utc_day}` | 已注册 `Bearer` | 原子替换席位在 UTC 今日/昨日的完整累计快照 |
-| 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席永久退出（`204`，空请求体） |
+| 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席永久退出（`204`，无响应体） |
 | 读取榜单 | `GET /v1/leaderboards/{board}/{period}` | 无需 | 获取最新发布的 Top 100 缓存榜单 |
 | 获取头像 | `GET /avatars/catalog.json`、`/avatars/{path}` | 无需 | 读取头像清单与内置 WebP 图片（支持 `ETag`） |
 

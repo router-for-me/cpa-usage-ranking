@@ -80,7 +80,7 @@ Content-Type: application/json
 - `server_id`: Persistent, nonzero `8-4-4-4-12` hex UUID identifying the CPA instance (case-insensitive, stored lowercase; matches CPA's `server.server-id`, readable from CPA's `GET /v8/management/server/server-id` or the `X-CPA-SERVER-ID` header on authenticated management responses). Multiple collectors reporting for the same CPA instance must submit its shared `server_id` rather than inventing independent UUIDs.
 - `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
 - `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) or positive JSON integer (`12`) matching an entry in `GET /avatars/catalog.json`. Omit or pass `null` to use the catalog's `default_avatar_id` (`"1"`). Malformed values (`""`, `"0"`, `0`, negative numbers, leading zeros, non-numeric) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
-- `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (fixed 10-minute lifetime) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
+- `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (valid for up to 10 minutes; when the server-wide 2,000-transaction capacity is full, terminal `denied`, `failed`, or oldest `completed` records may be evicted early, causing `complete` to return `410 registration_request_expired` so clients can start a new registration with the original Bearer secret without waiting out the 10 minutes) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
 
 #### Step 2: Browser Authorization
 
@@ -111,8 +111,8 @@ Success response (`client_id` and `avatar_id` are positive int64 decimal strings
 **Seat identity, profile, and recovery rules:**
 - **Seat key**: Uniquely identified by **`(GitHub numeric user ID, server_id)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
 - **Initial profile**: New seats (`201 Created`) normalize GitHub `name` (falling back to `login` when empty or invisible) using Unicode NFKC, cleaning control/line-separator/bidi characters, trimming outer whitespace, and safely truncating to `≤32` code points / `≤128` UTF-8 bytes on rune boundaries (requiring at least one visible character), and save the `avatar_id` submitted in `start` (or the catalog default when omitted). Reusing an existing seat (`200 OK`) keeps its existing display name and avatar unchanged. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or post-registration profile-edit API.
-- **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret before expiry; after expiry, keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and `server_id`.
-- **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` until expiry (and `410 registration_request_expired` afterward). Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again.
+- **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret while the record is retained; if it has expired or was evicted early when the 2,000-transaction table filled (`410 registration_request_expired`), keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and `server_id` (no need to wait out the 10 minutes).
+- **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` while the record remains retained, or `410 registration_request_expired` once expired or evicted early under capacity pressure. Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again without waiting out the 10-minute window.
 - **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. A `withdrawn` seat is permanent and cannot be restored by clients or admins. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
 
 ### Withdraw an Entire Seat
@@ -333,12 +333,12 @@ Business API errors use the JSON envelope below. Branch on HTTP status and `erro
 | `400` / `422` | `invalid_request`, `invalid_source`<br>`invalid_parameter`, `invalid_day`<br>`invalid_report`, `too_many_items` | Fix request payload or path; do not retry unchanged |
 | `422` | `invalid_avatar` | Submitted `avatar_id` is not in `/avatars/catalog.json`; refresh the catalog and choose a valid ID |
 | `401` | `invalid_credential`<br>(`WWW-Authenticate: Bearer`) | Verify origin, Bearer secret, and registration state; do not auto-generate a new secret |
-| `403` | `github_authorization_denied` | User denied authorization; stop and do not auto-restart OAuth |
+| `403` | `github_authorization_denied` | GitHub authorization was not approved (e.g., denied by user or restricted OAuth app); stop without automatic retry |
 | `403` | `client_disabled` | Seat banned by admin; stop reporting and contact the operator |
 | `403` | `client_withdrawn` | Seat withdrawn; stop all registration retries and reporting on every writer |
 | `404` / `405` | `not_found`, `method_not_allowed` | Verify endpoint URL and HTTP method |
 | `409` | `revision_conflict` (includes `revision`) | Reconcile local state and concurrent writers before revising |
-| `410` | `registration_request_expired` | Keep the original secret and start a new registration if still desired |
+| `410` | `registration_request_expired` | Request expired or terminal record was evicted early; keep the original secret and start a new registration if still desired (no need to wait 10 minutes) |
 | `410` | `expired_day` | Stop retrying that UTC day; never move its data into another date |
 | `413` | `request_too_large` | Reduce payload size; never split one day into incremental `PUT`s |
 | `415` | `unsupported_media_type` | Send `application/json` with `identity` or `gzip` encoding |
@@ -356,7 +356,7 @@ Deployers can tune configurable defaults via [environment variables](deployment.
 | --- | --- | --- |
 | Registration request body | `4,096` bytes | Yes |
 | Registration start rate | `20`/source and `200` global per `1m` window; max `10,000` sources | Yes |
-| Pending registration transactions | `10m` lifetime; max `2,000` unexpired transactions server-wide | Fixed |
+| Registration transactions | Up to `10m` lifetime; max `2,000` unexpired transactions server-wide (when full, terminal `denied`, `failed`, or oldest `completed` records may be evicted early; `complete` then returns `410 registration_request_expired`) | Fixed |
 | Report body and items | `131,072` bytes; `1,024` raw items (before catalog matching) | Yes |
 | Report rate per seat (shared by writers) | `1` token per `10s`, burst `10` (per-seat rejections do not consume global budget) | Yes |
 | Global report rate | `1` token per `5ms`, burst `400` | Yes |

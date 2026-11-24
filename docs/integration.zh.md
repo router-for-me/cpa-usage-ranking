@@ -80,7 +80,7 @@ Content-Type: application/json
 - `server_id`：CPA 实例的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写，落盘转小写；对应 CPA 配置项 `server.server-id`，可通过 CPA 的 `GET /v8/management/server/server-id` 或任意已鉴权管理接口响应头 `X-CPA-SERVER-ID` 获取）。同一 CPA 实例下的多个采集端须提交相同 `server_id`，不要各自随机生成。
 - `return_to`：不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
 - `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`）或正 JSON 整数（例如 `12`），须存在于 `GET /avatars/catalog.json` 目录中。省略或传 `null` 时默认使用目录的 `default_avatar_id`（`"1"`）。格式错误（如 `""`、`"0"`、`0`、负数、前导零、非数字）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
-- `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（固定 10 分钟有效），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
+- `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（最长 10 分钟有效；当全站 2,000 笔容量满时，`denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，提前回收后 `complete` 返回 `410 registration_request_expired`，客户端可保留原 Bearer 凭据重新开始注册，无需等满 10 分钟），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
 
 #### 第二步：浏览器授权
 
@@ -111,8 +111,8 @@ Content-Type: application/json
 **席位归属、资料与恢复规则：**
 - **席位主键**：由 **`(GitHub 数字用户 ID, server_id)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
 - **初始资料**：新建席位（`201 Created`）取 GitHub `name`（为空或不含可见字符时回退至 `login`），经 Unicode NFKC 规范化、清理控制/行段分隔与双向控制字符、去首尾空白并按完整码点边界安全截断至 `≤32` 码点且 `≤128` UTF-8 字节（须含可见内容），同时保存 `start` 传入的 `avatar_id`（未传则取目录默认项）。复用已有席位（`200 OK`）时保持原昵称与头像不变。允许重名，展示时按纯文本转义渲染；不同步 GitHub 头像，也无注册后资料修改接口。
-- **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，未过期前用原 `request_id` 和原凭据重试，过期后保留**原凭据**重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 `server_id`）。
-- **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；在原请求过期前重试同一 `request_id` 仍会返回 `500 internal_error`（过期后返回 `410 registration_request_expired`）。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权。
+- **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，在记录尚未过期且未被容量淘汰前可用原 `request_id` 和原凭据重试；若已过期或在全站 2,000 笔容量满时被提前回收（返回 `410 registration_request_expired`），保留**原凭据**直接重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 `server_id`，无需等满 10 分钟）。
+- **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；该记录仍保留期间重试同一 `request_id` 返回 `500 internal_error`，到期或在容量满时被提前回收后返回 `410 registration_request_expired`。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权，无需等满 10 分钟。
 - **封禁、退出与撤销授权**：`disabled`（管理员封禁）无法由客户端通过重试或重新授权解除，但可由管理员解封；`withdrawn`（主动退出）为永久状态，客户端与管理员均不可恢复。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
 
 ### 退出席位（Withdraw）
@@ -333,12 +333,12 @@ GET /v1/leaderboards/{board}/{period}
 | `400` / `422` | `invalid_request`、`invalid_source`<br>`invalid_parameter`、`invalid_day`<br>`invalid_report`、`too_many_items` | 修正参数或正文，不要原样无限重试 |
 | `422` | `invalid_avatar` | 所选 `avatar_id` 不在 `/avatars/catalog.json` 目录中，刷新目录后重新选择 |
 | `401` | `invalid_credential`<br>（含 `WWW-Authenticate: Bearer`） | 检查入口、凭据与注册状态，不要自动重生成新凭据 |
-| `403` | `github_authorization_denied` | 用户拒绝授权，停止流程且不自动再次拉起授权 |
+| `403` | `github_authorization_denied` | 本次 GitHub 授权未获批准（如用户拒绝或 OAuth 应用受限），停止流程且不自动再次拉起授权 |
 | `403` | `client_disabled` | 席位已被管理员封禁，停止上报并联系部署者 |
 | `403` | `client_withdrawn` | 整席已退出，所有上报端停止注册重试与上报 |
 | `404` / `405` | `not_found`、`method_not_allowed` | 检查路径与 HTTP 方法 |
 | `409` | `revision_conflict`（附带 `revision`） | 核对本地持久化状态与并发写入后再修正 |
-| `410` | `registration_request_expired` | 保留原凭据，如需继续参榜则重新开始注册并授权 |
+| `410` | `registration_request_expired` | 请求已过期或终态记录被提前回收；保留原凭据，如需继续参榜可直接重新开始注册并授权（无需等满 10 分钟） |
 | `410` | `expired_day` | 停止补报该日期，不得把数据挪到其他日期 |
 | `413` | `request_too_large` | 精简正文体积，不得拆成增量 `PUT` |
 | `415` | `unsupported_media_type` | 改用 `application/json` 及 `identity` 或 `gzip` 编码 |
@@ -356,7 +356,7 @@ GET /v1/leaderboards/{board}/{period}
 | --- | --- | --- |
 | 注册请求体上限 | `4,096` 字节 | 可配置 |
 | 开始注册请求额度 | 每来源 `20` 次、全局 `200` 次 / `1m` 窗口；最多 `10,000` 个活跃来源 | 可配置 |
-| 注册事务状态 | `10m` 有效期；全站最多同时保留 `2,000` 笔未过期事务 | 固定常量 |
+| 注册事务状态 | 最长 `10m` 有效；全站最多保留 `2,000` 笔未过期事务（容量满时，`denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，之后 `complete` 返回 `410 registration_request_expired`） | 固定常量 |
 | 上报正文与条目上限 | `131,072` 字节；`1,024` 条原始模型项（匹配目录前） | 可配置 |
 | 单席位上报额度（同席各端共用） | 每 `10s` 补充 `1` 个令牌，突发 `10`（单席限流拒绝不消耗全局额度） | 可配置 |
 | 全局上报额度 | 每 `5ms` 补充 `1` 个令牌，突发 `400` | 可配置 |
