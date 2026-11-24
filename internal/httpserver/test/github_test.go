@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"cpa-usage-ranking/internal/httpserver"
 )
 
 func TestGitHubReturnToWithoutReferer(t *testing.T) {
@@ -113,6 +115,7 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 
 func TestRegistrationCannotRebindWriterAndDifferentServerIDIsDistinct(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	httpserver.MountWithdraw(f.router, f.repo, nil)
 	const otherServerID = "550e8400-e29b-41d4-a716-446655440001"
 	secret := testSecret(1)
 	id := f.start(t, secret, serverID, returnURL)
@@ -135,6 +138,14 @@ func TestRegistrationCannotRebindWriterAndDifferentServerIDIsDistinct(t *testing
 	intoExisting := f.start(t, secret, otherServerID, returnURL)
 	f.approve(t, intoExisting, 10, "Name", "login", returnURL)
 	requireHTTPError(t, f.complete(t, secret, intoExisting), 401, "invalid_credential")
+
+	if r := f.api(t, "POST", withdrawPath, "", other, nil); r.status != 204 {
+		t.Fatalf("withdraw target seat: %d %s", r.status, r.body)
+	}
+	intoWithdrawn := f.start(t, secret, otherServerID, returnURL)
+	f.approve(t, intoWithdrawn, 10, "Name", "login", returnURL)
+	requireHTTPError(t, f.complete(t, secret, intoWithdrawn), 401, "invalid_credential")
+	requireSeatWriterState(t, f, two.ID, true, 1)
 	if got := identity(t, f.complete(t, secret, id)); got.ID != one.ID {
 		t.Fatal("rebind replaced original writer")
 	}
