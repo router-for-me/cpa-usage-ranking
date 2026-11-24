@@ -62,7 +62,7 @@ INSERT INTO daily_stats VALUES('2026-12-31',1,0,9007199254740993,10,0,0,0,0,1,1,
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "leaderboard_unavailable") {
 		t.Fatal(w.Code, w.Body)
 	}
-	for _, path := range []string{"/v1/leaderboards/other/today", "/v1/leaderboards/usage/2026-12-31", "/v1/leaderboards/usage/today?model=alpha", "/v1/leaderboards/usage/today?x=1;y=2"} {
+	for _, path := range []string{"/v1/leaderboards/other/today", "/v1/leaderboards/usage/2026-12-31"} {
 		w = request(http.MethodGet, path)
 		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_parameter") {
 			t.Fatal(path, w.Code, w.Body)
@@ -130,6 +130,13 @@ INSERT INTO daily_stats VALUES('2026-12-31',1,0,9007199254740993,10,0,0,0,0,1,1,
 			if period == "all" && string(obj["end"]) != "null" {
 				t.Fatal(string(obj["end"]))
 			}
+		}
+	}
+	// 附加查询参数应被忽略，不影响公开榜单读取。
+	for _, path := range []string{"/v1/leaderboards/usage/yesterday?model=alpha", "/v1/leaderboards/usage/today?x=1;y=2&_t=123"} {
+		w = request(http.MethodGet, path)
+		if w.Code != 200 {
+			t.Fatalf("extra query rejected on %s: %d %s", path, w.Code, w.Body)
 		}
 	}
 }

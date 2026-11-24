@@ -19,8 +19,8 @@ type Metrics struct {
 	LatencySamples   int64
 }
 
-// Validate rejects the whole report on any inconsistent item, regardless of
-// whether its model will later be matched or ignored.
+// Validate checks hard bounds (non-negative counts, finite non-negative averages,
+// and no integer/float aggregation overflow) across all items in the report.
 func Validate(report Report) error {
 	if report.Revision < 0 {
 		return ErrInvalid
@@ -46,42 +46,61 @@ func itemMetrics(item Item) (Metrics, error) {
 			return Metrics{}, ErrInvalid
 		}
 	}
-	if m.SuccessCount > m.RequestCount || m.TTFTSamples > m.RequestCount || m.LatencySamples > m.RequestCount {
+	// 三级递进 max 下界兜底，兼容不同上游在缓存、思考与总 Token 口径上的细微偏差。
+	cacheSum, ok := addInt(m.CacheReadTokens, m.CacheWriteTokens)
+	if !ok {
 		return Metrics{}, ErrInvalid
 	}
-	cache, ok := addInt(m.CacheReadTokens, m.CacheWriteTokens)
-	if !ok || cache > m.InputTokens || m.ReasoningTokens > m.OutputTokens {
-		return Metrics{}, ErrInvalid
+	if m.InputTokens < cacheSum {
+		m.InputTokens = cacheSum
+	}
+	if m.OutputTokens < m.ReasoningTokens {
+		m.OutputTokens = m.ReasoningTokens
 	}
 	classified, ok := addInt(m.InputTokens, m.OutputTokens)
-	if !ok || classified > m.TotalTokens || (m.TotalTokens > 0 && m.RequestCount == 0) {
+	if !ok {
 		return Metrics{}, ErrInvalid
 	}
+	if m.TotalTokens < classified {
+		m.TotalTokens = classified
+	}
+	// 若存在正用量或正成功数但未填请求数，按至少 1 次或成功数兜底，避免整份快照被拒收。
+	if m.RequestCount == 0 && (m.TotalTokens > 0 || m.SuccessCount > 0) {
+		m.RequestCount = max(int64(1), m.SuccessCount)
+	}
+	if m.SuccessCount > m.RequestCount {
+		m.SuccessCount = m.RequestCount
+	}
 	var err error
-	if m.TTFTSumMS, err = durationSum(item.TTFTAvgMS, m.TTFTSamples); err != nil {
+	if m.TTFTSumMS, m.TTFTSamples, err = normalizeDuration(item.TTFTAvgMS, m.TTFTSamples, m.RequestCount); err != nil {
 		return Metrics{}, err
 	}
-	if m.LatencySumMS, err = durationSum(item.LatencyAvgMS, m.LatencySamples); err != nil {
+	if m.LatencySumMS, m.LatencySamples, err = normalizeDuration(item.LatencyAvgMS, m.LatencySamples, m.RequestCount); err != nil {
 		return Metrics{}, err
 	}
 	return m, nil
 }
 
-func durationSum(avg *float64, samples int64) (float64, error) {
-	if samples == 0 {
-		if avg != nil {
-			return 0, ErrInvalid
-		}
-		return 0, nil
+// normalizeDuration 校验均值合法性并将样本数钳制在请求数内，保持观测均值不变。
+// 样本数为 0 时忽略有限非负均值；样本数大于 0 但均值为 nil 时将样本数归 0。
+func normalizeDuration(avg *float64, samples, maxSamples int64) (float64, int64, error) {
+	if avg != nil && (math.IsNaN(*avg) || math.IsInf(*avg, 0) || *avg < 0) {
+		return 0, 0, ErrInvalid
 	}
-	if avg == nil || math.IsNaN(*avg) || math.IsInf(*avg, 0) || *avg < 0 {
-		return 0, ErrInvalid
+	if samples > maxSamples {
+		samples = maxSamples
+	}
+	if samples == 0 || avg == nil {
+		return 0, 0, nil
 	}
 	sum := *avg * float64(samples)
 	if math.IsInf(sum, 0) || math.IsNaN(sum) {
-		return 0, ErrInvalid
+		return 0, 0, ErrInvalid
 	}
-	return sum, nil
+	if sum == 0 {
+		sum = 0
+	}
+	return sum, samples, nil
 }
 
 func addInt(a, b int64) (int64, bool) {

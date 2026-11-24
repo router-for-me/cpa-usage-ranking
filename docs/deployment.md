@@ -50,7 +50,7 @@ Use `--no-build` so Compose does not rebuild locally. Registry tags can still be
 2. Supply `RANKING_PUBLIC_ORIGIN`, `RANKING_GITHUB_CLIENT_ID`, and `RANKING_GITHUB_CLIENT_SECRET` together as private runtime environment variables (never commit them or bake them into images). `compose.yaml` forwards these three variables and optional `RANKING_REGISTRATION_ENABLED` from the deployment environment.
 3. Route `/auth/github/*` and `/v1/*` on the same HTTPS origin to the same Ranking instance. Ensure Ranking can reach `github.com` and `api.github.com` over HTTPS; it never calls client `return_to` URLs.
 
-If all three OAuth variables are unset—or `RANKING_REGISTRATION_ENABLED=false`—new registrations stay closed while public reads, existing writer reports, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
+If all three OAuth variables are unset or blank—or `RANKING_REGISTRATION_ENABLED=false`—new registrations stay closed while public reads, existing writer reports, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
 
 ## Reverse Proxy, Security, and Source Resolution
 
@@ -58,11 +58,11 @@ If all three OAuth variables are unset—or `RANKING_REGISTRATION_ENABLED=false`
 - **Scrub sensitive proxy logs**: Exclude `Authorization` headers, cookies, request bodies, and full `/auth/github/*` query strings (log path only on OAuth routes).
 - **Trusted proxies (`RANKING_TRUSTED_PROXIES`)**: Unset by default (all forwarded headers are ignored and only the connection's `RemoteAddr` is used). Behind a reverse proxy, explicitly list only your actual proxy IPs or CIDRs (for example `127.0.0.1,10.2.0.0/24`). Only connections from trusted peers honor `X-Forwarded-For` (right-to-left to the first untrusted hop) or `X-Real-IP`; malformed headers fall back to `RemoteAddr`. Never trust `0.0.0.0/0` or client-accessible subnets.
 - **IPv6 source grouping (`RANKING_REGISTRATION_IPV6_64`)**: Enabled (`true`) by default, masking native IPv6 addresses to `/64` (IPv4-mapped IPv6 is unmapped to IPv4) for registration start and admin login rate limits. Source keys are abuse-control keys only—never identity or account ownership.
-- **Two-layer registration admission**: `POST /v1/clients/register/start` runs an in-memory per-source and global fixed-window gate **before** Bearer/body validation (resets on restart); requests rejected by per-source limits or a full in-memory source table (`429 registration_capacity`) do not spend global slots. Valid admitted requests then allocate a fixed `10m` SQLite transaction capped at `2,000` unexpired rows (not env-configurable); hitting that SQLite cap also returns `429 registration_capacity` after rate slots have been consumed, without evicting valid entries.
+- **Two-layer registration admission**: `POST /v1/clients/register/start` runs an in-memory per-source and global fixed-window gate **before** Bearer/body validation (resets on restart); requests rejected by per-source limits or a full in-memory source table (`429 registration_capacity`) do not spend global slots. Valid admitted requests then allocate a fixed `10m` SQLite transaction capped at `2,000` unexpired rows (not env-configurable); when the table is full, terminal `denied`/`failed` rows are pruned first and then the oldest `completed` rows are evicted, returning `429 registration_capacity` only when active in-flight requests reach the cap.
 
 ## Configuration Reference
 
-Pass environment variables via Compose `environment` or `docker run -e` (host shell exports are not automatically forwarded unless referenced in `compose.yaml`). Explicitly empty or malformed values fail startup.
+Pass environment variables via Compose `environment` or `docker run -e` (host shell exports are not automatically forwarded unless referenced in `compose.yaml`). Unset or blank values fall back to defaults; malformed values fail startup.
 
 ### Core Service and Health
 
@@ -99,13 +99,13 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | Max uncompressed JSON body bytes per report |
-| `RANKING_REPORT_MAX_ITEMS` | `128` | Max raw model items per report (before catalog matching) |
+| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | Max JSON body bytes per report (applies to compressed and decompressed gzip bodies) |
+| `RANKING_REPORT_MAX_ITEMS` | `1024` | Max raw model items per report (before catalog matching) |
 | `RANKING_REPORT_DECODE_CONCURRENCY` | `16` | Max concurrent request body reads and decodes |
 | `RANKING_REPORT_QUEUE_CAPACITY` | `128` | Pending serialized report write queue length |
 | `RANKING_REPORT_TRANSACTION_TIMEOUT` | `5s` | Execution timeout per report or maintenance SQLite transaction |
-| `RANKING_REPORT_CLIENT_INTERVAL` | `1m` | Per-seat token refill interval (shared by all writers of a seat) |
-| `RANKING_REPORT_CLIENT_BURST` | `2` | Per-seat token bucket burst capacity |
+| `RANKING_REPORT_CLIENT_INTERVAL` | `10s` | Per-seat token refill interval (shared by all writers of a seat; rejected client attempts do not spend global tokens) |
+| `RANKING_REPORT_CLIENT_BURST` | `10` | Per-seat token bucket burst capacity |
 | `RANKING_REPORT_GLOBAL_INTERVAL` | `5ms` | Global report token refill interval |
 | `RANKING_REPORT_GLOBAL_BURST` | `400` | Global report token bucket burst capacity |
 | `RANKING_REPORT_MAX_CLIENTS` | `100000` | Max tracked in-memory per-seat rate states |
@@ -115,8 +115,8 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600`/`0640` or stricter read-only); see [Administrator Console](admin.md) |
-| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | Local loopback test override only; requires literal loopback listen address |
+| `RANKING_ADMIN_CONFIG_FILE` | unset (disabled) | Private owner JSON file outside `RANKING_WEB_DIR` (`0600`/`0640` recommended; broader permissions log a startup warning); see [Administrator Console](admin.md) |
+| `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP` | `false` | Local or container HTTP test override allowing non-HTTPS admin cookies/sessions (do not enable on public internet) |
 
 ## Data Permissions, Stopping, and Backups
 

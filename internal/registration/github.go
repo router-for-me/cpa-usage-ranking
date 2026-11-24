@@ -114,8 +114,7 @@ func (g *GitHub) exchange(ctx context.Context, code, verifier string) (githubUse
 	}
 	name, err := profiles.NormalizeDisplayName(user.Name)
 	if err != nil {
-		login := []rune(user.Login)
-		name, err = profiles.NormalizeDisplayName(string(login[:min(len(login), 32)]))
+		name, err = profiles.NormalizeDisplayName(user.Login)
 		if err != nil {
 			return githubUser{}, ErrGitHub
 		}

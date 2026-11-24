@@ -77,24 +77,15 @@ func TestInvalidCatalogsFail(t *testing.T) {
 		"broken JSON": `{`, "multiple JSON values": catalogJSON(valid) + ` {}`,
 		"no models":                 `{"currency":"USD","price_unit":"per_million_tokens"}`,
 		"null models":               `{"currency":"USD","price_unit":"per_million_tokens","models":null}`,
-		"wrong currency":            strings.Replace(catalogJSON(valid), `"USD"`, `"EUR"`, 1),
-		"wrong unit":                strings.Replace(catalogJSON(valid), `"per_million_tokens"`, `"token"`, 1),
-		"unknown field":             strings.Replace(catalogJSON(valid), `"currency"`, `"currencY_typo"`, 1),
-		"null alias":                catalogJSON(item("alpha", nil, `{}`)),
 		"duplicate standard":        catalogJSON(valid, valid),
 		"alias vs later standard":   catalogJSON(item("alpha", []string{"beta"}, `{}`), item("beta", []string{}, `{}`)),
 		"alias vs earlier standard": catalogJSON(item("beta", []string{}, `{}`), item("alpha", []string{"beta"}, `{}`)),
 		"alias vs alias":            catalogJSON(item("alpha", []string{"shared"}, `{}`), item("beta", []string{"shared"}, `{}`)),
-		"unknown tier":              catalogJSON(item("alpha", []string{}, `{"prority":{}}`)),
-		"null tier object":          catalogJSON(item("alpha", []string{}, `{"default":null}`)),
-		"unknown price field":       catalogJSON(item("alpha", []string{}, `{"default":{"inpt":"1"}}`)),
 		"numeric price":             catalogJSON(item("alpha", []string{}, `{"default":{"input":0}}`)),
 		"negative price":            catalogJSON(item("alpha", []string{}, `{"default":{"input":"-0.1"}}`)),
 		"exponent price":            catalogJSON(item("alpha", []string{}, `{"default":{"input":"1e2"}}`)),
 		"decimal missing digits":    catalogJSON(item("alpha", []string{}, `{"default":{"input":"1."}}`)),
 		"invalid UTF-8":             catalogJSON(`{"model_name":"` + string([]byte{0xff}) + `","alias":[],"prices":{}}`),
-		"lone high surrogate":       catalogJSON(`{"model_name":"\ud800","alias":[],"prices":{}}`),
-		"lone low surrogate":        catalogJSON(`{"model_name":"alpha","alias":["\udc00"],"prices":{}}`),
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -105,6 +96,52 @@ func TestInvalidCatalogsFail(t *testing.T) {
 	}
 	if _, err := models.Load(filepath.Join(t.TempDir(), "missing.json")); err == nil {
 		t.Fatal("missing file accepted")
+	}
+}
+
+func TestRelaxedCatalogMetadataAndDefaults(t *testing.T) {
+	raw := `{
+		"currency": "EUR",
+		"price_unit": "per_1k_tokens",
+		"extra_top_level": true,
+		"models": [
+			{"model_name": "minimal"},
+			{"model_name": "null-optional", "alias": null, "prices": null, "extra_item": "ignored"},
+			{
+				"model_name": "relaxed-prices",
+				"alias": ["rp-1"],
+				"prices": {
+					"default": null,
+					"unknown_tier": {"input": "not-a-decimal"},
+					"flex": {"output": "2.50", "extra_field": 123}
+				}
+			},
+			{"model_name": "a-\ud800", "alias": ["b-\udc00"]}
+		]
+	}`
+	catalog, err := loadCatalog(t, raw)
+	if err != nil {
+		t.Fatalf("relaxed catalog rejected: %v", err)
+	}
+	entries := catalog.List()
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 models, got %d", len(entries))
+	}
+	if len(entries[0].Aliases) != 0 || len(entries[0].Prices) != 0 {
+		t.Fatalf("minimal entry: %+v", entries[0])
+	}
+	if len(entries[1].Aliases) != 0 || len(entries[1].Prices) != 0 {
+		t.Fatalf("null-optional entry: %+v", entries[1])
+	}
+	if len(entries[2].Prices) != 1 || entries[2].Prices[models.Flex].Output == nil || *entries[2].Prices[models.Flex].Output != "2.50" {
+		t.Fatalf("relaxed-prices entry: %+v", entries[2].Prices)
+	}
+	if entries[3].Name != "a-\ufffd" || len(entries[3].Aliases) != 1 || entries[3].Aliases[0] != "b-\ufffd" {
+		t.Fatalf("expected replacement rune for lone surrogates, got %+v", entries[3])
+	}
+	// 顶层省略 currency 与 price_unit 也应正常加载。
+	if _, err := loadCatalog(t, `{"models":[{"model_name":"omitted-meta"}]}`); err != nil {
+		t.Fatalf("omitted metadata rejected: %v", err)
 	}
 }
 

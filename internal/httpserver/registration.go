@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"cpa-usage-ranking/internal/auth"
@@ -22,31 +24,70 @@ type RegistrationHTTPOptions struct {
 	MaxBodyBytes  int64
 }
 
+// optionalAvatarID 接受可选的正 int64 JSON 整数或十进制字符串；省略或 null 视为未传。
+type optionalAvatarID struct {
+	id  int64
+	set bool
+}
+
+func (a *optionalAvatarID) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		a.id = 0
+		a.set = false
+		return nil
+	}
+	var text string
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return registration.ErrInvalidRequest
+		}
+	} else {
+		text = string(trimmed)
+	}
+	parsed, ok := parsePositiveInt64String(text)
+	if !ok {
+		return registration.ErrInvalidRequest
+	}
+	a.id = parsed
+	a.set = true
+	return nil
+}
+
+type registrationStartInput struct {
+	ServerID *string          `json:"server_id"`
+	ReturnTo *string          `json:"return_to"`
+	AvatarID optionalAvatarID `json:"avatar_id"`
+}
+
+type registrationCompleteInput struct {
+	RequestID *string `json:"request_id"`
+}
+
 func MountRegistration(router *gin.Engine, service *registration.Service, github *registration.GitHub, limiter *registration.RequestLimiter, options RegistrationHTTPOptions) error {
 	if service == nil || limiter == nil || options.MaxBodyBytes <= 0 {
 		return fmt.Errorf("invalid registration HTTP configuration")
 	}
 	mountExact(router, http.MethodPost, "/v1/clients/register/start", RegistrationAdmission(limiter, options.GroupIPv6By64), func(c *gin.Context) {
-		var serverID, returnTo string
-		var rawAvatarID *string
-		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"server_id": &serverID, "return_to": &returnTo}, map[string]**string{"avatar_id": &rawAvatarID})
+		var input registrationStartInput
+		hash, ok := decodeRegistrationJSON(c, options.MaxBodyBytes, &input)
 		if !ok {
 			return
 		}
+		if input.ServerID == nil || *input.ServerID == "" || input.ReturnTo == nil || *input.ReturnTo == "" {
+			writeRegistrationError(c, registration.ErrInvalidRequest)
+			return
+		}
 		var avatarID *int64
-		if rawAvatarID != nil {
-			parsed, ok := parsePositiveInt64String(*rawAvatarID)
-			if !ok {
-				writeRegistrationError(c, registration.ErrInvalidRequest)
-				return
-			}
-			avatarID = &parsed
+		if input.AvatarID.set {
+			v := input.AvatarID.id
+			avatarID = &v
 		}
 		if github == nil {
 			writeRegistrationError(c, registration.ErrRegistrationClosed)
 			return
 		}
-		id, err := service.Start(c.Request.Context(), hash, serverID, returnTo, avatarID)
+		id, err := service.Start(c.Request.Context(), hash, *input.ServerID, *input.ReturnTo, avatarID)
 		if err != nil {
 			writeRegistrationError(c, err)
 			return
@@ -54,12 +95,16 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 		c.JSON(http.StatusOK, gin.H{"request_id": id, "authorize_url": github.BrowserURL(id)})
 	})
 	mountExact(router, http.MethodPost, "/v1/clients/register/complete", func(c *gin.Context) {
-		var id string
-		hash, ok := registrationInput(c, options.MaxBodyBytes, map[string]*string{"request_id": &id}, nil)
+		var input registrationCompleteInput
+		hash, ok := decodeRegistrationJSON(c, options.MaxBodyBytes, &input)
 		if !ok {
 			return
 		}
-		result, err := service.Complete(c.Request.Context(), hash, id)
+		if input.RequestID == nil || *input.RequestID == "" {
+			writeRegistrationError(c, registration.ErrInvalidRequest)
+			return
+		}
+		result, err := service.Complete(c.Request.Context(), hash, *input.RequestID)
 		switch {
 		case errors.Is(err, registration.ErrPending):
 			c.Header("Retry-After", strconv.Itoa(int(registration.PendingRetryAfter.Seconds())))
@@ -78,15 +123,26 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 	return nil
 }
 
-func registrationInput(c *gin.Context, maxBytes int64, required map[string]*string, optional map[string]**string) (clients.CredentialHash, bool) {
+func decodeRegistrationJSON(c *gin.Context, maxBytes int64, dst any) (clients.CredentialHash, bool) {
 	hash, err := auth.BearerHash(c.Request.Header)
 	if err != nil {
 		writeInvalidCredential(c)
 		return hash, false
 	}
-	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-	if err != nil || mediaType != "application/json" || (c.GetHeader("Content-Encoding") != "" && c.GetHeader("Content-Encoding") != "identity") {
-		writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use uncompressed application/json")
+	if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
+		mediaType, _, err := mime.ParseMediaType(ct)
+		if err != nil || mediaType != "application/json" {
+			writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use application/json")
+			return hash, false
+		}
+	}
+	encoding, ok := reportContentEncoding(c.Request.Header)
+	if !ok {
+		writeError(c, http.StatusUnsupportedMediaType, "unsupported_media_type", "Use identity or gzip Content-Encoding")
+		return hash, false
+	}
+	if c.Request.ContentLength > maxBytes {
+		writeError(c, http.StatusRequestEntityTooLarge, "request_too_large", "Registration body is too large")
 		return hash, false
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes))
@@ -95,54 +151,52 @@ func registrationInput(c *gin.Context, maxBytes int64, required map[string]*stri
 		writeError(c, http.StatusRequestEntityTooLarge, "request_too_large", "Registration body is too large")
 		return hash, false
 	}
-	if err != nil || !decodeRegistrationFields(body, required, optional) {
+	if err != nil {
+		writeRegistrationError(c, registration.ErrInvalidRequest)
+		return hash, false
+	}
+	if encoding == "gzip" {
+		gz, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			writeRegistrationError(c, registration.ErrInvalidRequest)
+			return hash, false
+		}
+		defer gz.Close()
+		decompressed, err := io.ReadAll(io.LimitReader(gz, maxBytes+1))
+		if err != nil {
+			writeRegistrationError(c, registration.ErrInvalidRequest)
+			return hash, false
+		}
+		if int64(len(decompressed)) > maxBytes {
+			writeError(c, http.StatusRequestEntityTooLarge, "request_too_large", "Registration body is too large")
+			return hash, false
+		}
+		if err := gz.Close(); err != nil {
+			writeRegistrationError(c, registration.ErrInvalidRequest)
+			return hash, false
+		}
+		body = decompressed
+	}
+	if !utf8.Valid(body) {
+		writeRegistrationError(c, registration.ErrInvalidRequest)
+		return hash, false
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		writeRegistrationError(c, registration.ErrInvalidRequest)
+		return hash, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	if err := decoder.Decode(dst); err != nil {
+		writeRegistrationError(c, registration.ErrInvalidRequest)
+		return hash, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		writeRegistrationError(c, registration.ErrInvalidRequest)
 		return hash, false
 	}
 	return hash, true
-}
-
-func decodeRegistrationFields(body []byte, required map[string]*string, optional map[string]**string) bool {
-	if !utf8.Valid(body) {
-		return false
-	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	if tok, err := decoder.Token(); err != nil || tok != json.Delim('{') {
-		return false
-	}
-	for decoder.More() {
-		tok, err := decoder.Token()
-		key, ok := tok.(string)
-		if err != nil || !ok {
-			return false
-		}
-		var raw json.RawMessage
-		if err := decoder.Decode(&raw); err != nil {
-			return false
-		}
-		trimmed := bytes.TrimSpace(raw)
-		var value *string
-		if json.Unmarshal(trimmed, &value) != nil || value == nil || !validUnicodeEscapes(trimmed) {
-			return false
-		}
-		if field, ok := required[key]; ok {
-			*field = *value
-			delete(required, key)
-			continue
-		}
-		if field, ok := optional[key]; ok {
-			v := *value
-			*field = &v
-			delete(optional, key)
-			continue
-		}
-		return false
-	}
-	if tok, err := decoder.Token(); err != nil || tok != json.Delim('}') || len(required) != 0 {
-		return false
-	}
-	_, err := decoder.Token()
-	return err == io.EOF
 }
 
 func parsePositiveInt64String(s string) (int64, bool) {
@@ -156,35 +210,6 @@ func parsePositiveInt64String(s string) (int64, bool) {
 	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	return v, err == nil && v > 0
-}
-
-// encoding/json replaces unpaired surrogate escapes; reject them instead.
-func validUnicodeEscapes(raw []byte) bool {
-	for i := 1; i+1 < len(raw); i++ {
-		if raw[i] != '\\' {
-			continue
-		}
-		i++
-		if raw[i] != 'u' {
-			continue
-		}
-		code, _ := strconv.ParseUint(string(raw[i+1:i+5]), 16, 16)
-		i += 4
-		if code >= 0xdc00 && code <= 0xdfff {
-			return false
-		}
-		if code >= 0xd800 && code <= 0xdbff {
-			if i+6 >= len(raw) || raw[i+1] != '\\' || raw[i+2] != 'u' {
-				return false
-			}
-			low, err := strconv.ParseUint(string(raw[i+3:i+7]), 16, 16)
-			if err != nil || low < 0xdc00 || low > 0xdfff {
-				return false
-			}
-			i += 6
-		}
-	}
-	return true
 }
 
 func writeRegistrationError(c *gin.Context, err error) {

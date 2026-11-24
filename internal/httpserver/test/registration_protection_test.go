@@ -123,7 +123,7 @@ func TestRegistrationHTTPRequestRateAndCapacity(t *testing.T) {
 	}
 }
 
-func TestRegistrationHTTPCapacityRetainsResultUntilExpiryAndRecovers(t *testing.T) {
+func TestRegistrationHTTPCapacityReclaimsCompletedAndCapsActive(t *testing.T) {
 	settings := defaultRegistrationSettings()
 	settings.requests.SourceRequests = 1
 	settings.service.Capacity = 1
@@ -140,21 +140,29 @@ func TestRegistrationHTTPCapacityRetainsResultUntilExpiryAndRecovers(t *testing.
 	if first.Name != login[:32] {
 		t.Fatalf("invalid login fallback: %q", first.Name)
 	}
+	// 未被淘汰前，已完成请求仍可幂等取回结果。
+	if r := f.complete(t, secret, id); r.status != 200 || identity(t, r).ID != first.ID {
+		t.Fatal("exhausted start budget blocked an unexpired recovery")
+	}
 	now.Add(int64(time.Minute))
-	r := f.send(t, validStartBody, testSecret(2), nil)
+	// 表满且仅有已完成行时，新注册应淘汰最早的已完成行并正常签发。
+	activeID := f.start(t, testSecret(2), serverID, returnURL)
+	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
+	// 活跃未完成请求占满容量时，后续请求必须返回 429 registration_capacity 且不驱逐活跃行。
+	now.Add(int64(time.Minute))
+	r := f.send(t, validStartBody, testSecret(3), nil)
 	requireHTTPError(t, r, 429, "registration_capacity")
 	if r.header.Get("Retry-After") != "30" {
 		t.Fatalf("capacity retry time: %v", r.header)
 	}
-	if r := f.complete(t, secret, id); r.status != 200 || identity(t, r).ID != first.ID {
-		t.Fatal("capacity or exhausted start budget blocked an unexpired recovery")
+	if f.complete(t, testSecret(2), activeID).status != 202 {
+		t.Fatal("active request was disrupted by capacity check")
 	}
 	now.Add(int64(30 * time.Second))
-	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
+	requireHTTPError(t, f.complete(t, testSecret(2), activeID), 410, "registration_request_expired")
 	if err := f.reg.PruneExpired(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	requireHTTPError(t, f.complete(t, secret, id), 410, "registration_request_expired")
 	now.Add(int64(30 * time.Second))
 	fresh := f.start(t, secret, serverID, returnURL)
 	f.approve(t, fresh, 7, "Changed", "different-login", returnURL)

@@ -365,7 +365,6 @@ class Smoke:
                     == stats, "metrics changed after recreation")
         print("PASS: same-schema volume recreation, credential/revision/metrics and SIGTERM exit 0", flush=True)
 
-        self.invalid("empty", "RANKING_SQLITE_PATH=", "RANKING_SQLITE_PATH")
         self.invalid("address", "RANKING_HTTP_ADDR=not-a-host-port", "RANKING_HTTP_ADDR")
         self.invalid("oauth-origin", "RANKING_PUBLIC_ORIGIN=http://ranking.example", "RANKING_PUBLIC_ORIGIN")
         self.invalid("models-missing", "RANKING_MODELS_PATH=/missing/models.json", "model")
@@ -376,7 +375,7 @@ class Smoke:
         bad_models.chmod(0o644)
         self.invalid("models-invalid", "RANKING_MODELS_PATH=/bad-models.json", "model",
                      f"type=bind,src={bad_models},dst=/bad-models.json,readonly")
-        print("PASS: empty/invalid settings, missing/invalid assets and unwritable data path fail startup", flush=True)
+        print("PASS: invalid settings, missing/invalid assets and unwritable data path fail startup", flush=True)
 
 
 def main():

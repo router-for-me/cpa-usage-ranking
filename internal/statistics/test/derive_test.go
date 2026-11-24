@@ -127,9 +127,26 @@ func TestDeriveNumericBoundaries(t *testing.T) {
 	if _, err = statistics.Derive(m); !errors.Is(err, statistics.ErrOverflow) {
 		t.Fatalf("speed overflow: %v", err)
 	}
-	for _, bad := range []reports.Metrics{{TTFTSumMS: math.NaN()}, {LatencySumMS: math.Inf(1)}, {OutputTokens: 1, ReasoningTokens: 2}, {RequestCount: 1, TTFTSamples: 2}, {TTFTSumMS: 1}, {RequestCount: -1}} {
+	for _, bad := range []reports.Metrics{{TTFTSumMS: math.NaN()}, {LatencySumMS: math.Inf(1)}, {TTFTSumMS: -1}, {RequestCount: -1}} {
 		if _, err = statistics.Derive(bad); !errors.Is(err, statistics.ErrInvalidMetrics) {
 			t.Fatalf("invalid %+v: %v", bad, err)
 		}
+	}
+	// 非负但子项大于父项的统计应平滑钳制在 [0, 1]，不导致缓存构建失败。
+	clamped, err := statistics.Derive(reports.Metrics{
+		TotalTokens: 10, InputTokens: 5, OutputTokens: 12,
+		CacheReadTokens: 8, CacheWriteTokens: 9, ReasoningTokens: 20,
+		RequestCount: 2, SuccessCount: 5,
+		TTFTSamples: 0, TTFTSumMS: 99,
+		LatencySamples: 4, LatencySumMS: 400,
+	})
+	if err != nil {
+		t.Fatalf("inconsistent non-negative metrics rejected: %v", err)
+	}
+	if clamped.NonReasoningOutput != 0 || clamped.TTFTMeanMS.Valid {
+		t.Fatalf("unexpected non-reasoning or zero-sample mean: %+v", clamped)
+	}
+	for _, rate := range []statistics.Optional{clamped.CacheReadRate, clamped.CacheWriteRate, clamped.ReasoningRate, clamped.OutputRate, clamped.SuccessRate, clamped.LatencyCoverage} {
+		approx(t, rate, 1)
 	}
 }

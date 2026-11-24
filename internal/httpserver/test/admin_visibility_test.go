@@ -37,14 +37,17 @@ func TestAdminRankingVisibilityPermissionsAndIndependentStates(t *testing.T) {
 	if got := adminCall(router, "PUT", "/v1/admin/users/1/ban", `{"disabled":true}`, cookie, staff.CSRF, "https://ranking.test", true).Code; got != 200 {
 		t.Fatal(got)
 	}
-	if got := adminCall(router, "PUT", "/v1/admin/users/1/ranking-visibility", `{"hidden":false}`, cookie, staff.CSRF, "https://ranking.test", true).Code; got != 409 {
-		t.Fatal("banned restore accepted", got)
+	if resp := adminCall(router, "PUT", "/v1/admin/users/1/ranking-visibility", `{"hidden":false}`, cookie, staff.CSRF, "https://ranking.test", true); resp.Code != 409 || !strings.Contains(resp.Body.String(), `"client_banned"`) {
+		t.Fatal("banned restore accepted", resp.Code, resp.Body.String())
 	}
 	list := adminCall(router, "GET", "/v1/admin/users?hidden=true", "", cookie, "", "", true)
 	if list.Code != 200 || !strings.Contains(list.Body.String(), `"ranking_hidden":true`) || !strings.Contains(list.Body.String(), `"disabled":true`) {
 		t.Fatal("hidden/banned list", list.Body.String())
 	}
-	for _, query := range []string{"hidden=1", "hidden=", "hidden=true&hidden=false"} {
+	if got := adminCall(router, "GET", "/v1/admin/users?hidden=", "", cookie, "", "", true).Code; got != 200 {
+		t.Fatal("empty hidden query rejected", got)
+	}
+	for _, query := range []string{"hidden=1", "hidden=true&hidden=false"} {
 		if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", cookie, "", "", true).Code; got != 400 {
 			t.Fatal("invalid hidden query accepted", got)
 		}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,9 +23,18 @@ func TestGitHubReturnToWithoutReferer(t *testing.T) {
 	for i, dest := range returns {
 		secret := testSecret(byte(i + 1))
 		id := f.start(t, secret, serverID, dest)
-		f.approve(t, id, int64(i+1), strings.Repeat("x", 33), "fallback", dest)
+		if i == 0 {
+			// 超长 GitHub name 应安全截断至 32 个码点，而不是整段丢弃。
+			f.approve(t, id, int64(i+1), strings.Repeat("x", 33), "fallback", dest)
+			if got := identity(t, f.complete(t, secret, id)); got.Name != strings.Repeat("x", 32) {
+				t.Fatalf("long GitHub name was not truncated: got %q", got.Name)
+			}
+			continue
+		}
+		// 空白或无可见字符的 GitHub name 仍应回退到 login。
+		f.approve(t, id, int64(i+1), "   ", "fallback", dest)
 		if got := identity(t, f.complete(t, secret, id)); got.Name != "fallback" {
-			t.Fatal("invalid GitHub name did not fall back to login")
+			t.Fatalf("empty GitHub name did not fall back to login: got %q", got.Name)
 		}
 	}
 	if calls, _ := f.github.counts(); calls != 2*len(returns) {
@@ -59,6 +70,22 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 403, "github_authorization_denied")
 	requireHTTPError(t, f.callback(t, browser.state, browser.cookie, "code=not-a-grant"), 400, "invalid_request")
+
+	// authorize 允许无关附加查询参数（但忽略恶意 return_to），callback 对任意非空 error 按取消处理并重定向。
+	extraID := f.start(t, secret, serverID, returnURL)
+	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+extraID+"&request_id="+extraID, "", "", nil), 400, "invalid_request")
+	extraResp := f.api(t, "GET", "/auth/github/authorize?request_id="+extraID+"&utm_source=test&return_to=https://evil.example", "", "", nil)
+	if extraResp.status != 302 {
+		t.Fatalf("authorize with extra query params failed: %d %s", extraResp.status, extraResp.body)
+	}
+	extraCookies := (&http.Response{Header: extraResp.header}).Cookies()
+	extraLoc, _ := url.Parse(extraResp.header.Get("Location"))
+	extraState := extraLoc.Query().Get("state")
+	otherErrResp := f.callback(t, extraState, extraCookies[0].Name+"="+extraCookies[0].Value, "error=application_suspended&utm_campaign=gh")
+	if otherErrResp.status != 302 || otherErrResp.header.Get("Location") != returnURL {
+		t.Fatalf("non-access_denied OAuth error did not redirect back to saved return_to: %d %q %s", otherErrResp.status, otherErrResp.header.Get("Location"), otherErrResp.body)
+	}
+	requireHTTPError(t, f.complete(t, secret, extraID), 403, "github_authorization_denied")
 
 	next := f.start(t, secret, serverID, returnURL)
 	browser = f.open(t, next)

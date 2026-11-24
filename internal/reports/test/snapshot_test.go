@@ -98,27 +98,53 @@ func TestPreparedDigestAndCatalogAggregation(t *testing.T) {
 	}
 }
 
-func TestPreparedValidationAndOverflow(t *testing.T) {
+func TestPreparedValidationMergingAndOverflow(t *testing.T) {
 	db := reportDB(t)
 	registry := reportRegistry(t, db, `{"model_name":"alpha","alias":["alias"],"prices":{}},{"model_name":"beta","alias":[],"prices":{}}`)
 	a := usage("alpha", 1, 1, 1)
 	for _, items := range [][]reports.Item{
-		{a, a},
 		{a, {Model: "vendor/"}},
 		{a, {Model: "bad\nname"}},
-		{a, {Model: "unknown", TotalTokens: 1}},
-		{a, {Model: "route/alpha"}},
+		{a, {Model: "unknown", TotalTokens: -1}},
 	} {
 		if _, err := reports.Prepare(reports.Report{Items: items}); !errors.Is(err, reports.ErrInvalid) {
 			t.Fatalf("accepted invalid input: %+v %v", items, err)
 		}
 	}
+
+	// 同名 Model 多项并存时，任意排列顺序必须生成完全一致的 Digest，且聚合按加法合并。
+	dup1 := usage("alpha", 10, 2, 3)
+	dup2 := usage("alpha", 20, 3, 8)
+	dup3 := usage("route/alpha", 5, 1, 10)
+	dup4 := usage("alias", 15, 2, 4)
+	p1, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{dup1, dup2, dup3, dup4, {Model: "alias"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{{Model: "alias"}, dup4, dup2, dup1, dup3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1.Digest() != p2.Digest() {
+		t.Fatal("duplicate model reordering changed digest")
+	}
+	mergedRows, err := p1.Aggregate(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alphaID, _ := registry.CanonicalID("alpha")
+	merged := mergedRows[reports.Key{ModelID: alphaID}]
+	// tokens: 10+20+5+15=50, req: 2+3+1+2=8, ttft_sum: 6+24+10+8=48, ttft_samples: 8
+	if len(mergedRows) != 2 || merged.TotalTokens != 50 || merged.RequestCount != 8 || merged.TTFTSumMS != 48 || merged.TTFTSamples != 8 || mergedRows[reports.Key{}] != merged {
+		t.Fatalf("duplicate model merge mismatch: %+v", mergedRows)
+	}
+
+	// 合并溢出或跨模型总计溢出仍必须返回 ErrInvalid。
 	for _, pair := range [][]reports.Item{
-		{usage("alpha", 1, 1, 1), usage("alias", 1, 1, 1)},
-		{usage("alpha", 1, 1, 1), {Model: "alias"}},
-		{{Model: "alpha"}, usage("alias", 1, 1, 1)},
+		{usage("alpha", math.MaxInt64, 1, 1), usage("alias", 1, 1, 1)},
 		{usage("alpha", math.MaxInt64, 1, 1), usage("beta", 1, 1, 1)},
 		{usage("alpha", 1, 1, math.MaxFloat64), usage("beta", 1, 1, math.MaxFloat64)},
+		{usage("alpha", 1, 1, math.MaxFloat64), usage("alias", 1, 1, math.MaxFloat64)},
 	} {
 		prepared, err := reports.Prepare(reports.Report{Items: pair})
 		if err != nil {

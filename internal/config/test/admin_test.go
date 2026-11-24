@@ -35,9 +35,16 @@ func TestAdminConfigurationCannotBeServedAsStaticAsset(t *testing.T) {
 }
 
 func TestAdminConfiguration(t *testing.T) {
+	clearEnvironment(t)
 	cfg, err := config.Load()
-	if err != nil || cfg.AdminOwner != nil || cfg.AdminAllowLocalHTTP {
+	if err != nil || cfg.AdminOwner != nil || cfg.AdminAllowLocalHTTP || cfg.AdminConfigInsecurePerm {
 		t.Fatalf("disabled defaults: %v", err)
+	}
+	t.Setenv("RANKING_ADMIN_CONFIG_FILE", "   ")
+	t.Setenv("RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP", "   ")
+	cfg, err = config.Load()
+	if err != nil || cfg.AdminOwner != nil || cfg.AdminAllowLocalHTTP {
+		t.Fatalf("blank admin env should disable admin: %+v, %v", cfg, err)
 	}
 	path := filepath.Join(t.TempDir(), "admin.json")
 	t.Setenv("RANKING_ADMIN_CONFIG_FILE", path)
@@ -56,25 +63,28 @@ func TestAdminConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, err = config.Load()
-	if err != nil || cfg.AdminOwner == nil || cfg.AdminOwner.Username != "owner" {
-		t.Fatal(err)
+	if err != nil || cfg.AdminOwner == nil || cfg.AdminOwner.Username != "owner" || cfg.AdminConfigInsecurePerm {
+		t.Fatalf("0600 config: %+v, %v", cfg, err)
 	}
 	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(); err == nil {
-		t.Fatal("publicly readable password accepted")
+	cfg, err = config.Load()
+	if err != nil || cfg.AdminOwner == nil || !cfg.AdminConfigInsecurePerm {
+		t.Fatalf("0644 config should warn instead of failing startup: %+v, %v", cfg, err)
 	}
 	if err := os.Chmod(path, 0640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := config.Load(); err != nil {
-		t.Fatal(err)
+	cfg, err = config.Load()
+	if err != nil || cfg.AdminConfigInsecurePerm {
+		t.Fatalf("0640 config: %+v, %v", cfg, err)
 	}
 	t.Setenv("RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP", "true")
 	t.Setenv("RANKING_HTTP_ADDR", "0.0.0.0:8080")
-	if _, err := config.Load(); err == nil {
-		t.Fatal("public insecure listener accepted")
+	cfg, err = config.Load()
+	if err != nil || !cfg.AdminAllowLocalHTTP {
+		t.Fatalf("container listen addr with insecure local HTTP should succeed: %+v, %v", cfg, err)
 	}
 	t.Setenv("RANKING_HTTP_ADDR", "127.0.0.1:8080")
 	if _, err := config.Load(); err != nil {

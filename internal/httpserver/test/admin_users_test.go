@@ -47,13 +47,13 @@ func TestAdminUserListHTTP(t *testing.T) {
 				t.Fatal("private data leaked")
 			}
 		}
-		for _, query := range []string{"disabled=true", "name=%25_", "id=9007199254740993"} {
+		for _, query := range []string{"disabled=true", "name=%25_", "id=9007199254740993", "q=&disabled=&hidden=&limit=50", "unknown=x&limit=1", "id=1&name=no"} {
 			if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", cookie, "", "", true).Code; got != 200 {
-				t.Fatal(got)
+				t.Fatalf("query %q: %d", query, got)
 			}
 		}
 	}
-	for _, query := range []string{"limit=101", "limit=0", "limit=-1", "id=0", "id=90071992547409930000", "after=+1", "disabled=1", "disabled=", "limit=1&limit=2", "unknown=x", "id=1&name=one"} {
+	for _, query := range []string{"limit=101", "limit=0", "limit=-1", "id=0", "id=90071992547409930000", "after=+1", "disabled=1", "limit=1&limit=2"} {
 		if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", ownerCookie, "", "", true).Code; got != 400 {
 			t.Fatalf("accepted %q: %d", query, got)
 		}

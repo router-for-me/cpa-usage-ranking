@@ -20,13 +20,24 @@ import (
 
 func TestCredentialEncodingAndDigest(t *testing.T) {
 	for _, raw := range [][]byte{make([]byte, 32), bytes.Repeat([]byte{255}, 32), randomBytes(t)} {
-		text := base64.RawURLEncoding.EncodeToString(raw)
-		hash, err := auth.HashCredential(text)
-		if err != nil || hash != clients.CredentialHash(sha256.Sum256(raw)) {
-			t.Fatalf("unexpected digest/error: %v", err)
-		}
-		if len(text) != 43 {
+		want := clients.CredentialHash(sha256.Sum256(raw))
+		rawURL := base64.RawURLEncoding.EncodeToString(raw)
+		if len(rawURL) != 43 {
 			t.Fatal("bad client encoding")
+		}
+		variants := []string{
+			rawURL,
+			base64.URLEncoding.EncodeToString(raw),
+			base64.RawStdEncoding.EncodeToString(raw),
+			base64.StdEncoding.EncodeToString(raw),
+			"  " + rawURL + "\t",
+			"\n" + base64.StdEncoding.EncodeToString(raw) + " ",
+		}
+		for _, text := range variants {
+			hash, err := auth.HashCredential(text)
+			if err != nil || hash != want {
+				t.Fatalf("variant %q: hash=%x err=%v", text, hash, err)
+			}
 		}
 	}
 	// 全零格式也有效：服务端不以字符分布猜测客户端随机源。
@@ -43,21 +54,33 @@ func randomBytes(t *testing.T) []byte {
 
 func TestInvalidCredentialAndBearerHeaders(t *testing.T) {
 	valid := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{255}, 32))
-	for _, text := range []string{"", valid + "=", valid[:42], valid + "a", strings.Repeat("+", 43), strings.Repeat("/", 43), valid[:42] + "9", valid[:42] + "\n", " " + valid, valid + " "} {
+	want, err := auth.HashCredential(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"", valid + "==", valid[:42], valid + "a", strings.Repeat("+", 43), strings.Repeat("/", 43), valid[:42] + "9", valid[:42] + "\n", "+_" + valid[2:]} {
 		_, err := auth.HashCredential(text)
 		if !errors.Is(err, auth.ErrInvalidCredential) || err.Error() != "invalid client credential" {
-			t.Fatal("credential format error must be generic")
+			t.Fatalf("credential %q format error must be generic: %v", text, err)
 		}
 	}
-	for _, values := range [][]string{nil, {""}, {"Basic " + valid}, {"Bearer"}, {"Bearer  " + valid}, {"Bearer\t" + valid}, {"Bearer " + valid + ", Bearer " + valid}, {"Bearer " + valid, "Bearer " + valid}} {
+	for _, values := range [][]string{nil, {""}, {"Basic " + valid}, {"Bearer"}, {"Bearer " + valid + ", Bearer " + valid}, {"Bearer " + valid + " extra"}, {"Bearer " + valid, "Bearer " + valid}} {
 		_, err := auth.BearerHash(http.Header{"Authorization": values})
 		if !errors.Is(err, auth.ErrInvalidCredential) {
-			t.Fatal("invalid/ambiguous header accepted")
+			t.Fatalf("invalid/ambiguous header %v accepted", values)
 		}
 	}
-	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
-		if _, err := auth.BearerHash(http.Header{"Authorization": {scheme + " " + valid}}); err != nil {
-			t.Fatal(err)
+	for _, header := range []string{
+		"Bearer " + valid,
+		"bearer " + valid,
+		"BEARER " + valid,
+		"Bearer  " + valid,
+		"Bearer\t" + valid,
+		"  Bearer  " + valid + "=  ",
+	} {
+		got, err := auth.BearerHash(http.Header{"Authorization": {header}})
+		if err != nil || got != want {
+			t.Fatalf("header %q failed: %v", header, err)
 		}
 	}
 }

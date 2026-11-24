@@ -5,6 +5,7 @@ import { getLocale, getMessages, type Locale } from './i18n'
 export type MetricKind = 'count' | 'duration' | 'percent' | 'points'
 
 export function formatCount(value: string): string {
+  if (!/^\d+$/.test(value)) return value
   const count = BigInt(value)
   if (count < 1000n) return count.toString()
   const units = [{ base: 1000n, suffix: 'K' }, { base: 1000000n, suffix: 'M' }, { base: 1000000000n, suffix: 'B' }]
@@ -18,6 +19,7 @@ export function formatCount(value: string): string {
 }
 
 export function formatDuration(value: string): string {
+  if (!/^\d+(?:\.\d+)?$/.test(value)) return value
   const [whole, fraction = ''] = value.split('.')
   const ticks = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2))
   if (ticks === 0n) return '0 ms'
@@ -60,6 +62,6 @@ export function formatMetric(value: string | null | undefined, kind: MetricKind,
 
 export function exactMetric(value: string | null | undefined, kind: MetricKind, locale: Locale = getLocale()): string {
   if (value == null) return '—'
-  if (kind === 'count') return BigInt(value).toLocaleString('en-US')
+  if (kind === 'count') return /^\d+$/.test(value) ? BigInt(value).toLocaleString('en-US') : value
   return `${value}${kind === 'duration' ? ' ms' : kind === 'percent' ? ' %' : ` ${getMessages(locale).table.pointsUnit}`}`
 }

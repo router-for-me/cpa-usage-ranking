@@ -15,7 +15,7 @@ func TestAdminUnifiedSearchHTTP(t *testing.T) {
 	for _, scenario := range []struct {
 		query string
 		count int
-	}{{"q=100", 2}, {"q=9007199254740993", 1}, {"q=target", 1}, {"q=%27+OR+1%3D1", 0}, {"q=none", 0}} {
+	}{{"q=100", 2}, {"q=9007199254740993", 1}, {"q=target", 1}, {"q=%27+OR+1%3D1", 0}, {"q=none", 0}, {"q=100&id=1", 1}, {"q=100&name=target", 1}, {"q=&limit=50", 3}, {"q=target&extra=ignored", 1}} {
 		response := adminCall(router, "GET", "/v1/admin/users?"+scenario.query, "", cookie, "", "", true)
 		var data struct {
 			Users []struct {
@@ -23,13 +23,13 @@ func TestAdminUnifiedSearchHTTP(t *testing.T) {
 			}
 		}
 		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &data) != nil || len(data.Users) != scenario.count {
-			t.Fatal("search response", response.Code, response.Body.String())
+			t.Fatal("search response", scenario.query, response.Code, response.Body.String())
 		}
 		if scenario.query == "q=9007199254740993" && data.Users[0].ID != "9007199254740993" {
 			t.Fatal("ID precision lost")
 		}
 	}
-	for _, query := range []string{"q=x&q=y", "q=x&id=1", "q=x&name=y", "q=" + strings.Repeat("x", 81)} {
+	for _, query := range []string{"q=x&q=y", "q=" + strings.Repeat("x", 81)} {
 		if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", cookie, "", "", true).Code; got != 400 {
 			t.Fatal("invalid query accepted", got)
 		}

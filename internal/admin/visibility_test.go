@@ -102,6 +102,9 @@ func TestIndependentVisibilityBanPersistenceAndNaturalRetention(t *testing.T) {
 	if err := s.SetRankingHidden(ctx, s.owner, 999, true); !errors.Is(err, ErrNotFound) {
 		t.Fatal("missing target", err)
 	}
+	if err := s.SetRankingHidden(ctx, s.owner, 999, false); !errors.Is(err, ErrNotFound) {
+		t.Fatal("missing restore target", err)
+	}
 }
 
 func TestExclusionRefreshesFiveBoardsSixPeriods(t *testing.T) {

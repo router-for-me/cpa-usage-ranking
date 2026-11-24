@@ -15,13 +15,13 @@ import (
 	"cpa-usage-ranking/internal/reports"
 )
 
-func TestWithdrawUnknownContentLength(t *testing.T) {
+func TestWithdrawUnknownContentLengthAndOptionalPayload(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	httpserver.MountWithdraw(f.router, f.repo, nil)
 	secret := testSecret(1)
 	f.register(t, secret, 42, "Seat")
-	for _, body := range []string{"x", ""} {
-		req, err := http.NewRequest(http.MethodPost, f.server.URL+withdrawPath, io.NopCloser(strings.NewReader(body)))
+	for _, body := range []string{"{}", "x", ""} {
+		req, err := http.NewRequest(http.MethodPost, f.server.URL+withdrawPath+"?client_id=999", io.NopCloser(strings.NewReader(body)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -37,10 +37,8 @@ func TestWithdrawUnknownContentLength(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if body != "" {
-			requireHTTPError(t, registrationResponse{status: resp.StatusCode, body: data}, http.StatusBadRequest, "invalid_request")
-		} else if resp.StatusCode != http.StatusNoContent || len(data) != 0 {
-			t.Fatalf("empty chunked withdrawal: %d %s", resp.StatusCode, data)
+		if resp.StatusCode != http.StatusNoContent || len(data) != 0 {
+			t.Fatalf("withdrawal with body %q failed: %d %s", body, resp.StatusCode, data)
 		}
 	}
 }
@@ -79,8 +77,10 @@ func TestMultiWriterReportAndWholeSeatWithdrawal(t *testing.T) {
 	expectRevision(t, f.report(t, day, b, b1, nil), 200, "1")
 	assertTotal(seata.ID, 10)
 	requireHTTPError(t, f.api(t, "POST", withdrawPath, "", testSecret(99), nil), 401, "invalid_credential")
-	requireHTTPError(t, f.api(t, "POST", withdrawPath, `{"client_id":"1"}`, a, nil), 400, "invalid_request")
-	requireHTTPError(t, f.api(t, "POST", withdrawPath+"?client_id=2", "", a, nil), 400, "invalid_request")
+	// 附带的 body 或 query 会被忽略，且仅作用于 Bearer 鉴权对应的本席位，不影响其他席位。
+	if r := f.api(t, "POST", withdrawPath+"?client_id=2", `{"client_id":"1"}`, a, nil); r.status != 204 || len(r.body) != 0 {
+		t.Fatalf("withdrawal with optional body/query failed: %d %s", r.status, r.body)
+	}
 	for _, secret := range []string{a, b} {
 		if r := f.api(t, "POST", withdrawPath, "", secret, nil); r.status != 204 || len(r.body) != 0 {
 			t.Fatalf("withdrawal is not idempotent: %d %s", r.status, r.body)

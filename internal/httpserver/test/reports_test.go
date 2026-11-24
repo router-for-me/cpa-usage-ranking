@@ -1,6 +1,8 @@
 package test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,9 +79,22 @@ func generousReportLimits() reports.IngestionLimits {
 	return l
 }
 
-func (f *reportFixture) report(t *testing.T, day, secret, body string, headers map[string]string) registrationResponse {
+func gzipBytes(t *testing.T, raw []byte) []byte {
 	t.Helper()
-	r, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/clients/report/"+day, strings.NewReader(body))
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func (f *reportFixture) reportBytes(t *testing.T, day, secret string, body []byte, headers map[string]string) registrationResponse {
+	t.Helper()
+	r, err := http.NewRequest(http.MethodPut, f.server.URL+"/v1/clients/report/"+day, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +103,11 @@ func (f *reportFixture) report(t *testing.T, day, secret, body string, headers m
 		r.Header.Set("Authorization", "Bearer "+secret)
 	}
 	for k, v := range headers {
-		r.Header.Set(k, v)
+		if v == "" {
+			r.Header.Del(k)
+		} else {
+			r.Header.Set(k, v)
+		}
 	}
 	res, err := f.server.Client().Do(r)
 	if err != nil {
@@ -100,6 +119,11 @@ func (f *reportFixture) report(t *testing.T, day, secret, body string, headers m
 		t.Fatal(err)
 	}
 	return registrationResponse{status: res.StatusCode, header: res.Header, body: data}
+}
+
+func (f *reportFixture) report(t *testing.T, day, secret, body string, headers map[string]string) registrationResponse {
+	t.Helper()
+	return f.reportBytes(t, day, secret, []byte(body), headers)
 }
 
 func expectRevision(t *testing.T, response registrationResponse, status int, revision string) {
@@ -141,8 +165,18 @@ func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 	if aTotal != 11 || bTotal != 10 {
 		t.Fatalf("client isolation: %d %d", aTotal, bTotal)
 	}
+	// 未知扩展字段（含伪造的 client_id）应被静默忽略，且绝不能影响已鉴权的席位归属。
 	claim := strings.Replace(reportJSON, `"revision":"1"`, `"client_id":`+strconv.FormatInt(second.ID, 10)+`,"revision":"10"`, 1)
-	requireHTTPError(t, f.report(t, day, a, claim, nil), 422, "invalid_report")
+	expectRevision(t, f.report(t, day, a, claim, nil), 200, "10")
+	if err := f.db.Reader.QueryRow(`SELECT total_tokens FROM daily_stats WHERE client_id=? AND day=? AND model_id=0`, first.ID, day).Scan(&aTotal); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.db.Reader.QueryRow(`SELECT total_tokens FROM daily_stats WHERE client_id=? AND day=? AND model_id=0`, second.ID, day).Scan(&bTotal); err != nil {
+		t.Fatal(err)
+	}
+	if aTotal != 10 || bTotal != 10 {
+		t.Fatalf("unknown client_id altered another seat: %d %d", aTotal, bTotal)
+	}
 	requireHTTPError(t, f.report(t, "2026-11-02", a, reportJSON, nil), 422, "invalid_day")
 	requireHTTPError(t, f.report(t, "2026-02-29", a, reportJSON, nil), 422, "invalid_day")
 	requireHTTPError(t, f.report(t, "2026-10-30", a, reportJSON, nil), 410, "expired_day")
@@ -157,24 +191,53 @@ func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 	}
 }
 
-func TestReportHTTPRejectsLegacyTierAndDuplicateModels(t *testing.T) {
+func TestReportHTTPIgnoresLegacyTierAndMergesDuplicateModels(t *testing.T) {
 	f := reportSetup(t, defaultRegistrationSettings(), generousReportLimits(), nil)
 	secret := testSecret(1)
-	f.seed(t, secret)
-	for _, value := range []string{`"default"`, `null`} {
-		body := strings.Replace(reportJSON, `"model":"alpha"`, `"model":"alpha","service_tier":`+value, 1)
-		requireHTTPError(t, f.report(t, "2026-11-01", secret, body, nil), 422, "invalid_report")
+	client := f.seed(t, secret)
+	for i, value := range []string{`"default"`, `null`} {
+		rev := strconv.Itoa(i + 1)
+		body := strings.Replace(strings.Replace(reportJSON, `"revision":"1"`, `"revision":"`+rev+`"`, 1), `"model":"alpha"`, `"model":"alpha","service_tier":`+value, 1)
+		expectRevision(t, f.report(t, "2026-11-01", secret, body, nil), 200, rev)
 	}
 	item := strings.TrimSuffix(strings.SplitN(reportJSON, `"items":[`, 2)[1], `]}`)
-	for _, name := range []string{"alias", "route/alpha"} {
-		duplicate := strings.Replace(item, `"model":"alpha"`, `"model":"`+name+`"`, 1)
-		body := strings.TrimSuffix(reportJSON, `]}`) + `,` + duplicate + `]}`
-		requireHTTPError(t, f.report(t, "2026-11-01", secret, body, nil), 422, "invalid_report")
+	aliasItem := strings.Replace(item, `"model":"alpha"`, `"model":"alias"`, 1)
+	prefixedItem := strings.Replace(item, `"model":"alpha"`, `"model":"route/alpha"`, 1)
+	mergedBody := strings.TrimSuffix(strings.Replace(reportJSON, `"revision":"1"`, `"revision":"3"`, 1), `]}`) + `,` + aliasItem + `,` + prefixedItem + `]}`
+	expectRevision(t, f.report(t, "2026-11-01", secret, mergedBody, nil), 200, "3")
+	var totalTokens, reqCount int64
+	if err := f.db.Reader.QueryRow(`SELECT total_tokens, request_count FROM daily_stats WHERE client_id=? AND day='2026-11-01' AND model_id=0`, client.ID).Scan(&totalTokens, &reqCount); err != nil {
+		t.Fatal(err)
 	}
-	var count int
-	if err := f.db.Reader.QueryRow(`SELECT count(*) FROM daily_reports`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("invalid report persisted: %d %v", count, err)
+	if totalTokens != 30 || reqCount != 6 {
+		t.Fatalf("duplicate models were not merged: tokens=%d requests=%d", totalTokens, reqCount)
 	}
+}
+
+func TestReportHTTPFlexibleContentTypeAndGzip(t *testing.T) {
+	limits := generousReportLimits()
+	limits.MaxBodyBytes = len(reportJSON) + 32
+	f := reportSetup(t, defaultRegistrationSettings(), limits, nil)
+	secret := testSecret(1)
+	f.seed(t, secret)
+	day := "2026-11-01"
+
+	// 允许省略 Content-Type，且支持 gzip 压缩请求体（含大小写变体）。
+	expectRevision(t, f.report(t, day, secret, reportJSON, map[string]string{"Content-Type": ""}), 200, "1")
+	rev2 := strings.Replace(reportJSON, `"revision":"1"`, `"revision":2`, 1)
+	expectRevision(t, f.reportBytes(t, day, secret, gzipBytes(t, []byte(rev2)), map[string]string{"Content-Encoding": "GZIP", "Content-Type": ""}), 200, "2")
+
+	// 非法 gzip 流返回 422，不支持的编码返回 415。
+	requireHTTPError(t, f.report(t, day, secret, reportJSON, map[string]string{"Content-Encoding": "gzip"}), 422, "invalid_report")
+	requireHTTPError(t, f.report(t, day, secret, reportJSON, map[string]string{"Content-Encoding": "br"}), 415, "unsupported_media_type")
+
+	// 解压后超出 MaxBodyBytes 的压缩炸弹返回 413。
+	inflated := reportJSON + strings.Repeat(" ", limits.MaxBodyBytes+64)
+	compressedBomb := gzipBytes(t, []byte(inflated))
+	if len(compressedBomb) > limits.MaxBodyBytes {
+		t.Fatalf("expected compressed bomb smaller than limit: %d > %d", len(compressedBomb), limits.MaxBodyBytes)
+	}
+	requireHTTPError(t, f.reportBytes(t, day, secret, compressedBomb, map[string]string{"Content-Encoding": "gzip"}), 413, "request_too_large")
 }
 
 func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
@@ -197,7 +260,8 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 		{reportJSON + strings.Repeat(" ", 17), nil, 413, "request_too_large"},
 		{`{"schema_version":1,"revision":"1","items":[{},{}]}`, nil, 422, "too_many_items"},
 		{reportJSON, map[string]string{"Content-Type": "text/plain"}, 415, "unsupported_media_type"},
-		{reportJSON, map[string]string{"Content-Encoding": "gzip"}, 415, "unsupported_media_type"},
+		{reportJSON, map[string]string{"Content-Encoding": "br"}, 415, "unsupported_media_type"},
+		{reportJSON, map[string]string{"Content-Encoding": "gzip"}, 422, "invalid_report"},
 	} {
 		requireHTTPError(t, f.report(t, day, secret, tc.body, tc.headers), tc.status, tc.code)
 	}
@@ -225,11 +289,12 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 	limited.GlobalBurst = 100
 	g := reportSetup(t, defaultRegistrationSettings(), limited, nil)
 	g.seed(t, secret)
-	expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
-	expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
+	for range limited.ClientBurst {
+		expectRevision(t, g.report(t, day, secret, reportJSON, nil), 200, "1")
+	}
 	response := g.report(t, day, secret, reportJSON, nil)
 	requireHTTPError(t, response, 429, "report_rate_limited")
-	if response.header.Get("Retry-After") != "60" {
+	if response.header.Get("Retry-After") != "10" {
 		t.Fatalf("retry-after: %s", response.header.Get("Retry-After"))
 	}
 	health, err := g.server.Client().Get(g.server.URL + "/healthz")

@@ -58,7 +58,8 @@ export const en = {
     errorDetail: 'Please check your connection and try again.',
     heading: (period: string, board: string) => `${period} · ${board}`,
     previousBadge: 'Previous result',
-    utcRange: (start: string, end: string) => `UTC ${start} to ${end} (end exclusive)`,
+    utcRange: (start: string, end: string | null) =>
+      end ? `UTC ${start} to ${end} (end exclusive)` : `UTC since ${start}`,
     cachedAt: (time: string) => `Cached at ${time} UTC`,
     emptyBadge: 'WAITING FOR DATA',
     emptyTitle: 'Waiting for first usage report',
@@ -234,7 +235,8 @@ export const zh: Messages = {
     errorDetail: '请检查连接后重试。',
     heading: (period, board) => `${period} · ${board}`,
     previousBadge: '上次结果',
-    utcRange: (start, end) => `UTC ${start} 至 ${end}（不含结束日）`,
+    utcRange: (start, end) =>
+      end ? `UTC ${start} 至 ${end}（不含结束日）` : `UTC 自 ${start} 起`,
     cachedAt: (time) => `缓存生成于 ${time} UTC`,
     emptyBadge: 'WAITING FOR DATA',
     emptyTitle: '等待第一份真实数据',

@@ -39,6 +39,16 @@ func TestNormalizeDisplayName(t *testing.T) {
 		{"count after composition", strings.Repeat("e\u0301", 32), strings.Repeat("é", 32)},
 		{"count after expansion", strings.Repeat("ﬃ", 10) + "ab", strings.Repeat("ffi", 10) + "ab"},
 		{"joiners count toward limit", strings.Repeat(family, 4) + "abcd", strings.Repeat(family, 4) + "abcd"},
+		{"newline before trimming", "\nname", "name"},
+		{"tab after trimming", "name\t", "name"},
+		{"line separator replaced", "name\u2028next", "name next"},
+		{"paragraph separator replaced", "name\u2029next", "name next"},
+		{"control stripped and NFKC idempotent", "e\x00\u0301", "é"},
+		{"33 ASCII code points truncated", strings.Repeat("a", 33), strings.Repeat("a", 32)},
+		{"over byte and code point limits truncated", strings.Repeat("🚀", 33), strings.Repeat("🚀", 32)},
+		{"expansion exceeds limit truncated", strings.Repeat("ﬃ", 11), strings.Repeat("ffi", 10) + "ff"},
+		{"trailing space at truncation boundary trimmed", strings.Repeat("a", 31) + "  b", strings.Repeat("a", 31)},
+		{"code point boundary truncation for ZWJ", strings.Repeat("👩‍👩‍👧‍👦", 5), string([]rune(strings.Repeat("👩‍👩‍👧‍👦", 5))[:32])},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,13 +79,10 @@ func TestRejectInvalidDisplayNames(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"all whitespace", " \u00a0\u3000\u2003 "},
+		{"controls and separators only", "\n\t\r\x00\u2028\u2029\u202e"},
 		{"invalid UTF-8", string([]byte{0xff})},
 		{"truncated UTF-8", "name\xe2\x82"},
 		{"UTF-8 encoded surrogate", "\xed\xa0\x80"},
-		{"newline before trimming", "\nname"},
-		{"tab before trimming", "name\t"},
-		{"line separator", "name\u2028next"},
-		{"paragraph separator", "name\u2029next"},
 		{"format characters only", "\u200c\u200d\u200b\u2060\ufeff\u00ad"},
 		{"variation selectors only", "\ufe0e\ufe0f\U000e0100"},
 		{"combining marks only", "\u0301\u20dd\u093f"},
@@ -84,28 +91,37 @@ func TestRejectInvalidDisplayNames(t *testing.T) {
 		{"other default ignorables", "\ufff0\u2065"},
 		{"emoji tags without a base", "\U000e0067\U000e007f"},
 		{"spaces and invisible characters", " \u200d \ufe0f \u3164 "},
-		{"33 code points", strings.Repeat("a", 33)},
-		{"over byte and code point limits", strings.Repeat("🚀", 33)},
-		{"expansion exceeds limit", strings.Repeat("ﬃ", 11)},
-		{"code points not grapheme clusters", strings.Repeat("👩‍👩‍👧‍👦", 5)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { assertInvalidName(t, tc.input) })
 	}
 }
 
-func TestRejectControlAndBidiCharactersEvenWithVisibleText(t *testing.T) {
+func TestStripControlAndBidiCharacters(t *testing.T) {
 	for r := rune(0); r <= 0x9f; r++ {
 		if r > 0x1f && r < 0x7f {
 			continue
 		}
 		t.Run(fmt.Sprintf("control U+%04X", r), func(t *testing.T) {
-			assertInvalidName(t, "a"+string(r)+"b")
+			got, err := profiles.NormalizeDisplayName("a" + string(r) + "b")
+			if err != nil {
+				t.Fatalf("control U+%04X failed: %v", r, err)
+			}
+			if got != "ab" && got != "a b" {
+				t.Fatalf("control U+%04X = %q", r, got)
+			}
+			again, err := profiles.NormalizeDisplayName(got)
+			if err != nil || again != got {
+				t.Fatalf("not idempotent: %q %v", again, err)
+			}
 		})
 	}
 	for _, r := range []rune{0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069} {
 		t.Run(fmt.Sprintf("bidi U+%04X", r), func(t *testing.T) {
-			assertInvalidName(t, "a"+string(r)+"b")
+			got, err := profiles.NormalizeDisplayName("a" + string(r) + "b")
+			if err != nil || got != "ab" {
+				t.Fatalf("bidi U+%04X = %q, %v; want %q", r, got, err, "ab")
+			}
 		})
 	}
 }

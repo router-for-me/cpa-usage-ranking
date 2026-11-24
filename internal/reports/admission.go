@@ -1,6 +1,8 @@
 package reports
 
 import (
+	"bytes"
+	"compress/gzip"
 	"container/list"
 	"errors"
 	"fmt"
@@ -28,8 +30,8 @@ type IngestionLimits struct {
 }
 
 func DefaultIngestionLimits() IngestionLimits {
-	return IngestionLimits{MaxBodyBytes: 128 << 10, MaxItems: 128, ConcurrentDecodes: 16,
-		ClientInterval: time.Minute, ClientBurst: 2, GlobalInterval: 5 * time.Millisecond,
+	return IngestionLimits{MaxBodyBytes: 128 << 10, MaxItems: 1024, ConcurrentDecodes: 16,
+		ClientInterval: 10 * time.Second, ClientBurst: 10, GlobalInterval: 5 * time.Millisecond,
 		GlobalBurst: 400, MaxClients: 100000, StateTTL: 10 * time.Minute}
 }
 
@@ -114,8 +116,10 @@ func waitTokens(tokens, target float64, interval time.Duration) time.Duration {
 	return time.Duration(ns)
 }
 
-// Admit debits the global budget even on a client/capacity rejection. It is
-// called after authentication but before reading the report body.
+// Admit checks per-client capacity and per-client rate before checking the
+// global bucket, debiting both only when admission succeeds so a noisy client
+// cannot exhaust global capacity for others. It runs after authentication and
+// before reading the report body.
 func (a *Admission) Admit(clientID int64) error {
 	if clientID <= 0 {
 		return ErrInvalid
@@ -138,10 +142,6 @@ func (a *Admission) Admit(clientID int64) error {
 		delete(a.clients, client.id)
 		a.expiry.Remove(front)
 	}
-	globalRejected := a.global.tokens < 1
-	if !globalRejected {
-		a.global.tokens--
-	}
 	globalWait := waitTokens(a.global.tokens, 1, a.limits.GlobalInterval)
 	limited := func(code string, delay time.Duration) error {
 		if globalWait > delay {
@@ -160,28 +160,33 @@ func (a *Admission) Admit(clientID int64) error {
 			}
 			return limited("report_capacity", idle)
 		}
-		if globalRejected {
+		if a.global.tokens < 1 {
 			return limited("report_rate_limited", 0)
 		}
 		client := &clientBucket{id: clientID, lastSeen: now}
 		refill(&client.bucket, now, a.limits.ClientInterval, a.limits.ClientBurst)
 		element = a.expiry.PushBack(client)
 		a.clients[clientID] = element
+	} else {
+		client := element.Value.(*clientBucket)
+		refill(&client.bucket, now, a.limits.ClientInterval, a.limits.ClientBurst)
+		client.lastSeen = now
+		a.expiry.MoveToBack(element)
+		clientWait := waitTokens(client.bucket.tokens, 1, a.limits.ClientInterval)
+		if clientWait > 0 {
+			return limited("report_rate_limited", clientWait)
+		}
+		if a.global.tokens < 1 {
+			return limited("report_rate_limited", 0)
+		}
 	}
 	client := element.Value.(*clientBucket)
-	refill(&client.bucket, now, a.limits.ClientInterval, a.limits.ClientBurst)
-	client.lastSeen = now
-	a.expiry.MoveToBack(element)
-	clientWait := waitTokens(client.bucket.tokens, 1, a.limits.ClientInterval)
-	if globalRejected || clientWait > 0 {
-		return limited("report_rate_limited", clientWait)
-	}
 	client.bucket.tokens--
+	a.global.tokens--
 	return nil
 }
 
 // Decode bounds concurrent body reads/decodes as well as bytes and raw items.
-// The body is never decompressed by this component.
 func (a *Admission) Decode(body io.Reader) (Report, error) {
 	select {
 	case a.decoders <- struct{}{}:
@@ -195,6 +200,39 @@ func (a *Admission) Decode(body io.Reader) (Report, error) {
 	}
 	if len(data) > a.limits.MaxBodyBytes {
 		return Report{}, ErrBodyTooLarge
+	}
+	return DecodeLimited(data, a.limits.MaxItems)
+}
+
+// DecodeGzip 对 gzip 压缩请求体先后限制压缩流与解压后体积，防止压缩炸弹并受同一解码并发槽位约束。
+func (a *Admission) DecodeGzip(body io.Reader) (Report, error) {
+	select {
+	case a.decoders <- struct{}{}:
+	default:
+		return Report{}, ErrDecodeBusy
+	}
+	defer func() { <-a.decoders }()
+	compressed, err := io.ReadAll(io.LimitReader(body, int64(a.limits.MaxBodyBytes)+1))
+	if err != nil {
+		return Report{}, err
+	}
+	if len(compressed) > a.limits.MaxBodyBytes {
+		return Report{}, ErrBodyTooLarge
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return Report{}, ErrInvalid
+	}
+	defer gz.Close()
+	data, err := io.ReadAll(io.LimitReader(gz, int64(a.limits.MaxBodyBytes)+1))
+	if err != nil {
+		return Report{}, ErrInvalid
+	}
+	if len(data) > a.limits.MaxBodyBytes {
+		return Report{}, ErrBodyTooLarge
+	}
+	if err := gz.Close(); err != nil {
+		return Report{}, ErrInvalid
 	}
 	return DecodeLimited(data, a.limits.MaxItems)
 }

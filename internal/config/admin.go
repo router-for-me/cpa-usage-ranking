@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,11 +13,7 @@ import (
 )
 
 func loadAdmin(cfg *Config) error {
-	path, set := os.LookupEnv("RANKING_ADMIN_CONFIG_FILE")
-	if set {
-		if strings.TrimSpace(path) == "" {
-			return errors.New("RANKING_ADMIN_CONFIG_FILE must be a non-empty path")
-		}
+	if path, set := lookupTrimmed("RANKING_ADMIN_CONFIG_FILE"); set {
 		file, err := os.Open(path)
 		if err != nil {
 			return errors.New("cannot open administrator configuration file")
@@ -28,9 +23,9 @@ func loadAdmin(cfg *Config) error {
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 8192 {
 			return errors.New("administrator configuration must be a small regular JSON file")
 		}
-		// Group-read is useful for a service identity; never allow public access or group writes.
+		// 权限过宽时在启动阶段输出告警，不因容器只读挂载或 Secret 挂载权限阻止服务启动。
 		if info.Mode().Perm()&0037 != 0 {
-			return errors.New("administrator configuration permissions must be 0600 or 0640 (or stricter)")
+			cfg.AdminConfigInsecurePerm = true
 		}
 		if cfg.WebDir != "" {
 			root, _ := filepath.Abs(cfg.WebDir)
@@ -55,19 +50,12 @@ func loadAdmin(cfg *Config) error {
 		}
 		cfg.AdminOwner = &owner
 	}
-	if value, ok := os.LookupEnv("RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP"); ok {
+	if value, ok := lookupTrimmed("RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP"); ok {
 		allow, err := strconv.ParseBool(value)
 		if err != nil {
 			return errors.New("RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP must be a boolean")
 		}
 		cfg.AdminAllowLocalHTTP = allow
-	}
-	if cfg.AdminAllowLocalHTTP {
-		host, _, _ := net.SplitHostPort(cfg.HTTPAddr)
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return errors.New("insecure administrator HTTP requires a literal loopback listen address")
-		}
 	}
 	return nil
 }

@@ -432,8 +432,8 @@ func TestRegistrationHTTPCreateAndSafeRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	health.Body.Close()
-	if health.StatusCode != http.StatusMovedPermanently || health.Header.Get("Location") != "/healthz" {
-		t.Fatalf("existing health check redirect changed: %d", health.StatusCode)
+	if health.StatusCode != http.StatusNotFound || health.Header.Get("Location") != "" {
+		t.Fatalf("trailing slash should return 404 without redirect: %d %q", health.StatusCode, health.Header.Get("Location"))
 	}
 	if r := f.api(t, "GET", "/readyz", "", "", nil); r.status != 503 {
 		t.Fatalf("registration changed readiness: %d %s", r.status, r.body)
@@ -455,8 +455,6 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 		{`null`, secret, nil, 400, "invalid_request"},
 		{`[]`, secret, nil, 400, "invalid_request"},
 		{validStartBody + ` {}`, secret, nil, 400, "invalid_request"},
-		{strings.TrimSuffix(validStartBody, "}") + `,"return_to":"https://another.example"}`, secret, nil, 400, "invalid_request"},
-		{strings.Replace(validStartBody, `"return_to"`, `"RETURN_TO"`, 1), secret, nil, 400, "invalid_request"},
 		{`{"client_id":"1","server_id":"` + serverID + `"}`, secret, nil, 400, "invalid_request"},
 		{`{"source":"192.0.2.1","return_to":"https://app.example"}`, secret, nil, 400, "invalid_request"},
 		{`{"display_name":"Valid","avatar_id":1}`, secret, nil, 400, "invalid_request"},
@@ -467,7 +465,8 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 		{startBody("not-a-uuid", returnURL), secret, nil, 400, "invalid_request"},
 		{startBody("00000000-0000-0000-0000-000000000000", returnURL), secret, nil, 400, "invalid_request"},
 		{validStartBody, secret, map[string]string{"Content-Type": "text/plain"}, 415, "unsupported_media_type"},
-		{validStartBody, secret, map[string]string{"Content-Encoding": "gzip"}, 415, "unsupported_media_type"},
+		{validStartBody, secret, map[string]string{"Content-Encoding": "br"}, 415, "unsupported_media_type"},
+		{validStartBody, secret, map[string]string{"Content-Encoding": "gzip"}, 400, "invalid_request"},
 	} {
 		requireHTTPError(t, f.send(t, tc.body, tc.token, tc.headers), tc.status, tc.code)
 	}
@@ -479,9 +478,26 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 	if err := f.db.Reader.QueryRow("SELECT count(*) FROM registration_requests").Scan(&n); err != nil || n != 0 {
 		t.Fatalf("invalid request allocated state: %d %v", n, err)
 	}
-	id := f.start(t, secret, serverID, returnURL)
-	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","server_id":"`+serverID+`"}`, secret, nil), 400, "invalid_request")
-	requireHTTPError(t, f.api(t, "POST", completePath, `{"request_id":"`+id+`","avatar_id":"42"}`, secret, nil), 400, "invalid_request")
+	// 未知扩展字段与 gzip 压缩请求体均应正常兼容。
+	extBody := strings.TrimSuffix(validStartBody, "}") + `,"client_id":"1","extra":true}`
+	id := f.startWithBody(t, secret, extBody)
+	if r := f.api(t, "POST", completePath, `{"request_id":"`+id+`","server_id":"`+serverID+`","avatar_id":"42"}`, secret, nil); r.status != 202 {
+		t.Fatalf("complete with unknown fields failed: %d %s", r.status, r.body)
+	}
+	req, err := http.NewRequest(http.MethodPost, f.server.URL+startPath, bytes.NewReader(gzipBytes(t, []byte(validStartBody))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+secret)
+	req.Header.Set("Content-Encoding", "gzip")
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("gzipped registration start without Content-Type failed: %d", resp.StatusCode)
+	}
 	requireHTTPError(t, f.complete(t, secret, "bad-id"), 400, "invalid_request")
 }
 
@@ -526,6 +542,24 @@ func TestRegistrationHTTPAvatarSelection(t *testing.T) {
 	if rSecondWriter.status != 200 || seatReused.ID != seatCustom.ID || seatReused.AvatarID != 42 || seatReused.Name != "Custom User" {
 		t.Fatalf("second writer modified existing seat: status=%d %+v", rSecondWriter.status, seatReused)
 	}
+
+	// 4. JSON integer avatar_id and null avatar_id are both accepted.
+	const thirdServerID = "550e8400-e29b-41d4-a716-446655440002"
+	secretNumeric := testSecret(4)
+	idNumeric := f.startWithBody(t, secretNumeric, fmt.Sprintf(`{"server_id":%q,"return_to":%q,"avatar_id":12}`, thirdServerID, returnURL))
+	f.approve(t, idNumeric, 300, "Numeric Avatar", "numavatar", returnURL)
+	seatNumeric := identity(t, f.complete(t, secretNumeric, idNumeric))
+	if seatNumeric.AvatarID != 12 {
+		t.Fatalf("numeric avatar_id not persisted: %+v", seatNumeric)
+	}
+	const fourthServerID = "550e8400-e29b-41d4-a716-446655440003"
+	secretNull := testSecret(5)
+	idNull := f.startWithBody(t, secretNull, fmt.Sprintf(`{"server_id":%q,"return_to":%q,"avatar_id":null}`, fourthServerID, returnURL))
+	f.approve(t, idNull, 400, "Null Avatar", "nullavatar", returnURL)
+	seatNull := identity(t, f.complete(t, secretNull, idNull))
+	if seatNull.AvatarID != 1 {
+		t.Fatalf("null avatar_id did not fall back to default: %+v", seatNull)
+	}
 }
 
 func TestRegistrationHTTPInvalidAvatarInputs(t *testing.T) {
@@ -540,24 +574,25 @@ func TestRegistrationHTTPInvalidAvatarInputs(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"null", withRawAvatar(`null`), 400, "invalid_request"},
-		{"number", withRawAvatar(`1`), 400, "invalid_request"},
 		{"bool", withRawAvatar(`true`), 400, "invalid_request"},
 		{"object", withRawAvatar(`{}`), 400, "invalid_request"},
 		{"array", withRawAvatar(`["1"]`), 400, "invalid_request"},
 		{"empty string", withRawAvatar(`""`), 400, "invalid_request"},
-		{"zero", withRawAvatar(`"0"`), 400, "invalid_request"},
-		{"negative", withRawAvatar(`"-1"`), 400, "invalid_request"},
+		{"zero string", withRawAvatar(`"0"`), 400, "invalid_request"},
+		{"zero number", withRawAvatar(`0`), 400, "invalid_request"},
+		{"negative string", withRawAvatar(`"-1"`), 400, "invalid_request"},
+		{"negative number", withRawAvatar(`-1`), 400, "invalid_request"},
+		{"fraction number", withRawAvatar(`1.5`), 400, "invalid_request"},
 		{"plus sign", withRawAvatar(`"+1"`), 400, "invalid_request"},
 		{"leading zero", withRawAvatar(`"01"`), 400, "invalid_request"},
 		{"leading space", withRawAvatar(`" 1"`), 400, "invalid_request"},
 		{"trailing space", withRawAvatar(`"1 "`), 400, "invalid_request"},
 		{"non-numeric", withRawAvatar(`"abc"`), 400, "invalid_request"},
-		{"int64 overflow", withRawAvatar(`"9223372036854775808"`), 400, "invalid_request"},
-		{"duplicate avatar_id", fmt.Sprintf(`{"server_id":%q,"return_to":%q,"avatar_id":"1","avatar_id":"2"}`, serverID, returnURL), 400, "invalid_request"},
+		{"int64 overflow string", withRawAvatar(`"9223372036854775808"`), 400, "invalid_request"},
+		{"int64 overflow number", withRawAvatar(`9223372036854775808`), 400, "invalid_request"},
 		{"unpaired surrogate in avatar_id", `{"server_id":"` + serverID + `","return_to":"` + returnURL + `","avatar_id":"\ud800"}`, 400, "invalid_request"},
-		{"unpaired surrogate in return_to", `{"server_id":"` + serverID + `","return_to":"http://localhost:8080/\ud800"}`, 400, "invalid_request"},
-		{"unlisted 67", withRawAvatar(`"67"`), 422, "invalid_avatar"},
+		{"unlisted 67 string", withRawAvatar(`"67"`), 422, "invalid_avatar"},
+		{"unlisted 67 number", withRawAvatar(`67`), 422, "invalid_avatar"},
 		{"unlisted 999", withRawAvatar(`"999"`), 422, "invalid_avatar"},
 		{"unlisted max int64", withRawAvatar(`"9223372036854775807"`), 422, "invalid_avatar"},
 	} {

@@ -18,6 +18,8 @@ func NewRouter(logger *slog.Logger) *gin.Engine {
 func NewRouterWithReadiness(logger *slog.Logger, ready func(context.Context) bool) *gin.Engine {
 	router := gin.New()
 	router.HandleMethodNotAllowed = true
+	router.RedirectTrailingSlash = false
+	router.RedirectFixedPath = false
 	if err := router.SetTrustedProxies(nil); err != nil {
 		panic(err)
 	}
@@ -50,6 +52,7 @@ func NewRouterWithReadiness(logger *slog.Logger, ready func(context.Context) boo
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "reason": "initializing_or_unavailable"})
 	})
 	router.NoRoute(func(c *gin.Context) {
+		c.Header("Referrer-Policy", "no-referrer")
 		writeError(c, http.StatusNotFound, "not_found", "Not found")
 	})
 	router.NoMethod(func(c *gin.Context) {
@@ -58,14 +61,9 @@ func NewRouterWithReadiness(logger *slog.Logger, ready func(context.Context) boo
 	return router
 }
 
-// mountExact keeps Gin's usual redirects for existing routes, but never
-// redirects a credential-bearing protocol request (including OAuth queries).
+// mountExact mounts a route directly without trailing-slash redirects.
 func mountExact(router *gin.Engine, method, path string, handlers ...gin.HandlerFunc) {
 	router.Handle(method, path, handlers...)
-	router.Handle(method, path+"/", func(c *gin.Context) {
-		c.Header("Referrer-Policy", "no-referrer")
-		writeError(c, http.StatusNotFound, "not_found", "Not found")
-	})
 }
 
 func writeError(c *gin.Context, status int, code, message string) {
