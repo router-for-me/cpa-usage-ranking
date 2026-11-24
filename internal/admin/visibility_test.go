@@ -28,21 +28,13 @@ func TestIndependentVisibilityBanPersistenceAndNaturalRetention(t *testing.T) {
 	if err := s.SetDisabled(ctx, s.owner, 1, true); err != nil {
 		t.Fatal(err)
 	}
-	// 封禁与下榜彼此独立：允许在封禁状态下任意清除或重新设置 ranking_hidden，不改变 disabled。
-	if err := s.SetRankingHidden(ctx, s.owner, 1, false); err != nil {
-		t.Fatal("independent hidden clear failed", err)
-	}
-	client, err := s.clients.ByID(ctx, 1)
-	if err != nil || !client.Disabled || client.RankingHidden {
-		t.Fatal("clearing hidden flag altered disabled flag", err)
-	}
-	if err := s.SetRankingHidden(ctx, s.owner, 1, true); err != nil {
-		t.Fatal(err)
+	if err := s.SetRankingHidden(ctx, s.owner, 1, false); !errors.Is(err, ErrBanned) {
+		t.Fatal("restored a banned user", err)
 	}
 	if err := s.SetDisabled(ctx, s.owner, 1, false); err != nil {
 		t.Fatal(err)
 	}
-	client, err = s.clients.ByID(ctx, 1)
+	client, err := s.clients.ByID(ctx, 1)
 	if err != nil || client.Disabled || !client.RankingHidden {
 		t.Fatal("unban cleared independent hidden flag", err)
 	}
@@ -109,6 +101,9 @@ func TestIndependentVisibilityBanPersistenceAndNaturalRetention(t *testing.T) {
 	}
 	if err := s.SetRankingHidden(ctx, s.owner, 999, true); !errors.Is(err, ErrNotFound) {
 		t.Fatal("missing target", err)
+	}
+	if err := s.SetRankingHidden(ctx, s.owner, 999, false); !errors.Is(err, ErrNotFound) {
+		t.Fatal("missing restore target", err)
 	}
 }
 

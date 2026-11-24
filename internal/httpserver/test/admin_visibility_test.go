@@ -37,12 +37,8 @@ func TestAdminRankingVisibilityPermissionsAndIndependentStates(t *testing.T) {
 	if got := adminCall(router, "PUT", "/v1/admin/users/1/ban", `{"disabled":true}`, cookie, staff.CSRF, "https://ranking.test", true).Code; got != 200 {
 		t.Fatal(got)
 	}
-	// 封禁与下榜彼此独立，允许在封禁状态下任意切换 ranking_hidden。
-	if got := adminCall(router, "PUT", "/v1/admin/users/1/ranking-visibility", `{"hidden":false}`, cookie, staff.CSRF, "https://ranking.test", true).Code; got != 200 {
-		t.Fatal("independent hidden clear failed", got)
-	}
-	if got := adminCall(router, "PUT", "/v1/admin/users/1/ranking-visibility", `{"hidden":true}`, cookie, staff.CSRF, "https://ranking.test", true).Code; got != 200 {
-		t.Fatal(got)
+	if resp := adminCall(router, "PUT", "/v1/admin/users/1/ranking-visibility", `{"hidden":false}`, cookie, staff.CSRF, "https://ranking.test", true); resp.Code != 409 || !strings.Contains(resp.Body.String(), `"client_banned"`) {
+		t.Fatal("banned restore accepted", resp.Code, resp.Body.String())
 	}
 	list := adminCall(router, "GET", "/v1/admin/users?hidden=true", "", cookie, "", "", true)
 	if list.Code != 200 || !strings.Contains(list.Body.String(), `"ranking_hidden":true`) || !strings.Contains(list.Body.String(), `"disabled":true`) {

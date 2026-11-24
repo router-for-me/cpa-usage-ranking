@@ -46,7 +46,7 @@ Both owner and ordinary administrators can access `/admin/users` and `/admin/lea
 | Yes | No | Rejected | Excluded |
 | Yes | Yes | Rejected | Excluded |
 
-- Ban and exclusion flags are completely independent and can be toggled in any order: unbanning does not clear `ranking_hidden`, and clearing `ranking_hidden` does not unban a seat (a banned seat remains excluded until unbanned).
+- Ban and exclusion flags are independent: unbanning does not clear `ranking_hidden`, and a banned-and-excluded seat must be unbanned first before restoring leaderboard eligibility (attempting to clear `ranking_hidden` while banned returns `409 client_banned`).
 - Client-initiated [seat withdrawal](integration.md#withdraw-an-entire-seat) is independent and permanent: neither unbanning nor restoring clears `withdrawn`.
 - **Cache refresh**: Moderation mutations signal the cache worker to rebuild all periods early and publish atomically (coalescing bursts). A write confirmation does not guarantee the new cache is already live, and the UI **Refresh** button only re-fetches published leaderboards; failed rebuilds retain the previous complete snapshot. The console never edits scores, resets data, deletes seats, or restores withdrawn seats.
 - **Disabling the console**: Unset `RANKING_ADMIN_CONFIG_FILE` and restart. Stored DB admins and ban/exclusion flags remain in SQLite and continue affecting public leaderboards.
