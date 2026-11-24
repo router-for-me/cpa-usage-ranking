@@ -66,7 +66,15 @@ func TestBoundedUserListAndLiteralSearch(t *testing.T) {
 	if err != nil || len(page.Clients) != 0 {
 		t.Fatal("empty result", err)
 	}
-	for _, query := range []clients.ListQuery{{Limit: 101}, {Limit: -1}, {ID: -1}, {After: -1}, {ID: 1, Name: "ambiguous"}} {
+	page, err = repository.List(ctx, clients.ListQuery{ID: 1, Name: `%_' OR 1=1`})
+	if err != nil || len(page.Clients) != 1 || page.Clients[0].ID != 1 {
+		t.Fatal("combined id and name filter failed", err)
+	}
+	page, err = repository.List(ctx, clients.ListQuery{ID: 1, Name: "no match"})
+	if err != nil || len(page.Clients) != 0 {
+		t.Fatal("combined AND filter did not exclude non-match", err)
+	}
+	for _, query := range []clients.ListQuery{{Limit: 101}, {Limit: -1}, {ID: -1}, {After: -1}} {
 		if _, err := repository.List(ctx, query); !errors.Is(err, clients.ErrQuery) {
 			t.Fatal("invalid query accepted")
 		}

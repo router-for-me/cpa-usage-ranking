@@ -17,14 +17,9 @@ func MountWithdraw(router *gin.Engine, repo *clients.Repository, requestRefresh 
 			writeInvalidCredential(c)
 			return
 		}
-		invalid := c.Request.ContentLength > 0 || c.Request.URL.RawQuery != ""
-		if !invalid && c.Request.ContentLength < 0 && c.Request.Body != nil {
-			body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1))
-			invalid = err != nil || len(body) != 0
-		}
-		if invalid {
-			writeError(c, http.StatusBadRequest, "invalid_request", "Withdrawal accepts no body or query")
-			return
+		// 忽略可选查询串与小体积正文（如客户端附带的 `{}`），仅做有界排空以利连接复用。
+		if c.Request.Body != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(c.Request.Body, 4096))
 		}
 		changed, err := repo.Withdraw(c.Request.Context(), hash)
 		switch {

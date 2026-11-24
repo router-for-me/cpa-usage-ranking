@@ -37,9 +37,17 @@ func TestUnifiedSearchIncludesNumericNamesAndExactIDs(t *testing.T) {
 	if err != nil || len(page.Clients) != 1 || page.Clients[0].ID != 12 || page.NextID != 0 {
 		t.Fatal("unstable second page", err)
 	}
-	for _, query := range []clients.ListQuery{{Search: "7", ID: 7}, {Search: "7", Name: "target"}, {Search: strings.Repeat("a", 81)}, {Search: "\xff"}} {
+	page, err = repository.List(context.Background(), clients.ListQuery{Search: "7", ID: 7})
+	if err != nil || len(page.Clients) != 1 || page.Clients[0].ID != 7 {
+		t.Fatal("combined search and id filter failed", err)
+	}
+	page, err = repository.List(context.Background(), clients.ListQuery{Search: "7", Name: "target"})
+	if err != nil || len(page.Clients) != 1 || page.Clients[0].ID != 7 {
+		t.Fatal("combined search and name filter failed", err)
+	}
+	for _, query := range []clients.ListQuery{{Search: strings.Repeat("a", 81)}, {Search: "\xff"}} {
 		if _, err := repository.List(context.Background(), query); !errors.Is(err, clients.ErrQuery) {
-			t.Fatal("invalid/mixed search accepted", err)
+			t.Fatal("invalid search accepted", err)
 		}
 	}
 }

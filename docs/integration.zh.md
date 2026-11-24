@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA `server_id`、`return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | 同一 `Bearer <secret>` | GitHub 授权后完成注册 |
-| `POST` | `/v1/clients/withdraw` | 已注册的 `Bearer <secret>` | 退出整个席位（空请求体、无查询参数） |
+| `POST` | `/v1/clients/withdraw` | 已注册的 `Bearer <secret>` | 退出整个席位 |
 | `PUT` | `/v1/clients/report/{utc_day}` | 已注册的 `Bearer <secret>` | 原子替换该席位某个 UTC 日的完整累计快照 |
 | `GET` | `/v1/leaderboards/{board}/{period}` | 无需 | 读取最新发布的公开缓存榜单（最多 100 名） |
 | `GET` / `HEAD` | `/avatars/catalog.json` | 无需 | 获取头像清单、默认 ID 及相对图片路径 |
@@ -24,7 +24,7 @@
 
 **传输与隐私要求：**
 - 生产环境必须使用 **HTTPS**；回环 HTTP 仅用于本地调试或受信任的 TLS 反向代理之后。
-- 请求正文使用 UTF-8 JSON，推荐设置 `Content-Type: application/json`（省略 `Content-Type` 或附带 `charset` 均可接受；上报正文支持 `identity` 与 `gzip` 压缩，且压缩流与解压后体积均受同一上限约束）。
+- 请求正文使用 UTF-8 JSON，推荐设置 `Content-Type: application/json`（省略 `Content-Type` 或附带 `charset` 均可接受；注册与上报正文均支持 `identity` 与 `gzip` 压缩，且压缩流与解压后体积均受各自上限约束）。
 - 切勿在 URL、请求体、日志、公开页面或代码仓库中暴露 Bearer 凭据，也不要上传上游模型 API Key、提示词或响应正文。
 - 仅展示排行榜的应用无需注册或持有凭据。
 
@@ -79,7 +79,7 @@ Content-Type: application/json
 
 - `server_id`：CPA 实例的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写，落盘转小写；对应 CPA 配置项 `server.server-id`，可通过 CPA 的 `GET /v8/management/server/server-id` 或任意已鉴权管理接口响应头 `X-CPA-SERVER-ID` 获取）。同一 CPA 实例下的多个采集端须提交相同 `server_id`，不要各自随机生成。
 - `return_to`：不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
-- `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`），须存在于 `GET /avatars/catalog.json` 目录中。省略时默认使用目录的 `default_avatar_id`（`"1"`）。类型或格式错误（如 `null`、JSON 数字、`""`、`"0"`、前导零）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
+- `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`）或正 JSON 整数（例如 `12`），须存在于 `GET /avatars/catalog.json` 目录中。省略或传 `null` 时默认使用目录的 `default_avatar_id`（`"1"`）。格式错误（如 `""`、`"0"`、`0`、负数、前导零、非数字）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
 - `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（固定 10 分钟有效），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
 
 #### 第二步：浏览器授权
@@ -122,7 +122,7 @@ POST /v1/clients/withdraw
 Authorization: Bearer <已注册的 Bearer 凭据>
 ```
 
-- 不传请求体或查询参数。返回 `204 No Content` 表示整席退出已落库（同一席位任意上报端重复调用均幂等返回 `204`）。
+- 返回 `204 No Content` 表示整席退出已落库（同一席位任意上报端重复调用均幂等返回 `204`；可选查询参数或如 `{}` 等小体积请求体会被忽略，绝不覆盖 Bearer 鉴权身份）。
 - 退出保留历史统计与管理员标记，但会立即阻止该席位**所有上报端**继续上报或重试（返回 `403 client_withdrawn`），并在下一次成功发布榜单缓存后从全部榜单与评分参考样本中移除。
 - 同一 GitHub 账号下其他 `server_id` 的席位不受影响。退出后不提供公开重新加入接口。
 
@@ -298,13 +298,13 @@ GET /v1/leaderboards/{board}/{period}
 
 - `board`：`overall`、`usage`、`cache`、`success`、`ttft`
 - `period`：`today`、`yesterday`、`week`（上一完整 UTC 自然周，周一起）、`month`（上一完整 UTC 自然月）、`year`（当前 UTC 自然年）、`all`（累计）
-- 不接受任何查询参数（无分页、无模型筛选、无防缓存时间戳）。
+- 附加 URL 查询参数会被忽略（不提供分页或模型筛选）。
 - `client_id`、`avatar_id`、`metric` 均为十进制字符串（用量为整数，其余保留两位小数）；`rank` 为 JSON 整数，采用竞争排名（`1, 1, 3`）。仅 `overall` 条目附带 `details` 对象（`total_tokens`、`request_count`、`success_rate`、`cache_read_rate`、`ttft_mean_ms`、`latency_mean_ms`）。
 - 完整响应格式、五维评分公式与前端格式化规则见[排行榜与评分规则](leaderboards.zh.md)。
 
 ### 头像清单与图片
 
-- `GET /avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`。客户端可据此渲染注册头像选择器并默认选中 `default_avatar_id`；注意清单中 `avatar_id` 为 JSON 整数，提交给 `POST /v1/clients/register/start` 时须转为十进制字符串（与注册、榜单响应格式一致）。
+- `GET /avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`。客户端可据此渲染注册头像选择器并默认选中 `default_avatar_id`；清单中 `avatar_id` 为 JSON 整数，`POST /v1/clients/register/start` 同时接受十进制字符串（推荐，与注册、榜单响应一致）与正 JSON 整数。
 - 将 `path` 相对 `/avatars/` 解析（例如 `/avatars/images/001.webp`），通过 `GET` 获取 `image/webp` 二进制图片或 `HEAD` 检查响应头，切勿按 ID 自行拼接路径。清单和图片均支持 `ETag` 条件请求（`304 Not Modified`）。详见[模型、头像与品牌资源目录](catalogs.zh.md#头像目录)。
 
 ### 完成标志与非保证边界

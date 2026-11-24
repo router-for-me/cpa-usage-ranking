@@ -74,50 +74,85 @@ func (h *adminHTTP) rankingVisibility(c *gin.Context) {
 }
 
 func (h *adminHTTP) users(c *gin.Context) {
-	query := clients.ListQuery{Limit: 50, Name: c.Query("name"), Search: c.Query("q")}
+	raw := c.Request.URL.Query()
+	single := func(key string) (string, bool, bool) {
+		values, ok := raw[key]
+		if !ok {
+			return "", false, true
+		}
+		if len(values) != 1 {
+			return "", false, false
+		}
+		if values[0] == "" {
+			return "", false, true
+		}
+		return values[0], true, true
+	}
+	query := clients.ListQuery{Limit: 50}
 	var err error
-	if value, ok := c.GetQuery("id"); ok {
+	if value, present, ok := single("name"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
+		query.Name = value
+	}
+	if value, present, ok := single("q"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
+		query.Search = value
+	}
+	if value, present, ok := single("id"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
 		query.ID, err = positiveAdminID(value)
 		if err != nil {
 			h.adminError(c, err)
 			return
 		}
 	}
-	if value, ok := c.GetQuery("after"); ok {
+	if value, present, ok := single("after"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
 		query.After, err = positiveAdminID(value)
 		if err != nil {
 			h.adminError(c, err)
 			return
 		}
 	}
-	if value, ok := c.GetQuery("limit"); ok {
+	if value, present, ok := single("limit"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
 		query.Limit, err = strconv.Atoi(value)
 		if err != nil || query.Limit < 1 || query.Limit > 100 {
 			h.adminError(c, admin.ErrInput)
 			return
 		}
 	}
-	if values, ok := c.Request.URL.Query()["disabled"]; ok {
-		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+	if value, present, ok := single("disabled"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
+		if value != "true" && value != "false" {
 			h.adminError(c, admin.ErrInput)
 			return
 		}
-		value := values[0] == "true"
-		query.Disabled = &value
+		v := value == "true"
+		query.Disabled = &v
 	}
-	if values, ok := c.Request.URL.Query()["hidden"]; ok {
-		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+	if value, present, ok := single("hidden"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
+		if value != "true" && value != "false" {
 			h.adminError(c, admin.ErrInput)
 			return
 		}
-		value := values[0] == "true"
-		query.Hidden = &value
-	}
-	for key, values := range c.Request.URL.Query() {
-		if len(values) != 1 || values[0] == "" || (key != "id" && key != "name" && key != "q" && key != "after" && key != "disabled" && key != "hidden" && key != "limit") {
-			h.adminError(c, admin.ErrInput)
-			return
-		}
+		v := value == "true"
+		query.Hidden = &v
 	}
 	page, err := h.service.Users(c.Request.Context(), query)
 	if err != nil {

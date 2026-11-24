@@ -144,8 +144,9 @@ func (h *adminHTTP) logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Only explicitly trusted proxy peers may assert HTTPS. HTTP exceptions require
-// both a loopback listener (startup validation) and a direct loopback request.
+// Only explicitly trusted proxy peers may assert HTTPS. When AllowLocalHTTP is
+// enabled for local or container HTTP testing, non-HTTPS requests use scheme
+// "http" while keeping strict same-origin, non-cross-site, and CSRF checks.
 func (h *adminHTTP) sameOrigin(c *gin.Context) {
 	scheme := "https"
 	secure := c.Request.TLS != nil
@@ -157,21 +158,13 @@ func (h *adminHTTP) sameOrigin(c *gin.Context) {
 			secure = secure || c.GetHeader("X-Forwarded-Proto") == "https"
 		}
 	}
-	if h.options.AllowLocalHTTP && !secure {
-		host, _, err := net.SplitHostPort(c.Request.Host)
-		if err != nil {
-			host = c.Request.Host
-		}
-		hostIP := net.ParseIP(host)
-		if ip != nil && ip.IsLoopback() && hostIP != nil && hostIP.IsLoopback() {
+	if !secure {
+		if h.options.AllowLocalHTTP {
 			scheme = "http"
 		} else {
 			writeError(c, http.StatusForbidden, "https_required", "HTTPS required")
 			return
 		}
-	} else if !secure {
-		writeError(c, http.StatusForbidden, "https_required", "HTTPS required")
-		return
 	}
 	if c.GetHeader("Origin") != scheme+"://"+c.Request.Host || c.GetHeader("Sec-Fetch-Site") == "cross-site" {
 		writeError(c, http.StatusForbidden, "same_origin_required", "Same-origin request required")

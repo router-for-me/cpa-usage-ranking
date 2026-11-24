@@ -46,7 +46,7 @@ Both owner and ordinary administrators can access `/admin/users` and `/admin/lea
 | Yes | No | Rejected | Excluded |
 | Yes | Yes | Rejected | Excluded |
 
-- Ban and exclusion flags are independent: unbanning does not clear `ranking_hidden`, and a banned-and-excluded seat must be unbanned first before restoring leaderboard eligibility.
+- Ban and exclusion flags are completely independent and can be toggled in any order: unbanning does not clear `ranking_hidden`, and clearing `ranking_hidden` does not unban a seat (a banned seat remains excluded until unbanned).
 - Client-initiated [seat withdrawal](integration.md#withdraw-an-entire-seat) is independent and permanent: neither unbanning nor restoring clears `withdrawn`.
 - **Cache refresh**: Moderation mutations signal the cache worker to rebuild all periods early and publish atomically (coalescing bursts). A write confirmation does not guarantee the new cache is already live, and the UI **Refresh** button only re-fetches published leaderboards; failed rebuilds retain the previous complete snapshot. The console never edits scores, resets data, deletes seats, or restores withdrawn seats.
 - **Disabling the console**: Unset `RANKING_ADMIN_CONFIG_FILE` and restart. Stored DB admins and ban/exclusion flags remain in SQLite and continue affecting public leaderboards.
@@ -55,7 +55,7 @@ Both owner and ordinary administrators can access `/admin/users` and `/admin/lea
 
 - **Sessions & CSRF**: Server-side in-memory sessions last `8h` (max `1024` active sessions, cleared on restart). Cookies are `HttpOnly`, `SameSite=Strict`, and `Secure` by default. Login (`POST /v1/admin/session`) requires Same-Origin JSON; logout and all authenticated write requests require both Same-Origin and the session CSRF token. Client Bearer secrets cannot log in to the admin console.
 - **Login rate limits**: `5` attempts/minute per source and `40`/minute globally, reusing the deployment's trusted-proxy and IPv6 `/64` source rules (separate from registration quotas; see [Deployment & Configuration](deployment.md#reverse-proxy-security-and-source-resolution)).
-- **HTTPS**: Serve admin routes only over HTTPS behind a trusted proxy that sets `Host` and `X-Forwarded-Proto: https` and appears in `RANKING_TRUSTED_PROXIES`. For isolated local loopback testing only, set `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true` (requires a literal loopback listen address and loopback request origin).
+- **HTTPS**: Serve admin routes only over HTTPS behind a trusted proxy that sets `Host` and `X-Forwarded-Proto: https` and appears in `RANKING_TRUSTED_PROXIES`. For isolated local or container HTTP testing only, set `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true` (allows HTTP same-origin cookies and sessions while preserving strict `Origin` and `X-CSRF-Token` checks; never enable on the public internet).
 
 ### Docker Read-Only Mount Example
 

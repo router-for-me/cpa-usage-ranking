@@ -32,7 +32,7 @@ func (r *Repository) List(ctx context.Context, query ListQuery) (Page, error) {
 	if query.Limit == 0 {
 		query.Limit = 50
 	}
-	if query.Limit < 1 || query.Limit > 100 || query.ID < 0 || query.After < 0 || (query.ID != 0 && query.Name != "") || !utf8.ValidString(query.Name) || utf8.RuneCountInString(query.Name) > 80 || !utf8.ValidString(query.Search) || utf8.RuneCountInString(query.Search) > 80 || (query.Search != "" && (query.ID != 0 || query.Name != "")) {
+	if query.Limit < 1 || query.Limit > 100 || query.ID < 0 || query.After < 0 || !utf8.ValidString(query.Name) || utf8.RuneCountInString(query.Name) > 80 || !utf8.ValidString(query.Search) || utf8.RuneCountInString(query.Search) > 80 {
 		return Page{}, ErrQuery
 	}
 	conditions := []string{"id > ?"}

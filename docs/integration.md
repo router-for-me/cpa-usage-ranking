@@ -12,7 +12,7 @@ All paths are relative to the deployment's HTTPS origin (for example `https://ra
 | --- | --- | --- | --- |
 | `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA `server_id`, `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
 | `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization |
-| `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat (empty body, no query parameters) |
+| `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat |
 | `PUT` | `/v1/clients/report/{utc_day}` | Registered `Bearer <secret>` | Atomically replace the seat's full cumulative snapshot for one UTC day |
 | `GET` | `/v1/leaderboards/{board}/{period}` | None | Fetch the latest published Top-100 leaderboard cache |
 | `GET` / `HEAD` | `/avatars/catalog.json` | None | Fetch the avatar catalog, default ID, and relative asset paths |
@@ -24,7 +24,7 @@ Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` duri
 
 **Transport and privacy requirements:**
 - Always use **HTTPS** in production. Loopback HTTP is only for local development or behind a trusted TLS-terminating reverse proxy.
-- Send UTF-8 JSON with `Content-Type: application/json` (omitting `Content-Type` or adding `charset` is accepted; report bodies support `identity` and `gzip` `Content-Encoding` within the same size limit).
+- Send UTF-8 JSON with `Content-Type: application/json` (omitting `Content-Type` or adding `charset` is accepted; registration and report bodies support `identity` and `gzip` `Content-Encoding` within their size limits).
 - Never place Bearer secrets in URLs, request bodies, logs, public pages, or source repositories. Never upload upstream model API keys, prompts, or response payloads.
 - Clients that only display leaderboards need no registration or credentials.
 
@@ -79,7 +79,7 @@ Content-Type: application/json
 
 - `server_id`: Persistent, nonzero `8-4-4-4-12` hex UUID identifying the CPA instance (case-insensitive, stored lowercase; matches CPA's `server.server-id`, readable from CPA's `GET /v8/management/server/server-id` or the `X-CPA-SERVER-ID` header on authenticated management responses). Multiple collectors reporting for the same CPA instance must submit its shared `server_id` rather than inventing independent UUIDs.
 - `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
-- `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) matching an entry in `GET /avatars/catalog.json`. Omit to use the catalog's `default_avatar_id` (`"1"`). Malformed types/values (`null`, JSON number, `""`, `"0"`, leading zeros) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
+- `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) or positive JSON integer (`12`) matching an entry in `GET /avatars/catalog.json`. Omit or pass `null` to use the catalog's `default_avatar_id` (`"1"`). Malformed values (`""`, `"0"`, `0`, negative numbers, leading zeros, non-numeric) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
 - `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (fixed 10-minute lifetime) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
 
 #### Step 2: Browser Authorization
@@ -122,7 +122,7 @@ POST /v1/clients/withdraw
 Authorization: Bearer <registered-writer-secret>
 ```
 
-- Send no request body or query parameters. `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat).
+- `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat; any optional query parameters or small request body such as `{}` are ignored and never override Bearer authentication).
 - Withdrawal preserves historical statistics and admin flags, immediately blocks **every writer** of that seat from reporting or retrying (`403 client_withdrawn`), and removes the seat from all leaderboards and scoring references on the next successful cache build.
 - Other seats (for example a different `server_id` under the same GitHub account) remain unaffected. There is no public rejoin API.
 
@@ -298,13 +298,13 @@ GET /v1/leaderboards/{board}/{period}
 
 - `board`: `overall`, `usage`, `cache`, `success`, `ttft`
 - `period`: `today`, `yesterday`, `week` (previous complete Monday-start UTC week), `month` (previous complete UTC calendar month), `year` (current UTC year), `all` (all-time)
-- No query parameters are accepted (no pagination, model filters, or cache-busting timestamps).
+- Extra URL query parameters are ignored (there is no pagination or model filter).
 - `client_id`, `avatar_id`, and `metric` are decimal strings (`usage` is an integer; other metrics have two decimal places); `rank` is an integer with competition ranking (`1, 1, 3`). Only `overall` entries include a `details` object (`total_tokens`, `request_count`, `success_rate`, `cache_read_rate`, `ttft_mean_ms`, `latency_mean_ms`).
 - Full response examples, scoring formulas, and UI formatting rules are in [Leaderboards and Scoring](leaderboards.md).
 
 ### Fetching Avatars
 
-- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`. Use it to render a registration avatar picker with `default_avatar_id` preselected; note `avatar_id` is a JSON integer in the catalog and must be converted to a decimal string when sent in `POST /v1/clients/register/start` (matching registration and leaderboard responses).
+- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`. Use it to render a registration avatar picker with `default_avatar_id` preselected; note `avatar_id` is a JSON integer in the catalog, while `POST /v1/clients/register/start` accepts either a decimal string (recommended, matching registration and leaderboard responses) or a positive JSON integer.
 - Resolve each `path` relative to `/avatars/` (for example `/avatars/images/001.webp`) and request with `GET` (`Content-Type: image/webp`, binary WebP) or `HEAD`. Do not guess image paths from IDs. Both catalog and image endpoints support `ETag` conditional requests (`304 Not Modified`). See [Model, Avatar, and Brand Catalogs](catalogs.md#avatar-catalog).
 
 ### Completion Signals vs. Non-Guarantees

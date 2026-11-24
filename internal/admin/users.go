@@ -3,8 +3,6 @@ package admin
 import (
 	"context"
 	"cpa-usage-ranking/internal/clients"
-	"database/sql"
-	"errors"
 )
 
 func (s *Service) Users(ctx context.Context, query clients.ListQuery) (clients.Page, error) {
@@ -50,18 +48,6 @@ func (s *Service) SetRankingHidden(ctx context.Context, actor Identity, id int64
 	defer tx.Rollback()
 	if err := s.checkActor(ctx, tx, actor); err != nil {
 		return err
-	}
-	if !hidden {
-		var disabled bool
-		if err := tx.QueryRowContext(ctx, "SELECT disabled FROM clients WHERE id = ?", id).Scan(&disabled); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
-			return err
-		}
-		if disabled {
-			return ErrBanned
-		}
 	}
 	result, err := tx.ExecContext(ctx, "UPDATE clients SET ranking_hidden = ? WHERE id = ?", hidden, id)
 	if err != nil {

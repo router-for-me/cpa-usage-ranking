@@ -46,7 +46,7 @@
 | 是 | 否 | 拒绝 | 不参榜 |
 | 是 | 是 | 拒绝 | 不参榜 |
 
-- 封禁与下榜标志彼此独立：解封不会自动清除下榜标记；同时被封禁且下榜的席位须先解封，再到已下榜名单恢复。
+- 封禁与下榜标志彼此完全独立，可按任意顺序切换：解封不会自动清除下榜标记，取消下榜也不会解封席位（已封禁席位仍须解封后才恢复参榜资格）。
 - 客户端[主动退出](integration.zh.md#退出席位withdraw)为独立且不可逆状态：解封与取消下榜均不会清除 `withdrawn`。
 - **缓存刷新**：管理状态提交后会通知缓存 worker 提前合并重建全部周期并原子发布。写入成功不等于新缓存已立即可见，界面上的“刷新榜单”按钮也仅重新拉取已发布缓存；构建失败保留上一轮完整缓存。控制台不提供改分、清数据、删席位或恢复退出席位功能。
 - **关闭后台**：移除 `RANKING_ADMIN_CONFIG_FILE` 并重启即可；数据库中的普通管理员和封禁/下榜状态会保留并继续生效。
@@ -55,7 +55,7 @@
 
 - **会话与 CSRF**：服务端内存会话固定 `8h`（最多 `1024` 个活跃会话，重启后清空）。Cookie 默认 `HttpOnly`、`SameSite=Strict`、`Secure`。登录（`POST /v1/admin/session`）仅要求同源 JSON；登出及所有已登录的管理写请求均须同时通过同源校验与会话 CSRF 令牌校验。客户端 Bearer 凭据不可用于管理登录。
 - **登录限流**：每来源每分钟 `5` 次、全站每分钟 `40` 次，复用部署的可信代理与 IPv6 `/64` 来源解析规则（与客户端注册限流独立，详见[部署、配置与运维指南](deployment.zh.md#反向代理安全与来源识别)）。
-- **HTTPS 要求**：生产环境必须经由列入 `RANKING_TRUSTED_PROXIES` 的受信任 HTTPS 反向代理访问，代理须正确透传 `Host` 与 `X-Forwarded-Proto: https`。仅本机隔离测试可显式设置 `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true`（要求监听字面量 loopback 地址且请求来源为 loopback）。
+- **HTTPS 要求**：生产环境必须经由列入 `RANKING_TRUSTED_PROXIES` 的受信任 HTTPS 反向代理访问，代理须正确透传 `Host` 与 `X-Forwarded-Proto: https`。仅本地或容器隔离 HTTP 测试可显式设置 `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true`（允许 HTTP 同源 Cookie 与会话，仍严格校验 `Origin` 与 `X-CSRF-Token`；切勿对公网开启）。
 
 ### Docker 只读挂载示例
 

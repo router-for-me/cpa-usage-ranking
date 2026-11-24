@@ -17,7 +17,7 @@ func mountGitHubBrowser(router *gin.Engine, service *registration.Service, githu
 			return
 		}
 		query, err := url.ParseQuery(c.Request.URL.RawQuery)
-		if err != nil || len(query) != 1 || len(query["request_id"]) != 1 {
+		if err != nil || len(query["request_id"]) != 1 || query.Get("request_id") == "" {
 			writeRegistrationError(c, registration.ErrInvalidRequest)
 			return
 		}
@@ -39,9 +39,10 @@ func mountGitHubBrowser(router *gin.Engine, service *registration.Service, githu
 			return
 		}
 		query, err := url.ParseQuery(c.Request.URL.RawQuery)
-		code, denied := query.Get("code"), query.Get("error") == "access_denied"
+		code := query.Get("code")
+		oauthErr := query.Get("error")
 		validCode := len(query["code"]) == 1 && len(query["error"]) == 0 && code != "" && len(code) <= 2048
-		validDenial := len(query["error"]) == 1 && len(query["code"]) == 0 && denied
+		validDenial := len(query["error"]) == 1 && len(query["code"]) == 0 && oauthErr != ""
 		if err != nil || len(query["state"]) != 1 || !(validCode || validDenial) {
 			writeRegistrationError(c, registration.ErrInvalidRequest)
 			return

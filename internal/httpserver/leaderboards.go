@@ -30,10 +30,6 @@ func MountLeaderboards(router *gin.Engine, source leaderboardCache) {
 			writeError(c, http.StatusBadRequest, "invalid_parameter", "Invalid leaderboard or period")
 			return
 		}
-		if c.Request.URL.RawQuery != "" {
-			writeError(c, http.StatusBadRequest, "invalid_parameter", "Query parameters are not supported")
-			return
-		}
 		snapshot, err := source.Current()
 		if errors.Is(err, cache.ErrUnavailable) {
 			writeError(c, http.StatusServiceUnavailable, "leaderboard_unavailable", "Leaderboard cache is not ready")

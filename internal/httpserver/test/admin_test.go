@@ -146,8 +146,9 @@ func TestAdminTrustedHTTPSAndLocalException(t *testing.T) {
 		{peer: "192.0.2.2:1", host: "ranking.test", origin: "https://ranking.test", proto: "https", want: 403},
 		{trusted: []string{"192.0.2.0/24"}, peer: "192.0.2.2:1", host: "ranking.test", origin: "https://ranking.test", proto: "https", want: 200},
 		{allow: true, peer: "127.0.0.1:1", host: "127.0.0.1:4188", origin: "http://127.0.0.1:4188", want: 200},
-		{allow: true, peer: "192.0.2.2:1", host: "127.0.0.1:4188", origin: "http://127.0.0.1:4188", want: 403},
-		{allow: true, peer: "127.0.0.1:1", host: "public.test", origin: "http://public.test", want: 403},
+		{allow: true, peer: "192.0.2.2:1", host: "127.0.0.1:4188", origin: "http://127.0.0.1:4188", want: 200},
+		{allow: true, peer: "127.0.0.1:1", host: "public.test", origin: "http://public.test", want: 200},
+		{allow: true, peer: "192.0.2.2:1", host: "public.test", origin: "http://evil.test", want: 403},
 	} {
 		router := adminRouter(t, true, httpserver.AdminHTTPOptions{AllowLocalHTTP: scenario.allow, TrustedProxies: scenario.trusted})
 		request := httptest.NewRequest("POST", "http://"+scenario.host+"/v1/admin/session", strings.NewReader(`{"username":"owner","password":"isolated-test-password"}`))

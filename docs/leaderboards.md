@@ -2,7 +2,7 @@
 
 [简体中文](leaderboards.zh.md) · [README](../README.md)
 
-`GET /v1/leaderboards/{board}/{period}` reads exclusively from the latest complete published in-memory cache. Allowed boards are `overall`, `usage`, `cache`, `success`, and `ttft`; allowed periods are `today`, `yesterday`, `week`, `month`, `year`, and `all`. No query parameters, arbitrary dates, pagination, or model filters are accepted.
+`GET /v1/leaderboards/{board}/{period}` reads exclusively from the latest complete published in-memory cache. Allowed boards are `overall`, `usage`, `cache`, `success`, and `ttft`; allowed periods are `today`, `yesterday`, `week`, `month`, `year`, and `all`. Arbitrary dates, pagination, and model filters are not supported (extra URL query parameters are ignored).
 
 ## Response Format
 
@@ -28,7 +28,7 @@
 - `start` is inclusive and `end` is exclusive in UTC dates (`all` uses `start: "0001-01-01"` and `end: null`).
 - `generated_at` is the UTC start time of the published cache build round, not a client's last report time.
 - `client_id`, `avatar_id`, and `metric` are decimal strings to preserve exact precision. Except for integer `usage` tokens, metrics have two decimal places. `rank` is a JSON integer. Display names are plain text; avatar IDs reference the [avatar catalog](catalogs.md#avatar-catalog).
-- Empty views return `200` with `entries: []`. Before the first complete cache round finishes, the endpoint returns `503` (`leaderboard_unavailable`). Invalid board, period, or query parameters return `400` (`invalid_parameter`). Subsequent failed cache refreshes retain the previous complete snapshot along with its original period bounds and `generated_at`.
+- Empty views return `200` with `entries: []`. Before the first complete cache round finishes, the endpoint returns `503` (`leaderboard_unavailable`). Invalid board or period returns `400` (`invalid_parameter`); extra query parameters are ignored. Subsequent failed cache refreshes retain the previous complete snapshot along with its original period bounds and `generated_at`.
 - Responses never expose credentials, digests, GitHub IDs, CPA server IDs, IP addresses, or score breakdowns.
 
 ### Overall Detail Values
