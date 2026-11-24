@@ -321,7 +321,7 @@ GET /v1/leaderboards/{board}/{period}
 
 ## 错误码、重试策略与默认限流
 
-业务接口错误统一返回如下 JSON 信封。请按 HTTP 状态码与 `error.code` 分支处理，勿匹配 `message` 文本；反向代理（以及 `/readyz`）可能返回其他格式，非 `200` 响应均不可视作成功确认。
+业务接口错误统一返回如下 JSON 信封。请按 HTTP 状态码与 `error.code` 分支处理，勿匹配 `message` 文本。反向代理和 `/readyz` 可能返回其他格式。仅以上表中对应端点的回执确认成功：开始注册为 `200`，完成注册为 `201` 或 `200`，日快照上报为 `200` 且 `revision` 匹配，退出席位为 `204`。完成注册时收到 `202` 表示仍在等待授权。
 
 ```json
 {"error": {"code": "report_rate_limited", "message": "Report admission limit reached"}}

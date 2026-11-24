@@ -321,7 +321,7 @@ Ordinary reports do not trigger immediate cache rebuilds (default refresh interv
 
 ## Error Contract, Retries, and Limits
 
-Business API errors use the JSON envelope below. Branch on HTTP status and `error.code`, not on `message`. Reverse proxies (and `/readyz`) may return different payloads; never treat non-`200` responses as write confirmations.
+Business API errors use the JSON envelope below. Branch on HTTP status and `error.code`, not on `message`. Reverse proxies and `/readyz` may return different payloads. Only the response listed above for each endpoint confirms success: `200` to start registration, `201` or `200` to complete it, `200` with a matching `revision` for a report, and `204` to withdraw. A `202` from registration completion means authorization is still pending.
 
 ```json
 {"error": {"code": "report_rate_limited", "message": "Report admission limit reached"}}
