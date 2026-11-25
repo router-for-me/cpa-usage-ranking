@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { formatLocalizedError, useI18n } from '../i18n'
-import { AdminError, adminRequest, jsonRequest, type AdminSession } from './api'
+import { AdminError, adminRequest, csrfRequest, jsonRequest, type AdminSession } from './api'
 import { ConfirmDialog } from './ConfirmDialog'
 
 type Account = { id: string; username: string; created_at: string }
@@ -46,7 +46,7 @@ export function Accounts({ session, onExpired, active = true }: { session: Admin
     if (busy) return
     setBusy(account.id); setError(null)
     try {
-      await adminRequest(`accounts/${account.id}`, jsonRequest('DELETE', {}, session.csrf_token))
+      await adminRequest(`accounts/${account.id}`, csrfRequest('DELETE', session.csrf_token))
       setVersion((old) => old + 1)
     } catch (err) { if (err instanceof AdminError && err.status === 401) onExpired(); throw err }
     finally { setBusy('') }

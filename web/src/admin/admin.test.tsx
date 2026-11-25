@@ -129,3 +129,33 @@ it('clears expired logout state instead of showing a stale alert after re-login'
   expect(await screen.findByRole('navigation', { name: 'Console navigation' })).toBeVisible()
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
+
+it('sends DELETE requests with only X-CSRF-Token and without Content-Type or JSON body', async () => {
+  const deleteCalls: Array<{ url: string; init?: RequestInit }> = []
+  vi.stubGlobal('fetch', vi.fn((path: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(path)
+    if (init?.method === 'DELETE') {
+      deleteCalls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 204 }))
+    }
+    if (url === '/v1/admin/accounts') {
+      return Promise.resolve(json({ owner: { username: 'owner' }, accounts: [{ id: '9', username: 'staff', created_at: '2026-11-16T00:00:00Z' }] }))
+    }
+    return Promise.resolve(json({ enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'csrf-del' }))
+  }))
+  const user = userEvent.setup()
+  const view = render(<Accounts session={{ enabled: true, authenticated: true, csrf_token: 'csrf-del' }} onExpired={vi.fn()} />)
+  await user.click(await screen.findByRole('button', { name: 'Delete' }))
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  view.unmount()
+
+  window.history.replaceState({}, '', '/admin/users')
+  render(<AdminApp />)
+  await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+  expect(deleteCalls.map((c) => c.url)).toEqual(['/v1/admin/accounts/9', '/v1/admin/session'])
+  for (const call of deleteCalls) {
+    expect(call.init?.body).toBeUndefined()
+    expect(call.init?.headers).toEqual({ 'X-CSRF-Token': 'csrf-del' })
+  }
+})

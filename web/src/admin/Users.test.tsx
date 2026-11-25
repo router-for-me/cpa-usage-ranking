@@ -124,3 +124,34 @@ it('distinguishes load failure, retry and an empty list', async () => {
   await events.click(screen.getByRole('button', { name: 'Retry user list' }))
   expect(await screen.findByText('No matching users found.')).toBeVisible()
 })
+
+it('shows server_id metadata, clear withdrawn/banned statuses, and exclude/restore controls on users list', async () => {
+  const rows = [
+    { id: '1', github_id: '101', server_id: '550e8400-e29b-41d4-a716-446655440001', display_name: 'Active User', avatar_id: '1', created_at: '2026-11-16T00:00:00Z', disabled: false, withdrawn: false, ranking_hidden: false },
+    { id: '2', github_id: '102', server_id: '550e8400-e29b-41d4-a716-446655440002', display_name: 'Withdrawn User', avatar_id: '1', created_at: '2026-11-16T00:00:00Z', disabled: false, withdrawn: true, ranking_hidden: false },
+    { id: '3', github_id: '103', server_id: '550e8400-e29b-41d4-a716-446655440003', display_name: 'Banned Hidden User', avatar_id: '1', created_at: '2026-11-16T00:00:00Z', disabled: true, withdrawn: false, ranking_hidden: true },
+  ]
+  const fetcher = vi.fn((path: RequestInfo | URL, init?: RequestInit) => {
+    if (String(path).includes('avatars')) return Promise.resolve(json({}))
+    if (init?.method === 'PUT') return Promise.resolve(json({ hidden: true }))
+    return Promise.resolve(json({ users: rows, next_cursor: '' }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const events = userEvent.setup()
+  render(<Users session={{ enabled: true, authenticated: true, csrf_token: 'csrf' }} onExpired={vi.fn()} />)
+  expect(await screen.findByText('550e8400-e29b-41d4-a716-446655440001')).toBeVisible()
+  expect(screen.getByText('Withdrawn')).toBeVisible()
+  expect(screen.getByText('Off board')).toBeVisible()
+  expect(screen.getByText('Listed')).toBeVisible()
+  expect(screen.getByText('Excluded')).toBeVisible()
+  // Banned + hidden user keeps Restore disabled until unbanned.
+  expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled()
+  // Active user can be excluded directly from /admin/users via ConfirmDialog.
+  await events.click(screen.getAllByRole('button', { name: 'Exclude' })[0])
+  expect(screen.getByRole('dialog')).toHaveTextContent('Exclude “Active User”?')
+  await events.click(screen.getByRole('button', { name: 'Confirm' }))
+  const putCalls = fetcher.mock.calls.filter(([, init]) => init?.method === 'PUT')
+  expect(putCalls).toHaveLength(1)
+  expect(String(putCalls[0][0])).toBe('/v1/admin/users/1/ranking-visibility')
+  expect(JSON.parse(String(putCalls[0][1]?.body))).toEqual({ hidden: true })
+})

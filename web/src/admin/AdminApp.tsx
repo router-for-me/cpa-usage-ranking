@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { formatLocalizedError, useI18n } from '../i18n'
 import { Leaderboards } from './Leaderboards'
-import { AdminError, adminRequest, jsonRequest, type AdminSession } from './api'
+import { AdminError, adminRequest, csrfRequest, jsonRequest, type AdminSession } from './api'
 import { Link } from '../Link'
 import { navigate, usePathname } from '../navigation'
 import { useSession } from './useSession'
@@ -66,7 +66,7 @@ export default function AdminApp() {
     if (busy) return
     const csrf = session?.csrf_token
     setBusy(true); setActionError(null)
-    try { await adminRequest('session', jsonRequest('DELETE', {}, csrf)); accept({ enabled: true, authenticated: false }); navigate('/') }
+    try { await adminRequest('session', csrfRequest('DELETE', csrf)); accept({ enabled: true, authenticated: false }); navigate('/') }
     catch (err) { if (!(err instanceof AdminError && err.status === 401)) { setActionError({ csrf, error: err ?? true }); void refresh() } }
     finally { setBusy(false) }
   }

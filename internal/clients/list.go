@@ -12,13 +12,14 @@ import (
 var ErrQuery = errors.New("invalid client list query")
 
 type ListQuery struct {
-	ID       int64
-	Name     string
-	Search   string
-	Disabled *bool
-	Hidden   *bool
-	After    int64
-	Limit    int
+	ID        int64
+	Name      string
+	Search    string
+	Disabled  *bool
+	Hidden    *bool
+	Withdrawn *bool
+	After     int64
+	Limit     int
 }
 
 type Page struct {
@@ -45,15 +46,16 @@ func (r *Repository) List(ctx context.Context, query ListQuery) (Page, error) {
 		conditions = append(conditions, "instr(display_name, ?) > 0")
 		args = append(args, query.Name)
 	}
-	if query.Search != "" {
-		// Numeric input still matches literal nicknames; never guess a search mode.
-		id, err := strconv.ParseInt(query.Search, 10, 64)
-		if err == nil && id > 0 && strconv.FormatInt(id, 10) == query.Search {
-			conditions = append(conditions, "(id = ? OR instr(display_name, ?) > 0)")
-			args = append(args, id, query.Search)
+	search := strings.TrimSpace(query.Search)
+	if search != "" {
+		// 正整数同时匹配席位 ID、GitHub ID、昵称字面子串与实例 server_id；非正整数匹配昵称与 server_id。
+		id, err := strconv.ParseInt(search, 10, 64)
+		if err == nil && id > 0 && strconv.FormatInt(id, 10) == search {
+			conditions = append(conditions, "(id = ? OR github_id = ? OR instr(display_name, ?) > 0 OR instr(lower(server_id), lower(?)) > 0)")
+			args = append(args, id, id, search, search)
 		} else {
-			conditions = append(conditions, "instr(display_name, ?) > 0")
-			args = append(args, query.Search)
+			conditions = append(conditions, "(instr(display_name, ?) > 0 OR instr(lower(server_id), lower(?)) > 0)")
+			args = append(args, search, search)
 		}
 	}
 	if query.Disabled != nil {
@@ -63,6 +65,10 @@ func (r *Repository) List(ctx context.Context, query ListQuery) (Page, error) {
 	if query.Hidden != nil {
 		conditions = append(conditions, "ranking_hidden = ?")
 		args = append(args, *query.Hidden)
+	}
+	if query.Withdrawn != nil {
+		conditions = append(conditions, "withdrawn = ?")
+		args = append(args, *query.Withdrawn)
 	}
 	args = append(args, query.Limit+1)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

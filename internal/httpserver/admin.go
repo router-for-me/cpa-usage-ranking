@@ -53,9 +53,21 @@ func MountAdmin(router *gin.Engine, service *admin.Service, frontend *Frontend, 
 	router.POST("/v1/admin/accounts", h.sameOrigin, h.authorize, h.ownerOnly, h.csrf, h.createAccount)
 	router.DELETE("/v1/admin/accounts/:id", h.sameOrigin, h.authorize, h.ownerOnly, h.csrf, h.deleteAccount)
 	if frontend != nil {
+		redirect := func(target string) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				c.Header("Location", target)
+				c.Status(http.StatusFound)
+			}
+		}
+		for _, root := range []string{"/admin", "/admin/"} {
+			router.GET(root, redirect("/admin/leaderboards"))
+			router.HEAD(root, redirect("/admin/leaderboards"))
+		}
 		for _, path := range []string{"/admin/login", "/admin/leaderboards", "/admin/accounts", "/admin/users"} {
 			router.GET(path, func(c *gin.Context) { frontend.serveIndex(c) })
 			router.HEAD(path, func(c *gin.Context) { frontend.serveIndex(c) })
+			router.GET(path+"/", redirect(path))
+			router.HEAD(path+"/", redirect(path))
 		}
 	}
 	return nil

@@ -39,3 +39,7 @@ export async function adminRequest<T>(path: string, init: RequestInit = {}): Pro
 export function jsonRequest(method: string, value: unknown, csrf?: string): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': csrf } : {}) }, body: JSON.stringify(value) }
 }
+
+export function csrfRequest(method: string, csrf?: string): RequestInit {
+  return { method, headers: csrf ? { 'X-CSRF-Token': csrf } : {} }
+}

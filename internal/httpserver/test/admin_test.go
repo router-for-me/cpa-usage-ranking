@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,6 +165,65 @@ func TestAdminTrustedHTTPSAndLocalException(t *testing.T) {
 		}
 		if response.Code == 200 && response.Result().Cookies()[0].Secure == scenario.allow {
 			t.Fatal("cookie security mismatch")
+		}
+	}
+}
+
+func TestAdminFrontendRootAndTrailingSlashRedirects(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html><html><body>ok</body></html>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	frontend, err := httpserver.OpenFrontend(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer frontend.Close()
+
+	gin.SetMode(gin.TestMode)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service, err := admin.New(admin.Owner{Username: "owner", Password: "isolated-test-password"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := httpserver.NewRouter(logger)
+	frontend.Mount(router)
+	if err := httpserver.MountAdmin(router, service, frontend, logger, httpserver.AdminHTTPOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		target string
+	}{
+		{http.MethodGet, "/admin", "/admin/leaderboards"},
+		{http.MethodHead, "/admin", "/admin/leaderboards"},
+		{http.MethodGet, "/admin/", "/admin/leaderboards"},
+		{http.MethodHead, "/admin/", "/admin/leaderboards"},
+		{http.MethodGet, "/admin/login/", "/admin/login"},
+		{http.MethodHead, "/admin/login/", "/admin/login"},
+		{http.MethodGet, "/admin/leaderboards/", "/admin/leaderboards"},
+		{http.MethodGet, "/admin/accounts/", "/admin/accounts"},
+		{http.MethodGet, "/admin/users/", "/admin/users"},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != tc.target || rec.Body.Len() != 0 {
+			t.Fatalf("%s %s: status=%d loc=%q body=%q", tc.method, tc.path, rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		}
+	}
+	// 管理后台未启用时 /admin 仍应返回 404，不暴露后台重定向。
+	disabledRouter := httpserver.NewRouter(logger)
+	frontend.Mount(disabledRouter)
+	if err := httpserver.MountAdmin(disabledRouter, nil, frontend, logger, httpserver.AdminHTTPOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/admin", "/admin/", "/admin/users/"} {
+		rec := httptest.NewRecorder()
+		disabledRouter.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("disabled %s: status=%d", path, rec.Code)
 		}
 	}
 }

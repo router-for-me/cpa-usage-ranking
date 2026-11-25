@@ -12,9 +12,12 @@ import (
 
 type adminUser struct {
 	ID            string    `json:"id"`
+	GitHubID      string    `json:"github_id"`
+	ServerID      string    `json:"server_id"`
 	DisplayName   string    `json:"display_name"`
 	AvatarID      string    `json:"avatar_id"`
 	Disabled      bool      `json:"disabled"`
+	Withdrawn     bool      `json:"withdrawn"`
 	RankingHidden bool      `json:"ranking_hidden"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -154,6 +157,17 @@ func (h *adminHTTP) users(c *gin.Context) {
 		v := value == "true"
 		query.Hidden = &v
 	}
+	if value, present, ok := single("withdrawn"); !ok {
+		h.adminError(c, admin.ErrInput)
+		return
+	} else if present {
+		if value != "true" && value != "false" {
+			h.adminError(c, admin.ErrInput)
+			return
+		}
+		v := value == "true"
+		query.Withdrawn = &v
+	}
 	page, err := h.service.Users(c.Request.Context(), query)
 	if err != nil {
 		if err == clients.ErrQuery {
@@ -164,7 +178,17 @@ func (h *adminHTTP) users(c *gin.Context) {
 	}
 	users := make([]adminUser, 0, len(page.Clients))
 	for _, client := range page.Clients {
-		users = append(users, adminUser{ID: strconv.FormatInt(client.ID, 10), DisplayName: client.DisplayName, AvatarID: strconv.FormatInt(client.AvatarID, 10), Disabled: client.Disabled, RankingHidden: client.RankingHidden, CreatedAt: client.CreatedAt})
+		users = append(users, adminUser{
+			ID:            strconv.FormatInt(client.ID, 10),
+			GitHubID:      strconv.FormatInt(client.GitHubID, 10),
+			ServerID:      client.ServerID,
+			DisplayName:   client.DisplayName,
+			AvatarID:      strconv.FormatInt(client.AvatarID, 10),
+			Disabled:      client.Disabled,
+			Withdrawn:     client.Withdrawn,
+			RankingHidden: client.RankingHidden,
+			CreatedAt:     client.CreatedAt,
+		})
 	}
 	next := ""
 	if page.NextID != 0 {

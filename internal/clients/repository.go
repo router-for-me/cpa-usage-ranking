@@ -23,6 +23,8 @@ type CredentialHash [32]byte
 // Client 是存储层元数据，不是公开 API 响应结构；不携带凭据摘要。
 type Client struct {
 	ID            int64
+	GitHubID      int64
+	ServerID      string
 	DisplayName   string
 	AvatarID      int64
 	Disabled      bool
@@ -46,7 +48,7 @@ func NewRepository(db *storage.DB) *Repository {
 	return &Repository{writer: db.Writer, reader: db.Reader}
 }
 
-const clientFields = "c.id, c.display_name, c.avatar_id, c.disabled, c.created_at_ms, c.ranking_hidden, c.withdrawn"
+const clientFields = "c.id, c.github_id, c.server_id, c.display_name, c.avatar_id, c.disabled, c.created_at_ms, c.ranking_hidden, c.withdrawn"
 const selectClient = "SELECT " + clientFields + " FROM clients c"
 
 func (r *Repository) ByID(ctx context.Context, id int64) (Client, error) {
@@ -65,7 +67,7 @@ func (r *Repository) ByCredentialHash(ctx context.Context, hash CredentialHash) 
 func scanClient(row interface{ Scan(...any) error }, extra ...any) (Client, error) {
 	var client Client
 	var createdAt int64
-	if err := row.Scan(append([]any{&client.ID, &client.DisplayName, &client.AvatarID, &client.Disabled, &createdAt, &client.RankingHidden, &client.Withdrawn}, extra...)...); err != nil {
+	if err := row.Scan(append([]any{&client.ID, &client.GitHubID, &client.ServerID, &client.DisplayName, &client.AvatarID, &client.Disabled, &createdAt, &client.RankingHidden, &client.Withdrawn}, extra...)...); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Client{}, ErrNotFound
 		}
