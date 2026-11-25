@@ -66,20 +66,24 @@ func (c *Check) probeReader(ctx context.Context) bool {
 		c.mu.Unlock()
 		return true
 	}
-	if flight := c.inFlight; flight != nil {
-		c.mu.Unlock()
-		select {
-		case <-flight.done:
-			return flight.ok && ctx.Err() == nil
-		case <-ctx.Done():
-			return false
-		}
+	flight := c.inFlight
+	if flight == nil {
+		flight = &probeFlight{done: make(chan struct{})}
+		c.inFlight = flight
+		go c.runProbe(flight)
 	}
-	flight := &probeFlight{done: make(chan struct{})}
-	c.inFlight = flight
 	c.mu.Unlock()
 
-	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	select {
+	case <-flight.done:
+		return flight.ok && ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (c *Check) runProbe(flight *probeFlight) {
+	probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var row int
 	err := c.db.Reader.QueryRowContext(probeCtx, `SELECT 1 FROM period_stats LIMIT 1`).Scan(&row)
@@ -96,6 +100,4 @@ func (c *Check) probeReader(ctx context.Context) bool {
 	c.inFlight = nil
 	close(flight.done)
 	c.mu.Unlock()
-
-	return ok && ctx.Err() == nil
 }
