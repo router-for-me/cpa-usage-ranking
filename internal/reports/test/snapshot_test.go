@@ -128,16 +128,16 @@ func TestPreparedValidationMergingAndOverflow(t *testing.T) {
 		t.Fatalf("malformed unknown items were not skipped cleanly: %+v %v", mixedRows, err)
 	}
 
-	// 同名 Model 多项并存时，任意排列顺序必须生成完全一致的 Digest，且聚合按加法合并。
+	// 同名 Model 多项并存（含大小写与网关后缀）时，任意排列顺序必须生成完全一致的 Digest，且聚合按加法合并。
 	dup1 := usage("alpha", 10, 2, 3)
-	dup2 := usage("alpha", 20, 3, 8)
-	dup3 := usage("route/alpha", 5, 1, 10)
-	dup4 := usage("alias", 15, 2, 4)
-	p1, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{dup1, dup2, dup3, dup4, {Model: "alias"}}})
+	dup2 := usage("ALPHA-thinking", 20, 3, 8)
+	dup3 := usage("route/alpha[1m]:free", 5, 1, 10)
+	dup4 := usage("ALIAS(16384)", 15, 2, 4)
+	p1, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{dup1, dup2, dup3, dup4, {Model: "alias"}, usage("alpha-max", 99, 1, 1)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{{Model: "alias"}, dup4, dup2, dup1, dup3}})
+	p2, err := reports.Prepare(reports.Report{Revision: 5, Items: []reports.Item{usage("alpha-max", 99, 1, 1), {Model: "alias"}, dup4, dup2, dup1, dup3}})
 	if err != nil {
 		t.Fatal(err)
 	}

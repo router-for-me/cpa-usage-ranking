@@ -50,10 +50,29 @@ type Model struct {
 	Prices  map[Tier]Price
 }
 
-// Catalog is immutable after loading; exact names are case-sensitive.
+// Catalog is immutable after loading; lookup is ASCII case-insensitive while
+// preserving original canonical names for storage and display.
 type Catalog struct {
 	models []Model
 	byName map[string]int
+}
+
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			buf := make([]byte, len(s))
+			copy(buf, s[:i])
+			for j := i; j < len(s); j++ {
+				c := s[j]
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				buf[j] = c
+			}
+			return string(buf)
+		}
+	}
+	return s
 }
 
 type catalogFile struct {
@@ -93,17 +112,18 @@ func Load(path string) (*Catalog, error) {
 		return nil, fmt.Errorf("model catalog: models must be an array")
 	}
 	catalog := &Catalog{models: make([]Model, len(*input.Models)), byName: make(map[string]int)}
-	// 先占用所有标准名，再处理别名，避免配置顺序影响冲突检查。
+	// 先占用所有标准名，再处理别名，避免配置顺序影响跨模型大小写冲突检查。
 	for i, item := range *input.Models {
 		name := item.Name
 		if err := validateName(name); err != nil {
 			return nil, fmt.Errorf("model %d: invalid model_name: %w", i, err)
 		}
-		if _, exists := catalog.byName[name]; exists {
+		key := asciiLower(name)
+		if _, exists := catalog.byName[key]; exists {
 			return nil, fmt.Errorf("model catalog: duplicate model_name %q", name)
 		}
 		catalog.models[i] = Model{Name: name, Prices: make(map[Tier]Price)}
-		catalog.byName[name] = i
+		catalog.byName[key] = i
 	}
 	for i, item := range *input.Models {
 		model := &catalog.models[i]
@@ -111,10 +131,11 @@ func Load(path string) (*Catalog, error) {
 			if err := validateName(alias); err != nil {
 				return nil, fmt.Errorf("model %q: invalid alias: %w", model.Name, err)
 			}
-			if owner, exists := catalog.byName[alias]; exists && owner != i {
+			key := asciiLower(alias)
+			if owner, exists := catalog.byName[key]; exists && owner != i {
 				return nil, fmt.Errorf("model catalog: name %q belongs to both %q and %q", alias, catalog.models[owner].Name, model.Name)
 			}
-			catalog.byName[alias] = i
+			catalog.byName[key] = i
 			model.Aliases = append(model.Aliases, alias)
 		}
 		for key, raw := range item.Prices {

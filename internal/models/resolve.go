@@ -21,21 +21,81 @@ type Resolution struct {
 	Matched        bool
 }
 
-// Resolve removes surrounding whitespace and the path through the final '/'.
-// Matching is exact, case-sensitive and limited to the current catalog.
+// 受控网关模式/渠道末尾后缀白名单；较长后缀排在前面，避免部分截断（如 -non-thinking 先于 -thinking）。
+var gatewayLiteralSuffixes = []string{
+	":free", ":thinking", ":online", ":nitro", ":floor", ":extended", ":beta", ":exacto",
+	"[1m]", "[2m]",
+	"-non-thinking", "-nothinking", "-thinking",
+	"-minimal", "-low", "-medium", "-xhigh", "-high", "-tiered",
+}
+
+// Resolve 清理空白与路径前缀后，按不区分 ASCII 大小写查找当前目录；
+// 未命中时最多剥离两层受控白名单末尾网关后缀再回退匹配。
 func (r *Registry) Resolve(raw string) (Resolution, error) {
 	name, err := NormalizeReportedName(raw)
 	if err != nil {
 		return Resolution{}, err
 	}
 	result := Resolution{NormalizedName: name}
-	if index, ok := r.catalog.byName[name]; ok {
-		canonical := r.catalog.models[index].Name
-		result.CanonicalName = canonical
-		result.ID = r.ids[canonical]
-		result.Matched = true
+	candidate := asciiLower(name)
+	if index, ok := r.catalog.byName[candidate]; ok {
+		return r.matchedResolution(name, index), nil
+	}
+	for range 2 {
+		stripped, ok := stripGatewaySuffix(candidate)
+		if !ok {
+			break
+		}
+		candidate = stripped
+		if index, ok := r.catalog.byName[candidate]; ok {
+			return r.matchedResolution(name, index), nil
+		}
 	}
 	return result, nil
+}
+
+func (r *Registry) matchedResolution(normalized string, index int) Resolution {
+	canonical := r.catalog.models[index].Name
+	return Resolution{
+		NormalizedName: normalized,
+		CanonicalName:  canonical,
+		ID:             r.ids[canonical],
+		Matched:        true,
+	}
+}
+
+func stripGatewaySuffix(lower string) (string, bool) {
+	for _, suffix := range gatewayLiteralSuffixes {
+		if len(lower) > len(suffix) && strings.HasSuffix(lower, suffix) {
+			return lower[:len(lower)-len(suffix)], true
+		}
+	}
+	if strings.HasSuffix(lower, ")") {
+		open := strings.LastIndexByte(lower, '(')
+		if open > 0 {
+			inside := lower[open+1 : len(lower)-1]
+			if isAllowedParenBudget(inside) {
+				return lower[:open], true
+			}
+		}
+	}
+	return "", false
+}
+
+func isAllowedParenBudget(inside string) bool {
+	switch inside {
+	case "minimal", "low", "medium", "high", "xhigh", "max", "none", "off", "auto":
+		return true
+	}
+	if len(inside) < 1 || len(inside) > 8 {
+		return false
+	}
+	for i := 0; i < len(inside); i++ {
+		if inside[i] < '0' || inside[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizeReportedName validates and normalizes without consulting a catalog.

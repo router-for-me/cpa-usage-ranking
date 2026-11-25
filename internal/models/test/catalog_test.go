@@ -78,9 +78,12 @@ func TestInvalidCatalogsFail(t *testing.T) {
 		"no models":                 `{"currency":"USD","price_unit":"per_million_tokens"}`,
 		"null models":               `{"currency":"USD","price_unit":"per_million_tokens","models":null}`,
 		"duplicate standard":        catalogJSON(valid, valid),
+		"case duplicate standard":   catalogJSON(item("Alpha", []string{}, `{}`), item("ALPHA", []string{}, `{}`)),
 		"alias vs later standard":   catalogJSON(item("alpha", []string{"beta"}, `{}`), item("beta", []string{}, `{}`)),
+		"case alias vs standard":    catalogJSON(item("alpha", []string{"BETA"}, `{}`), item("beta", []string{}, `{}`)),
 		"alias vs earlier standard": catalogJSON(item("beta", []string{}, `{}`), item("alpha", []string{"beta"}, `{}`)),
 		"alias vs alias":            catalogJSON(item("alpha", []string{"shared"}, `{}`), item("beta", []string{"shared"}, `{}`)),
+		"case alias vs alias":       catalogJSON(item("alpha", []string{"Shared"}, `{}`), item("beta", []string{"SHARED"}, `{}`)),
 		"numeric price":             catalogJSON(item("alpha", []string{}, `{"default":{"input":0}}`)),
 		"negative price":            catalogJSON(item("alpha", []string{}, `{"default":{"input":"-0.1"}}`)),
 		"exponent price":            catalogJSON(item("alpha", []string{}, `{"default":{"input":"1e2"}}`)),
@@ -167,8 +170,12 @@ func TestCatalogNameBoundaries(t *testing.T) {
 	if _, err := loadCatalog(t, catalogJSON(`{"model_name":"\ud83d\ude00","alias":[],"prices":{}}`)); err != nil {
 		t.Fatalf("valid surrogate pair: %v", err)
 	}
-	// 相同模型可明确列出大小写变体，不进行大小写折叠。
-	if _, err := loadCatalog(t, catalogJSON(item("Alpha", []string{"alpha"}, `{}`), item("ALPHA", []string{}, `{}`))); err != nil {
-		t.Fatalf("case-sensitive names: %v", err)
+	// 相同模型内的大小写变体别名允许共存，且保留标准名原始大小写；跨模型大小写冲突必须被拒绝。
+	sameModel, err := loadCatalog(t, catalogJSON(item("Alpha", []string{"alpha"}, `{}`)))
+	if err != nil || sameModel.List()[0].Name != "Alpha" {
+		t.Fatalf("same-model case alias: %v", err)
+	}
+	if _, err := loadCatalog(t, catalogJSON(item("Alpha", []string{}, `{}`), item("ALPHA", []string{}, `{}`))); err == nil {
+		t.Fatal("cross-model case-insensitive conflict was accepted")
 	}
 }
