@@ -33,7 +33,7 @@
 | 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `server_id`、`return_to` 与可选 `avatar_id`，获取 `authorize_url` |
 | 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权） |
 | 上报日快照 | `PUT /v1/clients/report/{utc_day}` | 已注册 `Bearer` | 原子替换席位在 UTC 今日/昨日的完整累计快照 |
-| 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席永久退出（`204`，无响应体） |
+| 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席退出（`204`，无响应体）；未被封禁时，可用同一 GitHub 账号和 `server_id` 重新注册以恢复原席位 |
 | 读取榜单 | `GET /v1/leaderboards/{board}/{period}` | 无需 | 获取最新发布的 Top 100 缓存榜单 |
 | 获取头像 | `GET /avatars/catalog.json`、`/avatars/{path}` | 无需 | 读取头像清单与内置 WebP 图片（支持 `ETag`） |
 

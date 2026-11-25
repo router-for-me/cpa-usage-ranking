@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"cpa-usage-ranking/internal/auth"
 	"cpa-usage-ranking/internal/httpserver"
 )
 
@@ -197,18 +198,145 @@ func TestRegistrationHTTPClosedDisabledWithdrawnAndStorageFailure(t *testing.T) 
 		t.Fatalf("disabled holder couldn't withdraw: %d %s", r.status, r.body)
 	}
 	requireHTTPError(t, f.complete(t, secret, id), 403, "client_withdrawn")
-	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_withdrawn")
+	requireHTTPError(t, f.complete(t, testSecret(2), other), 403, "client_disabled")
 	third := f.start(t, secret, serverID, returnURL)
 	f.approve(t, third, 9, "Other", "test", returnURL)
-	requireHTTPError(t, f.complete(t, secret, third), 403, "client_withdrawn")
+	requireHTTPError(t, f.complete(t, secret, third), 403, "client_disabled")
 	seat, err := f.repo.ByID(context.Background(), first.ID)
 	if err != nil || !seat.Withdrawn || !seat.Disabled {
 		t.Fatal("withdraw or retry changed the management flag")
+	}
+	var writers int
+	if err := f.db.Reader.QueryRow("SELECT count(*) FROM client_writers").Scan(&writers); err != nil || writers != 1 {
+		t.Fatalf("banned seat: writers=%d err=%v", writers, err)
 	}
 	if err := f.db.Writer.Close(); err != nil {
 		t.Fatal(err)
 	}
 	requireHTTPError(t, f.complete(t, secret, third), 500, "internal_error")
+}
+
+func TestRegistrationHTTPRejoinWithdrawnSeat(t *testing.T) {
+	original := testSecret(1)
+	for _, tc := range []struct{ name, secret string }{{"original bearer", original}, {"new bearer", testSecret(2)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var refreshes atomic.Int32
+			settings := defaultRegistrationSettings()
+			settings.service.RequestRefresh = func() { refreshes.Add(1) }
+			f := newRegistrationFixture(t, settings)
+			httpserver.MountWithdraw(f.router, f.repo, nil)
+			id := f.startWithBody(t, original, startBodyWithAvatar(serverID, returnURL, "66"))
+			f.approve(t, id, 9, "Original", "test", returnURL)
+			first := identity(t, f.complete(t, original, id))
+			if _, err := f.db.Writer.Exec("UPDATE clients SET ranking_hidden=1 WHERE id=?", first.ID); err != nil {
+				t.Fatal(err)
+			}
+			if r := f.api(t, "POST", withdrawPath, "", original, nil); r.status != 204 {
+				t.Fatalf("withdraw: %d %s", r.status, r.body)
+			}
+			requireHTTPError(t, f.complete(t, original, id), 403, "client_withdrawn")
+			if got := refreshes.Load(); got != 0 {
+				t.Fatalf("registration refreshes before rejoin: %d", got)
+			}
+
+			fresh := f.start(t, tc.secret, serverID, returnURL)
+			f.approve(t, fresh, 9, "Changed", "test", returnURL)
+			r := f.complete(t, tc.secret, fresh)
+			if r.status != 200 || identity(t, r) != first || refreshes.Load() != 1 {
+				t.Fatalf("rejoin: %d %s, refreshes=%d", r.status, r.body, refreshes.Load())
+			}
+			authenticator := auth.NewAuthenticator(f.repo)
+			for _, secret := range []string{original, tc.secret} {
+				writer, err := authenticator.Authenticate(t.Context(), http.Header{"Authorization": {"Bearer " + secret}})
+				if err != nil || writer.ID != first.ID || !writer.RankingHidden {
+					t.Fatalf("writer after rejoin: %+v, err=%v", writer, err)
+				}
+			}
+			if identity(t, f.complete(t, tc.secret, fresh)) != first || f.register(t, tc.secret, 9, "Changed") != first || refreshes.Load() != 1 {
+				t.Fatalf("retry or active seat reuse changed identity or requested another refresh (count=%d)", refreshes.Load())
+			}
+		})
+	}
+}
+
+func requireSeatWriterState(t *testing.T, f *registrationFixture, seatID int64, wantWithdrawn bool, wantWriters int) {
+	t.Helper()
+	var withdrawn bool
+	var writers int
+	if err := f.db.Reader.QueryRow(`SELECT withdrawn, (SELECT count(*) FROM client_writers WHERE client_id=clients.id)
+		FROM clients WHERE id=?`, seatID).Scan(&withdrawn, &writers); err != nil {
+		t.Fatal(err)
+	}
+	if withdrawn != wantWithdrawn || writers != wantWriters {
+		t.Fatalf("seat %d: withdrawn=%t writers=%d, want withdrawn=%t writers=%d", seatID, withdrawn, writers, wantWithdrawn, wantWriters)
+	}
+}
+
+func TestRegistrationHTTPRejoinAtomicity(t *testing.T) {
+	const githubID = 9
+	setup := func(t *testing.T) (*registrationFixture, publicIdentity, *atomic.Int32) {
+		t.Helper()
+		var refreshes atomic.Int32
+		settings := defaultRegistrationSettings()
+		settings.service.RequestRefresh = func() { refreshes.Add(1) }
+		f := newRegistrationFixture(t, settings)
+		httpserver.MountWithdraw(f.router, f.repo, nil)
+		original := testSecret(1)
+		seat := f.register(t, original, githubID, "Original")
+		if r := f.api(t, "POST", withdrawPath, "", original, nil); r.status != 204 {
+			t.Fatalf("withdraw: %d %s", r.status, r.body)
+		}
+		requireSeatWriterState(t, f, seat.ID, true, 1)
+		if got := refreshes.Load(); got != 0 {
+			t.Fatalf("registration requested %d refreshes before rejoin, want 0", got)
+		}
+		return f, seat, &refreshes
+	}
+	t.Run("concurrent complete", func(t *testing.T) {
+		f, seat, refreshes := setup(t)
+		secrets := []string{testSecret(2), testSecret(3)}
+		ids := make([]string, len(secrets))
+		for i, secret := range secrets {
+			ids[i] = f.start(t, secret, serverID, returnURL)
+			f.approve(t, ids[i], githubID, "Rejoin", "test", returnURL)
+		}
+		start := make(chan struct{})
+		results := make([]registrationResponse, len(secrets))
+		var wg sync.WaitGroup
+		for i := range secrets {
+			wg.Go(func() {
+				<-start
+				results[i] = f.complete(t, secrets[i], ids[i])
+			})
+		}
+		close(start)
+		wg.Wait()
+		for _, r := range results {
+			if r.status != 200 || identity(t, r) != seat {
+				t.Fatalf("concurrent rejoin: %d %s", r.status, r.body)
+			}
+		}
+		requireSeatWriterState(t, f, seat.ID, false, 3)
+		if got := refreshes.Load(); got != 1 {
+			t.Fatalf("concurrent rejoin requested %d refreshes, want 1", got)
+		}
+	})
+	t.Run("rollback on completion failure", func(t *testing.T) {
+		f, seat, refreshes := setup(t)
+		secret := testSecret(2)
+		id := f.start(t, secret, serverID, returnURL)
+		f.approve(t, id, githubID, "Rejoin", "test", returnURL)
+		// 在恢复席位和添加 writer 之后，让标记请求完成的语句失败。
+		if _, err := f.db.Writer.Exec(`CREATE TRIGGER fail_rejoin BEFORE UPDATE OF stage ON registration_requests
+			WHEN NEW.stage='completed' BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+			t.Fatal(err)
+		}
+		requireHTTPError(t, f.complete(t, secret, id), 500, "internal_error")
+		requireSeatWriterState(t, f, seat.ID, true, 1)
+		if got := refreshes.Load(); got != 0 {
+			t.Fatalf("failed rejoin requested %d refreshes, want 0", got)
+		}
+	})
 }
 
 func TestRegistrationHTTPBodyBoundForKnownAndChunkedLength(t *testing.T) {

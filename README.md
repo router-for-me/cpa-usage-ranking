@@ -33,7 +33,7 @@ Clients integrate over standard **HTTPS + UTF-8 JSON (optional gzip on registrat
 | Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `server_id`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
 | Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending) |
 | Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | Registered `Bearer` | Atomically replace the seat's full UTC today/yesterday snapshot |
-| Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Permanently withdraw the entire seat (`204`, no response body) |
+| Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Withdraw the entire seat (`204`, no response body); repeat registration with the same GitHub account and `server_id` to rejoin if not banned |
 | Read leaderboards | `GET /v1/leaderboards/{board}/{period}` | None | Fetch the published Top-100 cached standings |
 | Fetch avatars | `GET /avatars/catalog.json`, `/avatars/{path}` | None | Read the avatar catalog and static WebP images (`ETag` supported) |
 
