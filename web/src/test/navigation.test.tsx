@@ -94,13 +94,21 @@ it('does not fetch public leaderboards or avatars while the public view is hidde
   expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/leaderboards/overall/today')).toHaveLength(publicReads)
 })
 
-it('normalizes trailing slashes while preserving query and hash in navigation', () => {
+it('normalizes trailing slashes and bare /admin while preserving query and hash in navigation', async () => {
   expect(isAppRoute('/admin/users/?q=alice#row-1')).toBe(true)
+  expect(isAppRoute('/admin/')).toBe(true)
   expect(isAppRoute('https://external.example/admin/users')).toBe(false)
   navigate('/admin/users/?q=alice#row-1')
   expect(window.location.pathname).toBe('/admin/users')
   expect(window.location.search).toBe('?q=alice')
   expect(window.location.hash).toBe('#row-1')
+
+  vi.stubGlobal('fetch', vi.fn((path: RequestInfo | URL) =>
+    Promise.resolve(json(String(path).includes('/admin/session') ? session : String(path).includes('avatars') ? catalog : empty))))
+  window.history.replaceState({}, '', '/admin/')
+  render(<RootApp />)
+  await waitFor(() => expect(window.location.pathname).toBe('/admin/leaderboards'))
+  expect(await screen.findByRole('navigation', { name: 'Console navigation' })).toBeVisible()
 })
 
 it('stops session polling and focus checks on public pages when admin is disabled or visitor is anonymous', async () => {

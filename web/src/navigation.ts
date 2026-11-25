@@ -9,8 +9,8 @@ const subscribe = (listener: () => void) => {
 }
 
 function normalizePathname(pathname: string) {
-  if (pathname.length > 1) return pathname.replace(/\/+$/, '') || '/'
-  return pathname
+  if (pathname.length > 1) pathname = pathname.replace(/\/+$/, '') || '/'
+  return pathname === '/admin' ? '/admin/leaderboards' : pathname
 }
 
 function parseAppTarget(target: string): { pathname: string; href: string } | null {

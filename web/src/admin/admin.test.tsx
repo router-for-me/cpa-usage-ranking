@@ -141,6 +141,9 @@ it('sends DELETE requests with only X-CSRF-Token and without Content-Type or JSO
     if (url === '/v1/admin/accounts') {
       return Promise.resolve(json({ owner: { username: 'owner' }, accounts: [{ id: '9', username: 'staff', created_at: '2026-11-16T00:00:00Z' }] }))
     }
+    if (url.startsWith('/v1/admin/users')) {
+      return Promise.resolve(json({ users: [], next_cursor: '' }))
+    }
     return Promise.resolve(json({ enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'csrf-del' }))
   }))
   const user = userEvent.setup()
