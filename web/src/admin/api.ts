@@ -19,10 +19,23 @@ export async function adminRequest<T>(path: string, init: RequestInit = {}): Pro
     if (!response.ok) {
       if (response.status === 401 && !(path === 'session' && init.method === 'POST')) window.dispatchEvent(new Event('ranking:session-expired'))
       const status = response.status
+      let code = ''
+      if (status === 403) {
+        try {
+          const payload = await response.json() as { error?: { code?: unknown } }
+          if (typeof payload?.error?.code === 'string') code = payload.error.code
+        } catch {
+          // Fall back to generic 403 error message when body is not JSON.
+        }
+      }
       const formats: Record<number, (messages: Messages) => string> = {
         400: (m) => m.admin.errors.badRequest,
         401: (m) => path === 'session' && init.method === 'POST' ? m.admin.errors.invalidCredentials : m.admin.errors.sessionExpired,
-        403: (m) => m.admin.errors.forbidden,
+        403: (m) => code === 'https_required'
+          ? m.admin.errors.httpsRequired
+          : code === 'same_origin_required'
+            ? m.admin.errors.sameOriginRequired
+            : m.admin.errors.forbidden,
         404: (m) => m.admin.errors.notFound,
         409: (m) => path.startsWith('users/') ? m.admin.errors.userStillBanned : m.admin.errors.usernameExists,
         429: (m) => m.admin.errors.rateLimited,

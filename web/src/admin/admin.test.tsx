@@ -159,3 +159,26 @@ it('sends DELETE requests with only X-CSRF-Token and without Content-Type or JSO
     expect(call.init?.headers).toEqual({ 'X-CSRF-Token': 'csrf-del' })
   }
 })
+
+it('shows specific HTTPS and same-origin proxy hints on 403 login errors', async () => {
+  for (const [code, enHint, zhHint] of [
+    ['https_required', /RANKING_TRUSTED_PROXIES.*X-Forwarded-Proto/, /RANKING_TRUSTED_PROXIES.*X-Forwarded-Proto/],
+    ['same_origin_required', /Same-origin check failed.*X-Forwarded-Host/, /同源校验失败.*X-Forwarded-Host/],
+  ] as const) {
+    window.history.replaceState({}, '', '/admin/login')
+    vi.stubGlobal('fetch', vi.fn((_path: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve(init?.method === 'POST'
+        ? json({ error: { code, message: code } }, 403)
+        : json({ enabled: true, authenticated: false }))))
+    const user = userEvent.setup()
+    const view = render(<AdminApp />)
+    await user.type(await screen.findByLabelText('Username'), 'owner')
+    await user.type(screen.getByLabelText('Password'), 'isolated-test-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(enHint)
+    await user.click(screen.getByRole('button', { name: 'Switch language to Chinese' }))
+    expect(screen.getByRole('alert')).toHaveTextContent(zhHint)
+    await user.click(screen.getByRole('button', { name: '切换为英文' }))
+    view.unmount()
+  }
+})

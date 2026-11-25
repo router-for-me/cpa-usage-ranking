@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"cpa-usage-ranking/internal/config"
@@ -51,7 +52,7 @@ func TestAdminConfiguration(t *testing.T) {
 	if _, err := config.Load(); err == nil {
 		t.Fatal("missing file accepted")
 	}
-	for _, body := range []string{`{`, `{}`, `{"username":"owner","password":"short"}`, `{"username":"owner","password":"long-test-password","extra":1}`, `{"username":"owner","password":"long-test-password"} {}`} {
+	for _, body := range []string{`{`, `{}`, `{"username":"owner","password":"short"}`, `{"username":"owner","password":"long-test-password"} {}`} {
 		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -59,13 +60,40 @@ func TestAdminConfiguration(t *testing.T) {
 			t.Fatal("invalid file accepted or leaked password")
 		}
 	}
-	if err := os.WriteFile(path, []byte(`{"username":"owner","password":"long-test-password"}`), 0600); err != nil {
+	// 目录应被拒绝，未知扩展字段与命名管道（如容器/密钥注入）应被允许。
+	dirPath := filepath.Join(t.TempDir(), "admin-dir")
+	if err := os.Mkdir(dirPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RANKING_ADMIN_CONFIG_FILE", dirPath)
+	if _, err := config.Load(); err == nil {
+		t.Fatal("directory accepted as admin config")
+	}
+	t.Setenv("RANKING_ADMIN_CONFIG_FILE", path)
+	if err := os.WriteFile(path, []byte(`{"username":"owner","password":"long-test-password","extra_note":"ignored"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err = config.Load()
 	if err != nil || cfg.AdminOwner == nil || cfg.AdminOwner.Username != "owner" || cfg.AdminConfigInsecurePerm {
-		t.Fatalf("0600 config: %+v, %v", cfg, err)
+		t.Fatalf("0600 config with unknown field: %+v, %v", cfg, err)
 	}
+	fifoPath := filepath.Join(t.TempDir(), "admin.fifo")
+	if err := syscall.Mkfifo(fifoPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		f, err := os.OpenFile(fifoPath, os.O_WRONLY, 0)
+		if err == nil {
+			_, _ = f.WriteString(`{"username":"owner","password":"long-test-password"}`)
+			_ = f.Close()
+		}
+	}()
+	t.Setenv("RANKING_ADMIN_CONFIG_FILE", fifoPath)
+	cfg, err = config.Load()
+	if err != nil || cfg.AdminOwner == nil || cfg.AdminOwner.Username != "owner" {
+		t.Fatalf("FIFO admin config rejected: %+v, %v", cfg, err)
+	}
+	t.Setenv("RANKING_ADMIN_CONFIG_FILE", path)
 	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}

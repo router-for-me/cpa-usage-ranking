@@ -31,3 +31,39 @@ func TestSustainedRetryClassificationForAmbiguousServerErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestSustainedOptionsAcceptLocalhostYesterdayAndVariableModelCount(t *testing.T) {
+	now := time.Now().UTC()
+	opts := SustainedOptions{
+		URL:             "http://localhost:8080",
+		Journal:         "journal.jsonl",
+		MaxPending:      10,
+		MaxInFlight:     4,
+		MaxAttempts:     3,
+		MaxJournalBytes: 2 << 20,
+		RequestTimeout:  time.Second,
+		MaxArrivalLag:   time.Second,
+		MaxActive:       time.Minute,
+	}
+	for _, day := range []string{now.Format(time.DateOnly), now.AddDate(0, 0, -1).Format(time.DateOnly)} {
+		f := Fixture{Clients: 2, Day: day, HistoryDays: 2, Backlog: 0, Models: []string{"model-a", "model-b"}, Seed: strings.Repeat("ab", 32)}
+		if err := validateSustainedOptions(f, opts); err != nil {
+			t.Fatalf("day %s rejected: %v", day, err)
+		}
+	}
+	oldFixture := Fixture{Clients: 2, Day: now.AddDate(0, 0, -2).Format(time.DateOnly), HistoryDays: 2, Backlog: 0, Models: []string{"model-a"}, Seed: strings.Repeat("ab", 32)}
+	if err := validateSustainedOptions(oldFixture, opts); err == nil {
+		t.Fatal("two-day-old fixture unexpectedly accepted")
+	}
+	nonLoopback := opts
+	nonLoopback.URL = "http://ranking.example:8080"
+	todayFixture := Fixture{Clients: 2, Day: now.Format(time.DateOnly), HistoryDays: 2, Backlog: 0, Models: []string{"model-a"}, Seed: strings.Repeat("ab", 32)}
+	if err := validateSustainedOptions(todayFixture, nonLoopback); err == nil {
+		t.Fatal("non-loopback host unexpectedly accepted")
+	}
+	emptyModels := todayFixture
+	emptyModels.Models = nil
+	if err := emptyModels.Validate(); err == nil {
+		t.Fatal("empty models fixture unexpectedly accepted")
+	}
+}

@@ -234,6 +234,8 @@ class Smoke:
         require(health["Interval"] == 30_000_000_000 and health["Timeout"] == 3_000_000_000
                 and health["StartPeriod"] == 15_000_000_000 and health["Retries"] == 3,
                 "image healthcheck defaults")
+        require("RANKING_HEALTHCHECK_URL=http://127.0.0.1:8080/healthz" in (inspect["Config"].get("Env") or []),
+                "default container healthcheck URL must target /healthz")
         server_platform = text("version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
         if self.args.qemu:
             execution = "explicit QEMU user-mode emulation"

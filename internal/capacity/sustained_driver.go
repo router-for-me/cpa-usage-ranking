@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -370,15 +371,19 @@ func validateSustainedOptions(f Fixture, o SustainedOptions) error {
 	if err != nil || u.Scheme != "http" || u.User != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return errors.New("sustained URL must be a loopback HTTP origin")
 	}
-	ip := net.ParseIP(u.Hostname())
-	if ip == nil || !ip.IsLoopback() || u.Port() == "" {
-		return errors.New("sustained URL must use a numeric loopback address and port")
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if (!strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback())) || u.Port() == "" {
+		return errors.New("sustained URL must use localhost or a numeric loopback address and port")
 	}
 	if o.Journal == "" || o.MaxPending < 1 || o.MaxPending > 1000000 || o.MaxInFlight < 1 || o.MaxInFlight > 20000 || o.MaxAttempts < 1 || o.MaxAttempts > 512 || o.MaxJournalBytes < 1<<20 || o.RequestTimeout < 10*time.Millisecond || o.RequestTimeout > 2*time.Minute || o.MaxArrivalLag < 10*time.Millisecond || o.MaxArrivalLag > time.Minute || o.MaxActive <= 0 || o.MaxActive > time.Hour {
 		return errors.New("invalid sustained local safety bounds")
 	}
-	if time.Now().UTC().Format(time.DateOnly) != f.Day {
-		return errors.New("fixture day is not the current UTC day")
+	nowUTC := time.Now().UTC()
+	today := nowUTC.Format(time.DateOnly)
+	yesterday := nowUTC.AddDate(0, 0, -1).Format(time.DateOnly)
+	if f.Day != today && f.Day != yesterday {
+		return errors.New("fixture day must be UTC today or yesterday")
 	}
 	return nil
 }

@@ -140,7 +140,18 @@ func (s *Service) createSession(identity Identity) (string, Session, error) {
 		}
 	}
 	if len(s.sessions) >= maxSessions {
-		return "", Session{}, ErrCapacity
+		// 达到内存会话上限时淘汰最早到期的旧会话，避免正常管理员无法登录。
+		var oldestKey string
+		var oldestExp time.Time
+		first := true
+		for key, existing := range s.sessions {
+			if first || existing.ExpiresAt.Before(oldestExp) || (existing.ExpiresAt.Equal(oldestExp) && key < oldestKey) {
+				oldestKey = key
+				oldestExp = existing.ExpiresAt
+				first = false
+			}
+		}
+		delete(s.sessions, oldestKey)
 	}
 	session := Session{Identity: identity, CSRF: csrf, ExpiresAt: now.Add(SessionTTL)}
 	s.sessions[token] = session

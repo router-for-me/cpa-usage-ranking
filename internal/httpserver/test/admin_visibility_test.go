@@ -63,7 +63,7 @@ func TestAdminRankingVisibilityPermissionsAndIndependentStates(t *testing.T) {
 		{"1", `{}`, ownerCookie, owner.CSRF, 400},
 		{"1", `{"hidden":null}`, ownerCookie, owner.CSRF, 400},
 		{"1", `{"hidden":"true"}`, ownerCookie, owner.CSRF, 400},
-		{"1", `{"hidden":true,"disabled":false}`, ownerCookie, owner.CSRF, 400},
+		{"1", `{"hidden":true}{}`, ownerCookie, owner.CSRF, 400},
 	} {
 		if got := adminCall(router, "PUT", "/v1/admin/users/"+scenario.path+"/ranking-visibility", scenario.body, scenario.cookie, scenario.csrf, "https://ranking.test", true).Code; got != scenario.want {
 			t.Fatal(got, scenario.want)

@@ -32,8 +32,8 @@ type Fixture struct {
 }
 
 func (f Fixture) Validate() error {
-	if f.Clients < 1 || f.Clients > 100000 || f.HistoryDays < 2 || f.HistoryDays > 366 || f.Backlog < 0 || f.Backlog > f.Clients || len(f.Models) != 8 {
-		return errors.New("fixture requires 1..100000 clients, 2..366 history days, valid backlog and eight models")
+	if f.Clients < 1 || f.Clients > 100000 || f.HistoryDays < 2 || f.HistoryDays > 366 || f.Backlog < 0 || f.Backlog > f.Clients || len(f.Models) == 0 {
+		return errors.New("fixture requires 1..100000 clients, 2..366 history days, valid backlog and at least one model")
 	}
 	day, err := time.Parse(time.DateOnly, f.Day)
 	if err != nil || day.Format(time.DateOnly) != f.Day {

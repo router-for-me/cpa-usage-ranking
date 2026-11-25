@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,12 @@ func run(logger *slog.Logger) (err error) {
 	}
 	if cfg.AdminConfigInsecurePerm {
 		logger.Warn("administrator configuration file has broad permissions; 0600 or 0640 recommended")
+	}
+	if cfg.AdminOwner != nil && !cfg.AdminAllowLocalHTTP && len(cfg.TrustedProxies) == 0 {
+		logger.Warn("admin console requires HTTPS without RANKING_TRUSTED_PROXIES; configure RANKING_TRUSTED_PROXIES behind a reverse proxy or RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true for local HTTP")
+	}
+	if cfg.GitHub != nil && strings.HasPrefix(strings.ToLower(cfg.GitHub.PublicOrigin), "https://") && len(cfg.TrustedProxies) == 0 {
+		logger.Warn("HTTPS GitHub OAuth enabled without RANKING_TRUSTED_PROXIES; forwarded client IP headers will be ignored behind a reverse proxy")
 	}
 	modelCatalog, err := models.Load(cfg.ModelsPath)
 	if err != nil {

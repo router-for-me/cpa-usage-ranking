@@ -121,10 +121,11 @@ func TestAdminDisabledAndAuthentication(t *testing.T) {
 	}
 }
 
-func TestAdminLoginLimitsAndStrictJSON(t *testing.T) {
+func TestAdminLoginLimitsAndFlexibleJSON(t *testing.T) {
 	router := adminRouter(t, true, httpserver.AdminHTTPOptions{})
+	// 未知字段应被静默忽略（此处因密码错误返回 401 且计入单来源限流）。
 	for range 5 {
-		if got := adminCall(router, "POST", "/v1/admin/session", `{"username":"owner","password":"wrong","owner":true}`, "", "", "https://ranking.test", true).Code; got != 400 {
+		if got := adminCall(router, "POST", "/v1/admin/session", `{"username":"owner","password":"wrong","extra":true}`, "", "", "https://ranking.test", true).Code; got != 401 {
 			t.Fatal(got)
 		}
 	}
@@ -136,18 +137,47 @@ func TestAdminLoginLimitsAndStrictJSON(t *testing.T) {
 	if limited.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("cached management response")
 	}
+
+	// 允许省略 Content-Type，但显式非 application/json 仍返回 415。
+	fresh := adminRouter(t, true, httpserver.AdminHTTPOptions{})
+	noCT := httptest.NewRequest(http.MethodPost, "https://ranking.test/v1/admin/session", strings.NewReader(`{"username":"owner","password":"isolated-test-password"}`))
+	noCT.RemoteAddr = "127.0.0.1:1234"
+	noCT.Header.Set("Origin", "https://ranking.test")
+	noCT.TLS = &tls.ConnectionState{}
+	noCTRec := httptest.NewRecorder()
+	fresh.ServeHTTP(noCTRec, noCT)
+	if noCTRec.Code != http.StatusOK {
+		t.Fatalf("omitted Content-Type rejected: %d %s", noCTRec.Code, noCTRec.Body.String())
+	}
+	badCT := httptest.NewRequest(http.MethodPost, "https://ranking.test/v1/admin/session", strings.NewReader(`{"username":"owner","password":"isolated-test-password"}`))
+	badCT.RemoteAddr = "127.0.0.1:1234"
+	badCT.Header.Set("Origin", "https://ranking.test")
+	badCT.Header.Set("Content-Type", "text/plain")
+	badCT.TLS = &tls.ConnectionState{}
+	badCTRec := httptest.NewRecorder()
+	fresh.ServeHTTP(badCTRec, badCT)
+	if badCTRec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("non-JSON Content-Type accepted: %d", badCTRec.Code)
+	}
 }
 
 func TestAdminTrustedHTTPSAndLocalException(t *testing.T) {
 	for _, scenario := range []struct {
-		trusted                   []string
-		allow                     bool
-		peer, host, origin, proto string
-		want                      int
+		trusted                            []string
+		allow                              bool
+		peer, host, fwdHost, origin, proto string
+		want                               int
 	}{
 		{peer: "192.0.2.2:1", host: "ranking.test", origin: "https://ranking.test", proto: "https", want: 403},
 		{trusted: []string{"192.0.2.0/24"}, peer: "192.0.2.2:1", host: "ranking.test", origin: "https://ranking.test", proto: "https", want: 200},
+		// 多层反代 X-Forwarded-Proto 取逗号首段且不区分大小写，默认端口与大小写 Host 归一化。
+		{trusted: []string{"192.0.2.0/24"}, peer: "192.0.2.2:1", host: "internal:8080", fwdHost: "Ranking.Test:443", origin: "https://ranking.test", proto: "HTTPS, http", want: 200},
+		{trusted: []string{"192.0.2.0/24"}, peer: "192.0.2.2:1", host: "ranking.test", origin: "https://RANKING.TEST:443", proto: "https", want: 200},
+		// 多值或非法 X-Forwarded-Host 不采信，回退至 Host。
+		{trusted: []string{"192.0.2.0/24"}, peer: "192.0.2.2:1", host: "ranking.test", fwdHost: "a.test, b.test", origin: "https://a.test", proto: "https", want: 403},
+		{peer: "192.0.2.2:1", host: "internal:8080", fwdHost: "ranking.test", origin: "https://ranking.test", proto: "https", want: 403},
 		{allow: true, peer: "127.0.0.1:1", host: "127.0.0.1:4188", origin: "http://127.0.0.1:4188", want: 200},
+		{allow: true, peer: "127.0.0.1:1", host: "localhost:80", origin: "http://LOCALHOST", want: 200},
 		{allow: true, peer: "192.0.2.2:1", host: "127.0.0.1:4188", origin: "http://127.0.0.1:4188", want: 200},
 		{allow: true, peer: "127.0.0.1:1", host: "public.test", origin: "http://public.test", want: 200},
 		{allow: true, peer: "192.0.2.2:1", host: "public.test", origin: "http://evil.test", want: 403},
@@ -157,11 +187,14 @@ func TestAdminTrustedHTTPSAndLocalException(t *testing.T) {
 		request.RemoteAddr = scenario.peer
 		request.Header.Set("Origin", scenario.origin)
 		request.Header.Set("X-Forwarded-Proto", scenario.proto)
+		if scenario.fwdHost != "" {
+			request.Header.Set("X-Forwarded-Host", scenario.fwdHost)
+		}
 		request.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
 		if response.Code != scenario.want {
-			t.Fatalf("%+v: %d", scenario, response.Code)
+			t.Fatalf("%+v: %d %s", scenario, response.Code, response.Body.String())
 		}
 		if response.Code == 200 && response.Result().Cookies()[0].Secure == scenario.allow {
 			t.Fatal("cookie security mismatch")

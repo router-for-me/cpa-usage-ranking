@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,9 +138,28 @@ func TestReadinessTracksRealDependenciesAndCompleteCache(t *testing.T) {
 	if currentEntry != oldEntry {
 		t.Fatal("failed refresh replaced old cache")
 	}
+	// 写连接持锁期间 /readyz 不应阻塞或误报未就绪，且支持并发探针合并。
+	writerTx, err := db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if status("/readyz") != 200 {
+				t.Error("readyz failed while writer held transaction")
+			}
+		})
+	}
+	wg.Wait()
+	if err := writerTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Reader.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// 等待 1s 探针缓存过期后，关闭只读库应被准确检出为 503。
+	time.Sleep(1100 * time.Millisecond)
 	if status("/readyz") != 503 || status("/healthz") != 200 {
 		t.Fatal("closed database was ready or liveness failed")
 	}

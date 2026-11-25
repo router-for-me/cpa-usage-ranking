@@ -48,7 +48,7 @@ func TestOverrides(t *testing.T) {
 			t.Setenv("RANKING_WEB_DIR", " web/dist ")
 			t.Setenv("RANKING_SQLITE_PATH", " custom/ranking.db ")
 			t.Setenv("RANKING_MODELS_PATH", " custom/models.json ")
-			t.Setenv("RANKING_TRUSTED_PROXIES", " 127.0.0.1,10.0.0.0/8,::1 ")
+			t.Setenv("RANKING_TRUSTED_PROXIES", " 127.0.0.1, , 10.0.0.0/8,::1, ")
 			t.Setenv("RANKING_REGISTRATION_IPV6_64", "false")
 			cfg, err := config.Load()
 			if err != nil || cfg.HTTPAddr != addr || cfg.ShutdownTimeout != 250*time.Millisecond || cfg.WebDir != "web/dist" || cfg.SQLitePath != "custom/ranking.db" || cfg.ModelsPath != "custom/models.json" || strings.Join(cfg.TrustedProxies, ",") != "127.0.0.1,10.0.0.0/8,::1" || cfg.RegistrationIPv6By64 {
@@ -92,7 +92,7 @@ func TestInvalidValues(t *testing.T) {
 	for key, values := range map[string][]string{
 		"RANKING_HTTP_ADDR":                        {"localhost", "http://localhost:8080", "a/b:8080", "a b:8080", "::1:8080", ":", ":http", ":-1", ":+80", ":65536"},
 		"RANKING_SHUTDOWN_TIMEOUT":                 {"0s", "-1s", "10", "forever", "999999999999999999999h"},
-		"RANKING_TRUSTED_PROXIES":                  {"localhost", "127.0.0.1,", "10.0.0.0/33", "https://proxy"},
+		"RANKING_TRUSTED_PROXIES":                  {"localhost", "10.0.0.0/33", "https://proxy"},
 		"RANKING_REGISTRATION_IPV6_64":             {"yes", "2"},
 		"RANKING_REGISTRATION_SOURCE_REQUESTS":     {"0", "-1", "1.5", "999999999999999999999"},
 		"RANKING_REGISTRATION_GLOBAL_REQUESTS":     {"0", "invalid"},
