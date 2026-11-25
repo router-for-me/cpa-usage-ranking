@@ -407,8 +407,8 @@ func TestRegistrationHTTPCreateAndSafeRetry(t *testing.T) {
 	}
 	second := f.start(t, testSecret(2), strings.ToUpper(serverID), returnURL)
 	f.approve(t, second, 1<<54, "Changed GitHub Name", "new-login", returnURL)
-	if current := identity(t, f.complete(t, testSecret(2), second)); current.ID != created.ID || current.Name != "Current" {
-		t.Fatal("same numeric identity and canonical server_id did not reuse profile")
+	if current := identity(t, f.complete(t, testSecret(2), second)); current.ID != created.ID || current.Name != "Changed GitHub Name" || current.AvatarID != 66 {
+		t.Fatalf("same numeric identity and canonical server_id did not sync name while preserving avatar: %+v", current)
 	}
 	other := f.start(t, testSecret(3), serverID, returnURL)
 	f.approve(t, other, 1<<54+1, "Current", "alice", returnURL)
@@ -455,22 +455,23 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 		{`null`, secret, nil, 400, "invalid_request"},
 		{`[]`, secret, nil, 400, "invalid_request"},
 		{validStartBody + ` {}`, secret, nil, 400, "invalid_request"},
-		{`{"client_id":"1","server_id":"` + serverID + `"}`, secret, nil, 400, "invalid_request"},
 		{`{"source":"192.0.2.1","return_to":"https://app.example"}`, secret, nil, 400, "invalid_request"},
 		{`{"display_name":"Valid","avatar_id":1}`, secret, nil, 400, "invalid_request"},
 		{`{"server_id":null}`, secret, nil, 400, "invalid_request"},
+		{`{"server_id":"   "}`, secret, nil, 400, "invalid_request"},
 		// 旧字段 cpa_uuid 不再提供兼容，必须返回 400 invalid_request。
 		{`{"cpa_uuid":"550e8400-e29b-41d4-a716-446655440000","return_to":"https://client.example/done"}`, secret, nil, 400, "invalid_request"},
 		{"{\"return_to\":\"\xff\"}", secret, nil, 400, "invalid_request"},
 		{startBody("not-a-uuid", returnURL), secret, nil, 400, "invalid_request"},
 		{startBody("00000000-0000-0000-0000-000000000000", returnURL), secret, nil, 400, "invalid_request"},
+		{startBody("00000000000000000000000000000000", returnURL), secret, nil, 400, "invalid_request"},
 		{validStartBody, secret, map[string]string{"Content-Type": "text/plain"}, 415, "unsupported_media_type"},
 		{validStartBody, secret, map[string]string{"Content-Encoding": "br"}, 415, "unsupported_media_type"},
 		{validStartBody, secret, map[string]string{"Content-Encoding": "gzip"}, 400, "invalid_request"},
 	} {
 		requireHTTPError(t, f.send(t, tc.body, tc.token, tc.headers), tc.status, tc.code)
 	}
-	for _, dest := range []string{"", "//host.example/a", "https:///outside", "https://?x", "javascript:alert(1)", "https://login@host.example", "https://host\\outside", "https://host/\r\nLocation:x", "http://host:65536", "http://[not-an-ip]"} {
+	for _, dest := range []string{"//host.example/a", "https:///outside", "https://?x", "javascript:alert(1)", "https://login@host.example", "https://host\\outside", "https://host/\r\nLocation:x", "http://host:65536", "http://[not-an-ip]"} {
 		body, _ := json.Marshal(map[string]string{"server_id": serverID, "return_to": dest})
 		requireHTTPError(t, f.send(t, string(body), secret, nil), 400, "invalid_request")
 	}
@@ -478,11 +479,16 @@ func TestRegistrationHTTPInvalidInput(t *testing.T) {
 	if err := f.db.Reader.QueryRow("SELECT count(*) FROM registration_requests").Scan(&n); err != nil || n != 0 {
 		t.Fatalf("invalid request allocated state: %d %v", n, err)
 	}
-	// 未知扩展字段与 gzip 压缩请求体均应正常兼容。
+	// 未知扩展字段、选填 return_to、紧凑 32 位 server_id 与 gzip 压缩请求体均应正常兼容。
 	extBody := strings.TrimSuffix(validStartBody, "}") + `,"client_id":"1","extra":true}`
 	id := f.startWithBody(t, secret, extBody)
 	if r := f.api(t, "POST", completePath, `{"request_id":"`+id+`","server_id":"`+serverID+`","avatar_id":"42"}`, secret, nil); r.status != 202 {
 		t.Fatalf("complete with unknown fields failed: %d %s", r.status, r.body)
+	}
+	compactID := f.startWithBody(t, secret, `{"server_id":"  550E8400E29B41D4A716446655440000  "}`)
+	var storedServerID, storedReturnTo string
+	if err := f.db.Reader.QueryRow("SELECT server_id,return_to FROM registration_requests WHERE id=?", compactID).Scan(&storedServerID, &storedReturnTo); err != nil || storedServerID != serverID || storedReturnTo != "" {
+		t.Fatalf("compact server_id/empty return_to: %q %q %v", storedServerID, storedReturnTo, err)
 	}
 	req, err := http.NewRequest(http.MethodPost, f.server.URL+startPath, bytes.NewReader(gzipBytes(t, []byte(validStartBody))))
 	if err != nil {
@@ -533,14 +539,21 @@ func TestRegistrationHTTPAvatarSelection(t *testing.T) {
 		t.Fatalf("persisted clients.avatar_id: %d %v", dbAvatar, err)
 	}
 
-	// 3. Second writer for the same (github_id, server_id) with avatar_id "15" returns 200 and preserves original avatar "42" (Strategy A).
+	// 3. Omitting avatar_id on an existing seat syncs display_name while preserving avatar "42"; explicit avatar_id updates both.
 	secretSecondWriter := testSecret(3)
-	idSecondWriter := f.startWithBody(t, secretSecondWriter, startBodyWithAvatar(strings.ToUpper(otherServerID), returnURL, "15"))
+	idKeepAvatar := f.start(t, secretSecondWriter, strings.ToUpper(otherServerID), returnURL)
+	f.approve(t, idKeepAvatar, 200, "Synced User", "synceduser", returnURL)
+	rKeepAvatar := f.complete(t, secretSecondWriter, idKeepAvatar)
+	seatKeepAvatar := identity(t, rKeepAvatar)
+	if rKeepAvatar.status != 200 || seatKeepAvatar.ID != seatCustom.ID || seatKeepAvatar.AvatarID != 42 || seatKeepAvatar.Name != "Synced User" {
+		t.Fatalf("omitted avatar on existing seat: status=%d %+v", rKeepAvatar.status, seatKeepAvatar)
+	}
+	idSecondWriter := f.startWithBody(t, secretSecondWriter, startBodyWithAvatar(strings.ToUpper(otherServerID), returnURL, " 15 "))
 	f.approve(t, idSecondWriter, 200, "Renamed User", "renameduser", returnURL)
 	rSecondWriter := f.complete(t, secretSecondWriter, idSecondWriter)
 	seatReused := identity(t, rSecondWriter)
-	if rSecondWriter.status != 200 || seatReused.ID != seatCustom.ID || seatReused.AvatarID != 42 || seatReused.Name != "Custom User" {
-		t.Fatalf("second writer modified existing seat: status=%d %+v", rSecondWriter.status, seatReused)
+	if rSecondWriter.status != 200 || seatReused.ID != seatCustom.ID || seatReused.AvatarID != 15 || seatReused.Name != "Renamed User" {
+		t.Fatalf("explicit avatar sync on existing seat: status=%d %+v", rSecondWriter.status, seatReused)
 	}
 
 	// 4. JSON integer avatar_id and null avatar_id are both accepted.
@@ -585,8 +598,7 @@ func TestRegistrationHTTPInvalidAvatarInputs(t *testing.T) {
 		{"fraction number", withRawAvatar(`1.5`), 400, "invalid_request"},
 		{"plus sign", withRawAvatar(`"+1"`), 400, "invalid_request"},
 		{"leading zero", withRawAvatar(`"01"`), 400, "invalid_request"},
-		{"leading space", withRawAvatar(`" 1"`), 400, "invalid_request"},
-		{"trailing space", withRawAvatar(`"1 "`), 400, "invalid_request"},
+		{"whitespace only", withRawAvatar(`"   "`), 400, "invalid_request"},
 		{"non-numeric", withRawAvatar(`"abc"`), 400, "invalid_request"},
 		{"int64 overflow string", withRawAvatar(`"9223372036854775808"`), 400, "invalid_request"},
 		{"int64 overflow number", withRawAvatar(`9223372036854775808`), 400, "invalid_request"},

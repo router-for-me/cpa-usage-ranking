@@ -130,12 +130,15 @@ func TestClientSchemaEnforcesCredentialAndStateShape(t *testing.T) {
 	if _, err := db.Writer.Exec(insertReq, "valid-req", hash, serverID, "https://app.example/cb", 42); err != nil {
 		t.Fatal(err)
 	}
-	for _, avatar := range []any{nil, 0, -1, "nonnumeric", 1.5} {
+	if _, err := db.Writer.Exec(insertReq, "null-avatar-req", hash, serverID, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, avatar := range []any{0, -1, "nonnumeric", 1.5} {
 		if _, err := db.Writer.Exec(insertReq, "bad-req", hash, serverID, "https://app.example/cb", avatar); err == nil {
 			t.Fatalf("invalid registration_requests.avatar_id %#v persisted", avatar)
 		}
 	}
-	if queryInt(t, db.Reader, "SELECT COUNT(*) FROM registration_requests") != 1 {
+	if queryInt(t, db.Reader, "SELECT COUNT(*) FROM registration_requests") != 2 {
 		t.Fatal("failed registration_requests inserts left rows")
 	}
 }

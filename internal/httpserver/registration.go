@@ -42,6 +42,7 @@ func (a *optionalAvatarID) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(trimmed, &text); err != nil {
 			return registration.ErrInvalidRequest
 		}
+		text = strings.TrimSpace(text)
 	} else {
 		text = string(trimmed)
 	}
@@ -74,9 +75,15 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 		if !ok {
 			return
 		}
-		if input.ServerID == nil || *input.ServerID == "" || input.ReturnTo == nil || *input.ReturnTo == "" {
+		if input.ServerID == nil || strings.TrimSpace(*input.ServerID) == "" {
 			writeRegistrationError(c, registration.ErrInvalidRequest)
 			return
+		}
+		returnTo := ""
+		if input.ReturnTo != nil {
+			if strings.TrimSpace(*input.ReturnTo) != "" {
+				returnTo = *input.ReturnTo
+			}
 		}
 		var avatarID *int64
 		if input.AvatarID.set {
@@ -87,7 +94,7 @@ func MountRegistration(router *gin.Engine, service *registration.Service, github
 			writeRegistrationError(c, registration.ErrRegistrationClosed)
 			return
 		}
-		id, err := service.Start(c.Request.Context(), hash, *input.ServerID, *input.ReturnTo, avatarID)
+		id, err := service.Start(c.Request.Context(), hash, *input.ServerID, returnTo, avatarID)
 		if err != nil {
 			writeRegistrationError(c, err)
 			return

@@ -15,32 +15,57 @@ type Authorization struct {
 	Expires                          time.Time
 }
 
-// Authorize 签发一次浏览器会话和 S256 PKCE；第二次打开不能覆盖原会话。
+// Authorize 签发浏览器会话和 S256 PKCE；未进入回调核销前允许重复打开并覆盖为最新会话。
 func (s *Service) Authorize(ctx context.Context, id string) (Authorization, error) {
-	if !s.options.Enabled {
-		return Authorization{}, ErrRegistrationClosed
-	}
 	if !validToken(id) {
 		return Authorization{}, ErrInvalidRequest
 	}
+	var tokenHash []byte
 	var expires int64
-	err := s.reader.QueryRowContext(ctx, `SELECT expires_at_ms FROM registration_requests
-		WHERE id=? AND stage='pending' AND expires_at_ms>?`, id, s.options.Now().UnixMilli()).Scan(&expires)
+	err := s.reader.QueryRowContext(ctx, `SELECT token_hash,expires_at_ms FROM registration_requests
+		WHERE id=? AND stage IN ('pending','authorizing') AND expires_at_ms>?`, id, s.options.Now().UnixMilli()).Scan(&tokenHash, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Authorization{}, ErrInvalidRequest
 	}
 	if err != nil {
 		return Authorization{}, err
 	}
+	if !s.options.Enabled {
+		bound, err := s.isBoundCredential(ctx, s.reader.QueryRowContext, tokenHash)
+		if err != nil {
+			return Authorization{}, err
+		}
+		if !bound {
+			return Authorization{}, ErrRegistrationClosed
+		}
+	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return Authorization{}, err
 	}
 	defer tx.Rollback()
+	if !s.options.Enabled {
+		var txHash []byte
+		err = tx.QueryRowContext(ctx, `SELECT token_hash FROM registration_requests
+			WHERE id=? AND stage IN ('pending','authorizing') AND expires_at_ms>?`, id, s.options.Now().UnixMilli()).Scan(&txHash)
+		if errors.Is(err, sql.ErrNoRows) {
+			return Authorization{}, ErrInvalidRequest
+		}
+		if err != nil {
+			return Authorization{}, err
+		}
+		bound, err := s.isBoundCredential(ctx, tx.QueryRowContext, txHash)
+		if err != nil {
+			return Authorization{}, err
+		}
+		if !bound {
+			return Authorization{}, ErrRegistrationClosed
+		}
+	}
 	state, session, verifier := opaqueToken(), opaqueToken(), opaqueToken()
 	browserHash := sha256.Sum256([]byte(session))
 	err = tx.QueryRowContext(ctx, `UPDATE registration_requests
-		SET stage='authorizing',state=?,browser_hash=?,verifier=? WHERE id=? AND stage='pending' AND expires_at_ms>?
+		SET stage='authorizing',state=?,browser_hash=?,verifier=? WHERE id=? AND stage IN ('pending','authorizing') AND expires_at_ms>?
 		RETURNING expires_at_ms`, state, browserHash[:], verifier, id, s.options.Now().UnixMilli()).Scan(&expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Authorization{}, ErrInvalidRequest

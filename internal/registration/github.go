@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -27,10 +28,19 @@ type GitHubOptions struct {
 	ClientSecret string
 }
 
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(host)
+	return err == nil && addr.IsLoopback()
+}
+
 func (o GitHubOptions) Validate() error {
 	u, ok := httpURL(o.PublicOrigin)
-	if !ok || u.Scheme != "https" || (u.Path != "" && u.Path != "/") || strings.ContainsAny(o.PublicOrigin, "?#") {
-		return errors.New("RANKING_PUBLIC_ORIGIN must be an HTTPS origin without path, query or fragment")
+	allowedScheme := ok && (u.Scheme == "https" || (u.Scheme == "http" && isLoopbackHost(u.Hostname())))
+	if !allowedScheme || (u.Path != "" && u.Path != "/") || strings.ContainsAny(o.PublicOrigin, "?#") {
+		return errors.New("RANKING_PUBLIC_ORIGIN must be an HTTPS or loopback HTTP origin without path, query or fragment")
 	}
 	if o.ClientID == "" || o.ClientSecret == "" || strings.TrimSpace(o.ClientID) != o.ClientID || strings.TrimSpace(o.ClientSecret) != o.ClientSecret {
 		return errors.New("RANKING_GITHUB_CLIENT_ID and RANKING_GITHUB_CLIENT_SECRET must be non-empty")
@@ -39,8 +49,9 @@ func (o GitHubOptions) Validate() error {
 }
 
 type GitHub struct {
-	options GitHubOptions
-	http    http.Client
+	options      GitHubOptions
+	secureCookie bool
+	http         http.Client
 }
 
 // NewGitHub 固定生产端点；测试只能注入传输，不从环境变量重定向 OAuth 请求。
@@ -48,13 +59,23 @@ func NewGitHub(options GitHubOptions, transport http.RoundTripper) (*GitHub, err
 	if err := options.Validate(); err != nil {
 		return nil, err
 	}
+	u, _ := httpURL(options.PublicOrigin)
 	options.PublicOrigin = strings.TrimSuffix(options.PublicOrigin, "/")
-	return &GitHub{options: options, http: http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
+	return &GitHub{
+		options:      options,
+		secureCookie: u.Scheme == "https",
+		http: http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
-	}}, nil
+	}, nil
+}
+
+// SecureCookie 返回 OAuth 浏览器会话 Cookie 是否应启用 __Host- 与 Secure 属性。
+func (g *GitHub) SecureCookie() bool {
+	return g.secureCookie
 }
 
 func (g *GitHub) BrowserURL(requestID string) string {

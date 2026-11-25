@@ -167,7 +167,9 @@ func TestRegistrationHTTPCapacityReclaimsCompletedAndCapsActive(t *testing.T) {
 	now.Add(int64(30 * time.Second))
 	fresh := f.start(t, secret, serverID, returnURL)
 	f.approve(t, fresh, 7, "Changed", "different-login", returnURL)
-	if r := f.complete(t, secret, fresh); r.status != 200 || identity(t, r) != first {
+	expectedRecovered := first
+	expectedRecovered.Name = "Changed"
+	if r := f.complete(t, secret, fresh); r.status != 200 || identity(t, r) != expectedRecovered {
 		t.Fatal("same seat recovery after expiry failed")
 	}
 	var writers int
@@ -241,8 +243,10 @@ func TestRegistrationHTTPRejoinWithdrawnSeat(t *testing.T) {
 
 			fresh := f.start(t, tc.secret, serverID, returnURL)
 			f.approve(t, fresh, 9, "Changed", "test", returnURL)
+			expectedRejoined := first
+			expectedRejoined.Name = "Changed"
 			r := f.complete(t, tc.secret, fresh)
-			if r.status != 200 || identity(t, r) != first || refreshes.Load() != 1 {
+			if r.status != 200 || identity(t, r) != expectedRejoined || refreshes.Load() != 1 {
 				t.Fatalf("rejoin: %d %s, refreshes=%d", r.status, r.body, refreshes.Load())
 			}
 			authenticator := auth.NewAuthenticator(f.repo)
@@ -252,7 +256,7 @@ func TestRegistrationHTTPRejoinWithdrawnSeat(t *testing.T) {
 					t.Fatalf("writer after rejoin: %+v, err=%v", writer, err)
 				}
 			}
-			if identity(t, f.complete(t, tc.secret, fresh)) != first || f.register(t, tc.secret, 9, "Changed") != first || refreshes.Load() != 1 {
+			if identity(t, f.complete(t, tc.secret, fresh)) != expectedRejoined || f.register(t, tc.secret, 9, "Changed") != expectedRejoined || refreshes.Load() != 1 {
 				t.Fatalf("retry or active seat reuse changed identity or requested another refresh (count=%d)", refreshes.Load())
 			}
 		})
@@ -311,8 +315,10 @@ func TestRegistrationHTTPRejoinAtomicity(t *testing.T) {
 		}
 		close(start)
 		wg.Wait()
+		expected := seat
+		expected.Name = "Rejoin"
 		for _, r := range results {
-			if r.status != 200 || identity(t, r) != seat {
+			if r.status != 200 || identity(t, r) != expected {
 				t.Fatalf("concurrent rejoin: %d %s", r.status, r.body)
 			}
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"cpa-usage-ranking/internal/httpserver"
+	"cpa-usage-ranking/internal/registration"
 )
 
 func TestGitHubReturnToWithoutReferer(t *testing.T) {
@@ -48,9 +50,23 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	f := newRegistrationFixture(t, defaultRegistrationSettings())
 	secret := testSecret(1)
 	id := f.start(t, secret, serverID, returnURL)
+	// 浏览器或聊天软件预取请求直接返回 204，不消耗也不轮换授权会话。
+	for _, headers := range []map[string]string{
+		{"Purpose": "prefetch"},
+		{"Sec-Purpose": "Prefetch;anonymous-client-ip"},
+	} {
+		prefetch := f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", headers)
+		if prefetch.status != http.StatusNoContent || len(prefetch.body) != 0 || prefetch.header.Get("Cache-Control") != "no-store" || prefetch.header.Get("Set-Cookie") != "" {
+			t.Fatalf("prefetch response: %d %q %+v", prefetch.status, prefetch.body, prefetch.header)
+		}
+	}
+	firstBrowser := f.open(t, id)
+	// 未进入回调核销前允许重复打开授权页，覆盖生成新的 state/cookie 并使旧会话失效。
 	browser := f.open(t, id)
-	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+id+"&return_to=https://evil.example", "", "", nil), 400, "invalid_request")
-	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", nil), 400, "invalid_request")
+	if browser.state == firstBrowser.state || browser.cookie == firstBrowser.cookie {
+		t.Fatal("reopened authorize did not rotate state and cookie")
+	}
+	requireHTTPError(t, f.callback(t, firstBrowser.state, firstBrowser.cookie, "error=access_denied"), 400, "invalid_request")
 	for _, r := range []registrationResponse{
 		f.callback(t, testSecret(7), browser.cookie, "error=access_denied"),
 		f.callback(t, browser.state, "", "error=access_denied"),
@@ -70,6 +86,8 @@ func TestGitHubDenialStateBrowserAndConcurrentReplay(t *testing.T) {
 	if r.status != 302 || r.header.Get("Location") != returnURL || !strings.Contains(r.header.Get("Set-Cookie"), "Max-Age=0") {
 		t.Fatal("valid denial did not record and redirect")
 	}
+	// 进入 denied 等终态后严格拒绝再次打开授权页。
+	requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", nil), 400, "invalid_request")
 	requireHTTPError(t, f.complete(t, secret, id), 403, "github_authorization_denied")
 	requireHTTPError(t, f.callback(t, browser.state, browser.cookie, "code=not-a-grant"), 400, "invalid_request")
 
@@ -186,5 +204,74 @@ func TestGitHubFailureClosedAndNotRetried(t *testing.T) {
 	var row int
 	if err := f.db.Reader.QueryRowContext(context.Background(), "SELECT id FROM clients").Scan(&row); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatal("upstream failure created a seat")
+	}
+}
+
+func TestGitHubOptionalReturnToRendersStaticCompletionPage(t *testing.T) {
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	secret := testSecret(1)
+	for _, body := range []string{
+		`{"server_id":"` + serverID + `"}`,
+		`{"server_id":"` + serverID + `","return_to":null}`,
+		`{"server_id":"` + serverID + `","return_to":"   "}`,
+	} {
+		id := f.startWithBody(t, secret, body)
+		browser := f.open(t, id)
+		f.github.setGrant("ok-code", fakeGrant{challenge: browser.challenge, userJSON: `{"id":50,"login":"headless"}`})
+		cb := f.callback(t, browser.state, browser.cookie, "code=ok-code")
+		if cb.status != http.StatusOK ||
+			!strings.HasPrefix(cb.header.Get("Content-Type"), "text/html; charset=utf-8") ||
+			cb.header.Get("Content-Security-Policy") != "default-src 'none'; style-src 'unsafe-inline'" ||
+			cb.header.Get("Location") != "" ||
+			!strings.Contains(string(cb.body), "Authorization Complete") ||
+			!strings.Contains(string(cb.body), "授权已完成") {
+			t.Fatalf("approved static page: status=%d header=%+v body=%q", cb.status, cb.header, cb.body)
+		}
+		if got := identity(t, f.complete(t, secret, id)); got.Name != "headless" {
+			t.Fatalf("complete headless: %+v", got)
+		}
+	}
+	// 无 return_to 时取消授权也返回 200 静态提示页，并标记为 denied。
+	deniedID := f.startWithBody(t, secret, `{"server_id":"`+serverID+`"}`)
+	browser := f.open(t, deniedID)
+	cb := f.callback(t, browser.state, browser.cookie, "error=access_denied")
+	if cb.status != http.StatusOK ||
+		!strings.HasPrefix(cb.header.Get("Content-Type"), "text/html; charset=utf-8") ||
+		cb.header.Get("Content-Security-Policy") != "default-src 'none'; style-src 'unsafe-inline'" ||
+		!strings.Contains(string(cb.body), "Authorization Cancelled") ||
+		!strings.Contains(string(cb.body), "授权已取消") {
+		t.Fatalf("denied static page: status=%d header=%+v body=%q", cb.status, cb.header, cb.body)
+	}
+	requireHTTPError(t, f.complete(t, secret, deniedID), 403, "github_authorization_denied")
+}
+
+func TestGitHubLoopbackHTTPDowngradesCookieNameAndSecureFlag(t *testing.T) {
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	gh, err := registration.NewGitHub(registration.GitHubOptions{
+		PublicOrigin: "http://127.0.0.1:8080",
+		ClientID:     "loopback-id",
+		ClientSecret: "loopback-secret",
+	}, f.github)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := httpserver.NewRouter(quietLogger())
+	limiter, err := registration.NewRequestLimiter(defaultRegistrationSettings().requests, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := httpserver.MountRegistration(router, f.reg, gh, limiter, httpserver.RegistrationHTTPOptions{MaxBodyBytes: 4096}); err != nil {
+		t.Fatal(err)
+	}
+	id := f.start(t, testSecret(9), serverID, "")
+	req, _ := http.NewRequest(http.MethodGet, "/auth/github/authorize?request_id="+id, nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("loopback authorize: %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || !strings.HasPrefix(cookies[0].Name, "ranking-github-") || cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
+		t.Fatalf("loopback cookie: %+v", cookies)
 	}
 }
