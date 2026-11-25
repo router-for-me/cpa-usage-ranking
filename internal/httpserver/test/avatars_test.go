@@ -56,9 +56,27 @@ func TestBuiltinAvatarServing(t *testing.T) {
 	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-cache" || !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
 		t.Fatalf("catalog: %d %v", w.Code, w.Header())
 	}
-	if request("HEAD", "/avatars/images/001.webp", "").Body.Len() != 0 {
-		t.Fatal("HEAD returned a body")
+	assertAvatarCORS := func(t *testing.T, resp *httptest.ResponseRecorder) {
+		t.Helper()
+		if resp.Header().Get("Access-Control-Allow-Origin") != "*" ||
+			resp.Header().Get("Access-Control-Allow-Methods") != "GET, HEAD, OPTIONS" ||
+			resp.Header().Get("Access-Control-Allow-Headers") != "Accept, If-None-Match, Cache-Control" ||
+			resp.Header().Get("Access-Control-Expose-Headers") != "ETag, Retry-After" ||
+			resp.Header().Get("Cross-Origin-Resource-Policy") != "cross-origin" {
+			t.Fatalf("missing avatar cross-origin headers: %+v", resp.Header())
+		}
 	}
+	assertAvatarCORS(t, w)
+	headResp := request("HEAD", "/avatars/images/001.webp", "")
+	if headResp.Code != 200 || headResp.Body.Len() != 0 {
+		t.Fatal("HEAD returned a body or unexpected status")
+	}
+	assertAvatarCORS(t, headResp)
+	optResp := request("OPTIONS", "/avatars/images/001.webp", "")
+	if optResp.Code != http.StatusNoContent || optResp.Body.Len() != 0 {
+		t.Fatalf("OPTIONS avatar: %d %q", optResp.Code, optResp.Body.String())
+	}
+	assertAvatarCORS(t, optResp)
 	for _, path := range []string{"/avatars/", "/avatars/images/", "/avatars/images/067.webp", "/avatars/SOURCE.original.md", "/avatars/../catalog.json", "/avatars/%2e%2e/go.mod", "/avatars/images%5c001.webp", "/assets/avatars/images/001.webp"} {
 		w := request("GET", path, "")
 		if w.Code != http.StatusNotFound || !strings.Contains(w.Header().Get("Content-Type"), "application/json") || w.Header().Get("Cache-Control") != "no-store" {

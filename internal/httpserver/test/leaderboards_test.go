@@ -62,6 +62,30 @@ INSERT INTO daily_stats VALUES('2026-12-31',1,0,9007199254740993,10,0,0,0,0,1,1,
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "leaderboard_unavailable") {
 		t.Fatal(w.Code, w.Body)
 	}
+	assertPublicCORS := func(t *testing.T, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Header().Get("Access-Control-Allow-Origin") != "*" ||
+			w.Header().Get("Access-Control-Allow-Methods") != "GET, HEAD, OPTIONS" ||
+			w.Header().Get("Access-Control-Allow-Headers") != "Accept, If-None-Match, Cache-Control" ||
+			w.Header().Get("Access-Control-Expose-Headers") != "ETag, Retry-After" {
+			t.Fatalf("missing public CORS headers: %+v", w.Header())
+		}
+	}
+	assertPublicCORS(t, w)
+	headBeforeReady := httptest.NewRecorder()
+	router.ServeHTTP(headBeforeReady, httptest.NewRequest(http.MethodHead, "/v1/leaderboards/overall/today", nil))
+	if headBeforeReady.Code != 503 || headBeforeReady.Body.Len() != 0 {
+		t.Fatalf("HEAD before ready: %d %q", headBeforeReady.Code, headBeforeReady.Body.String())
+	}
+	assertPublicCORS(t, headBeforeReady)
+	opt := httptest.NewRecorder()
+	optReq := httptest.NewRequest(http.MethodOptions, "/v1/leaderboards/overall/today", nil)
+	optReq.Header.Set("Origin", "https://dashboard.example")
+	router.ServeHTTP(opt, optReq)
+	if opt.Code != http.StatusNoContent || opt.Body.Len() != 0 {
+		t.Fatalf("OPTIONS leaderboard: %d %q", opt.Code, opt.Body.String())
+	}
+	assertPublicCORS(t, opt)
 	for _, path := range []string{"/v1/leaderboards/other/today", "/v1/leaderboards/usage/2026-12-31"} {
 		w = request(http.MethodGet, path)
 		if w.Code != 400 || !strings.Contains(w.Body.String(), "invalid_parameter") {
@@ -138,5 +162,12 @@ INSERT INTO daily_stats VALUES('2026-12-31',1,0,9007199254740993,10,0,0,0,0,1,1,
 		if w.Code != 200 {
 			t.Fatalf("extra query rejected on %s: %d %s", path, w.Code, w.Body)
 		}
+		assertPublicCORS(t, w)
 	}
+	headReady := httptest.NewRecorder()
+	router.ServeHTTP(headReady, httptest.NewRequest(http.MethodHead, "/v1/leaderboards/usage/yesterday", nil))
+	if headReady.Code != 200 || headReady.Body.Len() != 0 || !strings.Contains(headReady.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("HEAD ready leaderboard: %d %q %+v", headReady.Code, headReady.Body.String(), headReady.Header())
+	}
+	assertPublicCORS(t, headReady)
 }
