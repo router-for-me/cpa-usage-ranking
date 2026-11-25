@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strconv"
 	"unicode/utf8"
 )
@@ -66,6 +67,81 @@ func (v *flexInt64) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// nullableFlexInt64 在明细可选计数字段中允许 null（解码为 0），其余规则与 flexInt64 一致。
+type nullableFlexInt64 int64
+
+func (v *nullableFlexInt64) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
+		*v = 0
+		return nil
+	}
+	var parsed flexInt64
+	if err := parsed.UnmarshalJSON(trimmed); err != nil {
+		return err
+	}
+	*v = nullableFlexInt64(parsed)
+	return nil
+}
+
+// nullableFlexFloat64 接受 null、有限非负 JSON 数字以及有限非负十进制数字字符串。
+type nullableFlexFloat64 struct {
+	value *float64
+}
+
+func (v *nullableFlexFloat64) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return ErrInvalid
+	}
+	if bytes.Equal(trimmed, []byte("null")) {
+		v.value = nil
+		return nil
+	}
+	var parsed float64
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil || !isNonNegativeDecimalFloatText(text) {
+			return ErrInvalid
+		}
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < 0 {
+			return ErrInvalid
+		}
+		parsed = f
+	} else {
+		if err := json.Unmarshal(trimmed, &parsed); err != nil {
+			return ErrInvalid
+		}
+		if math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 {
+			return ErrInvalid
+		}
+	}
+	v.value = &parsed
+	return nil
+}
+
+func isNonNegativeDecimalFloatText(text string) bool {
+	if text == "" {
+		return false
+	}
+	dot := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c == '.' {
+			if dot || i == 0 || i == len(text)-1 {
+				return false
+			}
+			dot = true
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 type rawReport struct {
 	SchemaVersion *int               `json:"schema_version"`
 	Revision      *flexInt64         `json:"revision"`
@@ -73,19 +149,19 @@ type rawReport struct {
 }
 
 type rawItem struct {
-	Model            *string   `json:"model"`
-	TotalTokens      flexInt64 `json:"total_tokens"`
-	InputTokens      flexInt64 `json:"input_tokens"`
-	OutputTokens     flexInt64 `json:"output_tokens"`
-	CacheReadTokens  flexInt64 `json:"cache_read_tokens"`
-	CacheWriteTokens flexInt64 `json:"cache_write_tokens"`
-	ReasoningTokens  flexInt64 `json:"reasoning_tokens"`
-	RequestCount     flexInt64 `json:"request_count"`
-	SuccessCount     flexInt64 `json:"success_count"`
-	TTFTAvgMS        *float64  `json:"ttft_avg_ms"`
-	TTFTSamples      flexInt64 `json:"ttft_samples"`
-	LatencyAvgMS     *float64  `json:"latency_avg_ms"`
-	LatencySamples   flexInt64 `json:"latency_samples"`
+	Model            *string             `json:"model"`
+	TotalTokens      nullableFlexInt64   `json:"total_tokens"`
+	InputTokens      nullableFlexInt64   `json:"input_tokens"`
+	OutputTokens     nullableFlexInt64   `json:"output_tokens"`
+	CacheReadTokens  nullableFlexInt64   `json:"cache_read_tokens"`
+	CacheWriteTokens nullableFlexInt64   `json:"cache_write_tokens"`
+	ReasoningTokens  nullableFlexInt64   `json:"reasoning_tokens"`
+	RequestCount     nullableFlexInt64   `json:"request_count"`
+	SuccessCount     nullableFlexInt64   `json:"success_count"`
+	TTFTAvgMS        nullableFlexFloat64 `json:"ttft_avg_ms"`
+	TTFTSamples      nullableFlexInt64   `json:"ttft_samples"`
+	LatencyAvgMS     nullableFlexFloat64 `json:"latency_avg_ms"`
+	LatencySamples   nullableFlexInt64   `json:"latency_samples"`
 }
 
 // Decode accepts exactly one schema-version-1 report. Semantic metric and
@@ -166,9 +242,9 @@ func decodeItem(data []byte) (Item, error) {
 		ReasoningTokens:  int64(raw.ReasoningTokens),
 		RequestCount:     int64(raw.RequestCount),
 		SuccessCount:     int64(raw.SuccessCount),
-		TTFTAvgMS:        raw.TTFTAvgMS,
+		TTFTAvgMS:        raw.TTFTAvgMS.value,
 		TTFTSamples:      int64(raw.TTFTSamples),
-		LatencyAvgMS:     raw.LatencyAvgMS,
+		LatencyAvgMS:     raw.LatencyAvgMS.value,
 		LatencySamples:   int64(raw.LatencySamples),
 	}, nil
 }

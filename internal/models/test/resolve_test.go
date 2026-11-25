@@ -26,7 +26,9 @@ func TestResolveExactNamesAliasesAndPaths(t *testing.T) {
 	}{
 		{"model", "model", "model", id},
 		{"\u00a0model  ", "model", "model", id},
+		{"\tmodel\n", "model", "model", id},
 		{"provider/route/model", "model", "model", id},
+		{strings.Repeat("prefix/", 25) + "model", "model", "model", id},
 		{"/provider//MODEL", "MODEL", "model", id},
 		{"vendor/model-20261001", "model-20261001", "model", id},
 		{"Model", "Model", "Model", otherID},
@@ -61,9 +63,9 @@ func TestResolveRejectsMalformedRawNames(t *testing.T) {
 	registry := register(t, db, item("model", []string{}, `{}`))
 	for _, raw := range []string{
 		"", "    ", "/", "vendor/", " vendor/  ",
-		"model\n", "\tmodel", "vendor/\x00model", "vendor/\u0085model",
+		"mo\ndel", "mod\tel", "vendor/\x00model", "vendor/\u0085model",
 		string([]byte{'x', '/', 0xff}), strings.Repeat("a", 129), strings.Repeat("界", 43),
-		"x/" + strings.Repeat("a", 127),
+		"x/" + strings.Repeat("a", 129),
 	} {
 		t.Run(raw, func(t *testing.T) {
 			if result, err := registry.Resolve(raw); !errors.Is(err, models.ErrInvalidReportedName) || result.Matched {

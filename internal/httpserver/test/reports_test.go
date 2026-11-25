@@ -177,7 +177,7 @@ func TestReportHTTPIdentityRevisionsWindowsAndRegistrationSwitch(t *testing.T) {
 	if aTotal != 10 || bTotal != 10 {
 		t.Fatalf("unknown client_id altered another seat: %d %d", aTotal, bTotal)
 	}
-	requireHTTPError(t, f.report(t, "2026-11-02", a, reportJSON, nil), 422, "invalid_day")
+	requireHTTPError(t, f.report(t, "2026-11-02", a, reportJSON, nil), 422, "future_day")
 	requireHTTPError(t, f.report(t, "2026-02-29", a, reportJSON, nil), 422, "invalid_day")
 	requireHTTPError(t, f.report(t, "2026-10-30", a, reportJSON, nil), 410, "expired_day")
 	requireHTTPError(t, f.report(t, day, "", reportJSON, nil), 401, "invalid_credential")
@@ -211,6 +211,18 @@ func TestReportHTTPIgnoresLegacyTierAndMergesDuplicateModels(t *testing.T) {
 	}
 	if totalTokens != 30 || reqCount != 6 {
 		t.Fatalf("duplicate models were not merged: tokens=%d requests=%d", totalTokens, reqCount)
+	}
+	// 单条异常模型名、null 可选计数与字符串耗时均值均不应导致整包拒收。
+	tolerantBody := `{"schema_version":1,"revision":"4","items":[` +
+		`{"model":"vendor/","total_tokens":"999","request_count":"5"},` +
+		`{"model":"alpha","total_tokens":"15","input_tokens":null,"output_tokens":null,"request_count":"2","success_count":"2","ttft_avg_ms":"125.5","ttft_samples":"2","latency_avg_ms":"320.25","latency_samples":"2"}` +
+		`]}`
+	expectRevision(t, f.report(t, "2026-11-01", secret, tolerantBody, nil), 200, "4")
+	if err := f.db.Reader.QueryRow(`SELECT total_tokens, request_count FROM daily_stats WHERE client_id=? AND day='2026-11-01' AND model_id=0`, client.ID).Scan(&totalTokens, &reqCount); err != nil {
+		t.Fatal(err)
+	}
+	if totalTokens != 15 || reqCount != 2 {
+		t.Fatalf("tolerant report persistence mismatch: tokens=%d requests=%d", totalTokens, reqCount)
 	}
 }
 
@@ -256,7 +268,7 @@ func TestReportHTTPBadInputLimitsAndIndependentHealth(t *testing.T) {
 		code    string
 	}{
 		{`{`, nil, 422, "invalid_report"},
-		{strings.Replace(reportJSON, `"input_tokens":"8"`, `"input_tokens":null`, 1), nil, 422, "invalid_report"},
+		{strings.Replace(reportJSON, `"revision":"1"`, `"revision":null`, 1), nil, 422, "invalid_report"},
 		{reportJSON + strings.Repeat(" ", 17), nil, 413, "request_too_large"},
 		{`{"schema_version":1,"revision":"1","items":[{},{}]}`, nil, 422, "too_many_items"},
 		{reportJSON, map[string]string{"Content-Type": "text/plain"}, 415, "unsupported_media_type"},

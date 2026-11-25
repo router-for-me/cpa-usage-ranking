@@ -40,15 +40,15 @@ func (r *Registry) Resolve(raw string) (Resolution, error) {
 
 // NormalizeReportedName validates and normalizes without consulting a catalog.
 func NormalizeReportedName(raw string) (string, error) {
-	if !utf8.ValidString(raw) || len(raw) > 128 || strings.IndexFunc(raw, unicode.IsControl) >= 0 {
-		return "", fmt.Errorf("%w: expected valid UTF-8 of at most 128 bytes without control characters", ErrInvalidReportedName)
-	}
 	name := strings.TrimSpace(raw)
 	if slash := strings.LastIndexByte(name, '/'); slash >= 0 {
 		name = name[slash+1:]
 	}
 	if name == "" {
 		return "", fmt.Errorf("%w: final name is empty", ErrInvalidReportedName)
+	}
+	if !utf8.ValidString(name) || len(name) > 128 || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("%w: expected valid UTF-8 of at most 128 bytes without control characters", ErrInvalidReportedName)
 	}
 	return name, nil
 }

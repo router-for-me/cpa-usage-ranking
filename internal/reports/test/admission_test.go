@@ -14,7 +14,7 @@ import (
 
 func TestReportClientRateCapacityExpiryAndClockRollback(t *testing.T) {
 	limits := reports.DefaultIngestionLimits()
-	if limits.MaxItems != 1024 || limits.ClientInterval != 10*time.Second || limits.ClientBurst != 10 {
+	if limits.MaxBodyBytes != 512<<10 || limits.MaxItems != 1024 || limits.ClientInterval != 10*time.Second || limits.ClientBurst != 10 {
 		t.Fatalf("unexpected default ingestion limits: %+v", limits)
 	}
 	limits.MaxClients = 1
