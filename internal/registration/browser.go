@@ -39,6 +39,10 @@ func (s *Service) Authorize(ctx context.Context, id string) (Authorization, erro
 			return Authorization{}, ErrRegistrationClosed
 		}
 	}
+	// 获取唯一 SQLite 写连接前按 request_id 限制高频重开，防止恶意轮换挤占日报写锁。
+	if err := s.authorizeLimiter.Admit(id); err != nil {
+		return Authorization{}, err
+	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return Authorization{}, err

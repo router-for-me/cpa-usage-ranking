@@ -75,10 +75,11 @@ func DefaultOptions() Options {
 }
 
 type Service struct {
-	reader  *sql.DB
-	writer  *sql.DB
-	catalog *avatars.Catalog
-	options Options
+	reader           *sql.DB
+	writer           *sql.DB
+	catalog          *avatars.Catalog
+	options          Options
+	authorizeLimiter *RequestLimiter
 }
 
 func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Service, error) {
@@ -88,7 +89,16 @@ func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Ser
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Service{reader: db.Reader, writer: db.Writer, catalog: catalog, options: options}, nil
+	authorizeLimiter, err := NewRequestLimiter(RequestLimits{
+		SourceRequests: 10,
+		GlobalRequests: 600,
+		Window:         time.Minute,
+		MaxSources:     max(options.Capacity, 2000),
+	}, options.Now)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{reader: db.Reader, writer: db.Writer, catalog: catalog, options: options, authorizeLimiter: authorizeLimiter}, nil
 }
 
 func opaqueToken() string {

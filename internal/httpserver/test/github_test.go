@@ -275,3 +275,35 @@ func TestGitHubLoopbackHTTPDowngradesCookieNameAndSecureFlag(t *testing.T) {
 		t.Fatalf("loopback cookie: %+v", cookies)
 	}
 }
+
+func TestGitHubAuthorizeReopenRateLimitedPerRequestID(t *testing.T) {
+	f := newRegistrationFixture(t, defaultRegistrationSettings())
+	id := f.start(t, testSecret(1), serverID, returnURL)
+	otherID := f.start(t, testSecret(2), serverID, returnURL)
+
+	// Prefetch requests must not consume authorize slots.
+	for range 5 {
+		resp := f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", map[string]string{"Purpose": "prefetch"})
+		if resp.status != http.StatusNoContent {
+			t.Fatalf("prefetch status: %d", resp.status)
+		}
+	}
+	last := f.open(t, id)
+	for i := 1; i < 10; i++ {
+		last = f.open(t, id)
+		if last.state == "" {
+			t.Fatalf("open %d produced empty state", i)
+		}
+	}
+	limited := f.api(t, "GET", "/auth/github/authorize?request_id="+id, "", "", nil)
+	requireHTTPError(t, limited, http.StatusTooManyRequests, "registration_rate_limited")
+	if limited.header.Get("Retry-After") == "" {
+		t.Fatal("missing Retry-After header on rate-limited authorize")
+	}
+	// Another request_id remains unaffected, and the last issued state on the limited request still works.
+	_ = f.open(t, otherID)
+	f.github.setGrant("after-limit", fakeGrant{challenge: last.challenge, userJSON: `{"id":99,"login":"ok"}`})
+	if cb := f.callback(t, last.state, last.cookie, "code=after-limit"); cb.status != http.StatusFound {
+		t.Fatalf("callback after rate-limited reopen: %d %s", cb.status, cb.body)
+	}
+}
