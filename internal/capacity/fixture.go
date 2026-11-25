@@ -168,6 +168,14 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 	if err != nil {
 		return f, err
 	}
+	cleanupCreated := true
+	defer func() {
+		if cleanupCreated {
+			_ = os.Remove(path)
+			_ = os.Remove(path + "-wal")
+			_ = os.Remove(path + "-shm")
+		}
+	}()
 	if err = file.Close(); err != nil {
 		return f, err
 	}
@@ -187,7 +195,10 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 	if err = reports.AdvanceWindow(ctx, db.Writer, now); err != nil {
 		return f, err
 	}
-	body, _ := f.Snapshot(1, 2)
+	body, err := f.Snapshot(1, 1)
+	if err != nil {
+		return f, err
+	}
 	report, err := reports.Decode(body)
 	if err != nil {
 		return f, err
@@ -336,6 +347,7 @@ func seed(ctx context.Context, path, catalogPath string, clients, historyDays, b
 	if _, err = db.Writer.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		return f, err
 	}
+	cleanupCreated = false
 	return f, nil
 }
 
