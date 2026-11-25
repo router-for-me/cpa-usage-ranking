@@ -10,26 +10,32 @@
 
 ### 解析与存储规则
 
-- 启动时在单事务内将全部标准 `model_name` 注册到 SQLite `models` 字典表，分配稳定正整数 ID（ID `0` 保留给内部全模型总计）。移除模型后历史字典行保留但不参与活跃匹配，重新加入时恢复原 ID。别名与价格不写入数据库。
-- 处理[日累计快照上报](integration.zh.md#utc-日累计快照上报)时，解析器校验合法 UTF-8、拒绝控制字符、限制 128 字节、去除首尾空白并剥离最后一个 `/` 之前的路径前缀，随后按**精确、区分大小写**匹配标准名与别名（不做大小写折叠、Unicode 归一化或自动去除版本后缀）。
-- 命中的别名归并到对应标准模型 ID；合法但未匹配的模型静默跳过，不计入总量且不写入 SQLite。当前不提供模型管理 HTTP API。
+- 启动时在单事务内将全部标准 `model_name` 注册到 SQLite `models` 字典表，分配稳定正整数 ID（ID `0` 保留给内部全模型总计），并保留标准名原始大小写用于落盘与展示。移除模型后历史字典行保留但不参与活跃匹配，重新加入时恢复原 ID。别名与价格不写入数据库。
+- 目录查找索引统一按 **ASCII 小写**构建；加载时严格拒绝跨模型的大小写名称/别名冲突。
+- 处理[日累计快照上报](integration.zh.md#utc-日累计快照上报)时，解析器先清理首尾空白并剥离最后一个 `/` 之前的路径前缀，再仅对最终模型段校验非空、合法 UTF-8、`≤128` 字节且无控制字符。匹配时先按不区分 ASCII 大小写查找标准名与别名；若未命中，则按受控白名单最多剥离两层末尾网关模式/渠道后缀后回退匹配：
+  - 冒号渠道后缀：`:free`、`:thinking`、`:online`、`:nitro`、`:floor`、`:extended`、`:beta`、`:exacto`
+  - 方括号上下文后缀：`[1m]`、`[2m]`
+  - 圆括号思考预算后缀：`(minimal)`、`(low)`、`(medium)`、`(high)`、`(xhigh)`、`(max)`、`(none)`、`(off)`、`(auto)` 或 `(<1..8 位纯数字>)`
+  - 连字符思考/分层后缀：`-minimal`、`-low`、`-medium`、`-high`、`-xhigh`、`-thinking`、`-nothinking`、`-non-thinking`、`-tiered`
+  - **严禁自动剥离**日期后缀、`-max` 与 `-latest`；官方日期快照变体继续由 `models.json` 的 `alias` 清单精确维护。
+- 命中的名称与别名归并到对应标准模型 ID；未命中或单条格式异常的模型名会在聚合阶段静默跳过，不会连坐拒收同一快照中的合法模型，也不会写入 SQLite。当前不提供模型管理 HTTP API。
 
 ### 文件格式与参考价格
 
 - 顶层字段：可选参考元数据 `currency`（默认 `"USD"`）、`price_unit`（默认 `"per_million_tokens"`）以及必填 `models`（每项包含必填 `model_name` 与可选 `alias`、`prices`）。
-- 模型名与别名全局无冲突，别名不能占用其他模型的标准名。
+- 模型名与别名全局无大小写冲突，别名不能占用其他模型的标准名或别名。
 - `prices` 可选地将 `default`、`priority`、`flex` 映射为 `{input, output, cache_read, cache_write}` 非负十进制字符串（缺失或 `null` 表示未知，`"0"` 表示显式免费；缺失的档位不继承 `default`；未知档位或 `null` 档位会被忽略）。
 - 价格档位仅作目录元数据参考，**不是**上报或统计维度（日快照中若携带 `service_tier` 会被静默忽略），服务端不执行计费或成本估算。
 - `config/model-sources.json` 记录随库发布参考价格的来源链接与采集日期；运行时仅加载 `config/models.json`。
 
 ## 头像目录
 
-服务端二进制内置 `internal/avatars/assets/catalog.json` 与 66 张 `128×128` WebP 静态头像（`images/001.webp`–`images/066.webp`，默认 ID 为 `1`，来源说明见 [PROVENANCE.md](../internal/avatars/assets/PROVENANCE.md)）。运行时无需外部目录；客户端可读取 `/avatars/catalog.json` 渲染注册头像选择器，并在 [`POST /v1/clients/register/start`](integration.zh.md#第一步开始注册start) 提交可选的十进制字符串 `avatar_id`（不支持自定义上传或注册后修改头像）。
+服务端二进制内置 `internal/avatars/assets/catalog.json` 与 66 张 `128×128` WebP 静态头像（`images/001.webp`–`images/066.webp`，默认 ID 为 `1`，来源说明见 [PROVENANCE.md](../internal/avatars/assets/PROVENANCE.md)）。运行时无需外部目录；客户端可读取 `/avatars/catalog.json` 渲染注册头像选择器，并在 [`POST /v1/clients/register/start`](integration.zh.md#第一步开始注册start) 提交可选的十进制字符串 `avatar_id`（重新授权时若用户未主动修改头像请省略 `avatar_id`，以免覆盖老席位已有头像）；不支持自定义上传或独立修改头像接口。
 
 ### 公开 HTTP 接口
 
-- `GET` / `HEAD /avatars/catalog.json`：返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`，带 `Cache-Control: no-cache` 与内容 `ETag`。
-- `GET` / `HEAD /avatars/{path}`：返回 WebP 图片二进制，带 `Cache-Control: public, max-age=3600, must-revalidate`、`ETag` 与条件请求 `304 Not Modified`。
+- `GET` / `HEAD` / `OPTIONS /avatars/catalog.json`：返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`，带 `Cache-Control: no-cache`、内容 `ETag`、公开只读 CORS 响应头与 `Cross-Origin-Resource-Policy: cross-origin`。
+- `GET` / `HEAD` / `OPTIONS /avatars/{path}`：返回 WebP 图片二进制，带 `Cache-Control: public, max-age=3600, must-revalidate`、`ETag`、条件请求 `304 Not Modified`、公开只读 CORS 响应头与 `Cross-Origin-Resource-Policy: cross-origin`。
 - 仅暴露清单白名单内的文件；目录、来源文件、未知路径及路径穿越均返回 JSON `404`。`/assets/` 为前端独立静态命名空间。
 
 ### 清单格式与扩展约定

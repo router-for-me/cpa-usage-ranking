@@ -10,15 +10,15 @@
 
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA `server_id`、`return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
-| `POST` | `/v1/clients/register/complete` | 同一 `Bearer <secret>` | GitHub 授权后完成注册 |
+| `POST` | `/v1/clients/register/start` | 本端 `Bearer <secret>` | 提交 CPA `server_id`、可选 `return_to` 与可选 `avatar_id`，获取 `request_id` 和 `authorize_url` |
+| `POST` | `/v1/clients/register/complete` | 同一 `Bearer <secret>` | GitHub 授权后完成注册（自动同步最新昵称与显式所选头像） |
 | `POST` | `/v1/clients/withdraw` | 已注册的 `Bearer <secret>` | 退出整个席位 |
 | `PUT` | `/v1/clients/report/{utc_day}` | 已注册的 `Bearer <secret>` | 原子替换该席位某个 UTC 日的完整累计快照 |
-| `GET` | `/v1/leaderboards/{board}/{period}` | 无需 | 读取最新发布的公开缓存榜单（最多 100 名） |
-| `GET` / `HEAD` | `/avatars/catalog.json` | 无需 | 获取头像清单、默认 ID 及相对图片路径 |
-| `GET` / `HEAD` | `/avatars/{path}` | 无需 | 获取 WebP 头像二进制（`HEAD` 仅返回响应头） |
-| `GET` | `/healthz` | 无需 | 存活探针（`200 {"status":"ok"}`） |
-| `GET` | `/readyz` | 无需 | 就绪探针（数据库、目录及首轮缓存就绪返回 `200`，否则 `503`） |
+| `GET` / `HEAD` / `OPTIONS` | `/v1/leaderboards/{board}/{period}` | 无需 | 读取最新发布的公开缓存榜单（最多 100 名；支持公开只读 CORS） |
+| `GET` / `HEAD` / `OPTIONS` | `/avatars/catalog.json` | 无需 | 获取头像清单、默认 ID 及相对图片路径（支持 CORS 与跨站资源加载） |
+| `GET` / `HEAD` / `OPTIONS` | `/avatars/{path}` | 无需 | 获取 WebP 头像二进制（`HEAD` 仅返回响应头；支持 CORS 与跨站资源加载） |
+| `GET` / `HEAD` | `/healthz` | 无需 | 存活探针（`200 {"status":"ok"}`） |
+| `GET` / `HEAD` | `/readyz` | 无需 | 就绪探针（数据库、目录及首轮缓存就绪返回 `200`，否则 `503`） |
 
 浏览器在授权期间还会经由 `/auth/github/authorize` 与 `/auth/github/callback` 跳转，它们是浏览器重定向路由而非上报客户端 JSON API。未就绪或运行中 SQLite 不可用时，`/readyz` 返回 `503 {"status":"not_ready","reason":"initializing_or_unavailable"}`（非业务 `error.code` 信封）。
 
@@ -49,16 +49,16 @@ sequenceDiagram
     participant R as Ranking 服务端
     participant G as GitHub
     Note over C: 本地生成并持久化 32 字节 Bearer 凭据
-    C->>R: POST /v1/clients/register/start（server_id、return_to、avatar_id?、Bearer）
+    C->>R: POST /v1/clients/register/start（server_id、return_to?、avatar_id?、Bearer）
     R-->>C: 200 {request_id, authorize_url}（此时未建立席位）
     C->>B: 打开完整 authorize_url
     B->>R: GET /auth/github/authorize
-    R-->>B: 写入一次性 state、PKCE 与浏览器 Cookie 并跳转 GitHub
+    R-->>B: 写入 state、PKCE 与浏览器 Cookie 并跳转 GitHub（回调核销前可重开）
     B->>G: 用户同意或拒绝授权
     G-->>B: 回调至 /auth/github/callback
     B->>R: GET /auth/github/callback
     R->>G: 服务端换码并读取 GitHub 数字用户 ID
-    R-->>B: 记录结果后原样跳回 return_to（不附加参数）
+    R-->>B: 记录结果后跳回 return_to（省略时展示静态完成页）
     C->>R: POST /v1/clients/register/complete（request_id、原 Bearer）
     R-->>C: 201 新席位 / 200 复用或恢复 / 202 待授权 / 业务错误
 ```
@@ -77,16 +77,18 @@ Content-Type: application/json
 }
 ```
 
-- `server_id`：CPA 实例的持久、非零 `8-4-4-4-12` 十六进制 UUID（不区分大小写，落盘转小写；对应 CPA 配置项 `server.server-id`，可通过 CPA 的 `GET /v8/management/server/server-id` 或任意已鉴权管理接口响应头 `X-CPA-SERVER-ID` 获取）。同一 CPA 实例下的多个采集端须提交相同 `server_id`，不要各自随机生成。
-- `return_to`：不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
-- `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`）或正 JSON 整数（例如 `12`），须存在于 `GET /avatars/catalog.json` 目录中。省略或传 `null` 时默认使用目录的 `default_avatar_id`（`"1"`）。格式错误（如 `""`、`"0"`、`0`、负数、前导零、非数字）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
+- `server_id`：CPA 实例的持久、非零 UUID（自动清理首尾空白，同时兼容标准 36 位连字符 `8-4-4-4-12` 与 32 位无连字符十六进制 UUID，落盘规范化为 36 位小写连字符格式，仍拒绝全零 UUID；对应 CPA 配置项 `server.server-id`，可通过 CPA 的 `GET /v8/management/server/server-id` 或任意已鉴权管理接口响应头 `X-CPA-SERVER-ID` 获取）。同一 CPA 实例下的多个采集端须提交相同 `server_id`，不要各自随机生成。
+- `return_to`（可选）：无界面/CLI 客户端可直接省略、传 `null` 或空白字符串——回调核销完成后，服务端将直接返回极简静态中英双语提示页（`200 OK`、`text/html; charset=utf-8`、严格 CSP），提示授权已完成或已取消、可关闭标签页返回客户端。非空时仍须为不含用户信息的绝对 `http` 或 `https` URL（支持 `localhost`、局域网 IP、公网 IP 及域名，保留端口、路径、查询串与锚点）。切勿在其中携带密钥。
+- `avatar_id`（可选）：无前导零的正 64 位整数十进制字符串（例如 `"12"`，字符串形式自动清理首尾空白）或正 JSON 整数（例如 `12`），须存在于 `GET /avatars/catalog.json` 目录中。当用户未主动选择头像时（如无界面模式、自动重连恢复或同席位新增采集端），请直接**省略 `avatar_id` 或传 `null`**，切勿硬编码默认传 `"1"`——新建席位会自动使用目录默认头像（`"1"`），已有席位则会保留原头像不被覆盖。格式错误（如 `""`、`"0"`、`0`、负数、前导零、非数字）返回 `400 invalid_request`；正整数合法但不在目录中返回 `422 invalid_avatar`。
 - `200 OK` 返回 `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`。保存 `request_id`（最长 10 分钟有效；当全站 2,000 笔容量满时，`denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，提前回收后 `complete` 返回 `410 registration_request_expired`，客户端可保留原 Bearer 凭据重新开始注册，无需等满 10 分钟），并在用户浏览器中原样打开 `authorize_url`。此步骤不创建席位也不授予写入权限。
 
 #### 第二步：浏览器授权
 
-- 服务端通过 `Secure; HttpOnly; SameSite=Lax` Cookie、一次性 state 与 `S256` PKCE 绑定浏览器会话。
+- 服务端通过 `HttpOnly; SameSite=Lax` Cookie（生产 HTTPS 为带 `Secure` 的 `__Host-ranking-github-<state>`；本地回环 HTTP 联调自动降级为不带 `Secure` 的 `ranking-github-<state>`）、会话 `state` 与 `S256` PKCE 绑定浏览器会话。
+- 带有 `Purpose` 或 `Sec-Purpose` 含 `prefetch` 的链接预览/预取请求会直接返回 `204 No Content`（`Cache-Control: no-store`），不消耗也不轮换授权状态。
+- 在进入回调核销之前（`pending` 或 `authorizing` 且未过期），用户可重复打开 `authorize_url` 重新签发最新 `(state, 浏览器 Cookie, PKCE)`，避免远程 CLI 链接被聊天预览或误关标签页作废；进入 `verifying` 及终态后仍严格拒绝重入。
 - 服务端用回调授权码向 GitHub 换取访问令牌并读取数字用户 ID，不申请仓库或邮箱权限，也不持久化 GitHub Token。
-- 记录同意或拒绝后，服务端带 `Referrer-Policy: no-referrer` 原样跳回 `return_to`（不附加任何参数），且绝不会从服务端主动请求 `return_to`。浏览器回跳**不是**注册成功的确认凭证。
+- 记录同意或拒绝后，服务端带 `Referrer-Policy: no-referrer` 响应：若保存了 `return_to` 则 `302 Found` 原样跳回（不附加任何参数），若省略了 `return_to` 则直接渲染静态中英双语提示页。服务端绝不会主动请求 `return_to`，浏览器回跳**不是**注册成功的确认凭证。
 
 #### 第三步：完成注册（Complete）
 
@@ -108,9 +110,10 @@ Content-Type: application/json
 {"client_id": "42", "display_name": "Alice", "avatar_id": "12"}
 ```
 
-**席位归属、资料与恢复规则：**
-- **席位主键**：由 **`(GitHub 数字用户 ID, server_id)`** 唯一确定。同一组合新增上报端时共用席位，不改动现有资料；同一凭据不可改绑到其他席位。
-- **初始资料**：新建席位（`201 Created`）取 GitHub `name`（为空或不含可见字符时回退至 `login`），经 Unicode NFKC 规范化、清理控制/行段分隔与双向控制字符、去首尾空白并按完整码点边界安全截断至 `≤32` 码点且 `≤128` UTF-8 字节（须含可见内容），同时保存 `start` 传入的 `avatar_id`（未传则取目录默认项）。复用已有席位（`200 OK`）时保持原昵称与头像不变。允许重名，展示时按纯文本转义渲染；不同步 GitHub 头像，也无注册后资料修改接口。
+**席位归属、资料同步与恢复规则：**
+- **席位主键**：由 **`(GitHub 数字用户 ID, server_id)`** 唯一确定。同一组合新增上报端时共用席位；同一凭据不可改绑到其他席位。
+- **授权完成自动同步资料**：每次走完 GitHub 授权并完成绑定（含 `201 Created` 新建席位、以及 `200 OK` 已有席位重授权或退榜重回）时，服务端取本次拉取的 GitHub `name`（为空或不含可见字符时回退至 `login`），经 Unicode NFKC 规范化、清理控制/行段分隔与双向控制字符、去首尾空白并按完整码点边界安全截断至 `≤32` 码点且 `≤128` UTF-8 字节（须含可见内容），自动更新到 `clients.display_name`。若本次 `start` 显式提交了 `avatar_id`，则同步更新 `clients.avatar_id`；若未提交（省略或 `null`），新席位取目录默认头像（`"1"`），老席位保留原头像不变。**客户端提醒：用户未主动选择头像时请省略 `avatar_id`，不要硬编码默认传 `"1"`。** 发生退榜恢复、昵称变更或头像变更时，事务提交后会自动触发异步榜单缓存刷新。允许重名，展示时按纯文本转义渲染；不同步 GitHub 头像，也不单独提供日常改资料接口。
+- **关闭新注册时放行老凭据**：当已配置 GitHub OAuth 且 `RANKING_REGISTRATION_ENABLED=false` 时，已在 `client_writers` 绑定过的老凭据仍可正常执行 `start` → `authorize` → `complete`（支持老设备丢包重试与退榜重回），仅陌生未绑定凭据返回 `503 registration_closed`。
 - **丢包恢复**：`start` 响应丢失时用原凭据重新开始注册；`complete` 超时或丢包时，在记录尚未过期且未被容量淘汰前可用原 `request_id` 和原凭据重试；若已过期或在全站 2,000 笔容量满时被提前回收（返回 `410 registration_request_expired`），保留**原凭据**直接重新执行 `start` → 授权 → `complete`（须使用同一 GitHub 账号与 `server_id`，无需等满 10 分钟）。
 - **GitHub 换码失败**：若服务端换取令牌或查询 GitHub 用户失败，该事务会被标记为 `failed`；该记录仍保留期间重试同一 `request_id` 返回 `500 internal_error`，到期或在容量满时被提前回收后返回 `410 registration_request_expired`。待上游恢复后，请使用**原 Bearer 凭据 + 新 `request_id`** 重新开始注册并授权，无需等满 10 分钟。
 - **封禁、退出与撤销授权**：`disabled`（管理员封禁）无法由客户端通过重试或重新授权解除，但可由管理员解封；若主动退出的席位同时被封禁，完成新注册时返回 `403 client_disabled`。管理员解封不会自动恢复退出的席位。在 GitHub 撤销 OAuth 授权**不会**撤销已绑定的上报端；停用整个席位请调用 `POST /v1/clients/withdraw`。
@@ -124,7 +127,7 @@ Authorization: Bearer <已注册的 Bearer 凭据>
 
 - 返回 `204 No Content` 表示整席退出已落库（同一席位任意上报端重复调用均幂等返回 `204`；可选查询参数或如 `{}` 等小体积请求体会被忽略，绝不覆盖 Bearer 鉴权身份）。
 - 退出立即阻止该席位**所有上报端**继续上报。席位仍处于退出状态时，重试已完成的注册请求会返回 `403 client_withdrawn`，不会恢复席位。下一次成功发布榜单缓存后，该席位将从全部榜单与评分参考样本中移除；其他席位不受影响。
-- **如需恢复**，用同一 GitHub 账号和 `server_id` 重新执行 `start` → GitHub 授权 → `complete`，可使用本席位已有的 Bearer 或新凭据。席位未被封禁时，`complete` 返回 `200` 与原 `client_id`。所有已绑定的上报端均可继续上报；原昵称、头像、`ranking_hidden`、历史统计及已有上报端的 `revision` 保持不变。
+- **如需恢复**，用同一 GitHub 账号和 `server_id` 重新执行 `start` → GitHub 授权 → `complete`，可使用本席位已有的 Bearer 或新凭据。席位未被封禁时，`complete` 返回 `200` 与原 `client_id`，同步最新 GitHub 昵称（仅当显式传入 `avatar_id` 时更新头像），同时保留 `ranking_hidden`、历史统计及已有上报端的 `revision`。所有已绑定的上报端均可继续上报。
 
 ## UTC 日累计快照上报
 
@@ -149,11 +152,11 @@ sequenceDiagram
 
 ### 上报窗口与聚合约定
 
-- `{utc_day}` 须为 **UTC 时区**的 `YYYY-MM-DD`（非客户端本地日期），且仅允许 **UTC 今日或昨日**。未来日期返回 `422 invalid_day`，已封窗的历史日期返回 `410 expired_day`。
+- `{utc_day}` 须为 **UTC 时区**的 `YYYY-MM-DD`（非客户端本地日期），且仅允许 **UTC 今日或昨日**。未来 UTC 日期返回 `422 future_day`（与格式非法的 `422 invalid_day` 区分），已封窗的历史日期返回 `410 expired_day`。
 - 每次 `PUT` 必须提交该席位、该 UTC 日的**完整累计统计**，而非单条事件或本次增量。客户端重启后须恢复当日完整汇总后再上报。
-- 推荐先在本地按标准模型合并来源，每个标准模型汇总为一条记录（旧版 `service_tier` 字段会被静默忽略）。若同一份快照中出现多条指向同一标准模型的明细（含重复名称、前缀差异或别名），服务端会按加法自动合并。
+- 推荐先在本地按标准模型合并来源，每个标准模型汇总为一条记录（旧版 `service_tier` 字段会被静默忽略）。若同一份快照中出现多条指向同一标准模型的明细（含重复名称、前缀差异、大小写差异、别名或网关后缀），服务端会按加法自动合并。
 - `ttft_avg_ms` 与 `latency_avg_ms` 须按耗时总和除以各自真实样本数计算（合并分组时按样本加权，切勿对各组均值再求平均）；无样本时均值传 `null`、样本数传 `"0"`，切勿补零。
-- 模型名去除最后一个 `/` 之前的前缀后，按**精确、区分大小写**匹配[模型目录](catalogs.zh.md#模型目录)。合法但未匹配的模型会被静默跳过、不计入总量，服务端不返回被忽略列表；任一项格式非法（含未知模型）均会拒绝整份快照。
+- 模型名先清理首尾空白并去除最后一个 `/` 之前的前缀，再按**不区分 ASCII 大小写**匹配[模型目录](catalogs.zh.md#模型目录)（未直接命中时最多剥离两层受控白名单末尾网关模式/渠道后缀回退匹配）。未命中或单条异常模型名会在聚合阶段静默跳过，不再连坐拒绝整份快照中的合法模型（非法 UTF-8、负数计数、非有限浮点与聚合溢出仍会拒绝整包）。
 
 ### 请求结构与校验规则
 
@@ -187,21 +190,21 @@ Content-Type: application/json
 }
 ```
 
-下表给出标准的 13 字段明细口径（推荐用十进制字符串传递 64 位计数以避免前端精度丢失）。为兼容不同客户端实现，服务端同时接受 JSON 整数与十进制字符串形式的计数/修订号，省略的可选计数字段默认为 `0`、省略的均值字段默认为 `null`，并忽略未知扩展字段（含旧版 `service_tier`）；非法 UTF-8、类型错误、负数、整数溢出或尾随多余 JSON 仍会被拒绝。
+下表给出标准的 13 字段明细口径（推荐用十进制字符串传递 64 位计数以避免前端精度丢失）。为兼容不同客户端实现，服务端同时接受 JSON 整数与十进制字符串形式的计数/修订号，明细可选计数字段省略或传 `null` 均按 `0` 处理（顶层 `revision` 仍拒绝 `null`），`ttft_avg_ms` 与 `latency_avg_ms` 兼容 `null`、有限非负数字及有限非负十进制数字字符串（如 `"320.5"`），并忽略未知扩展字段（含旧版 `service_tier`）；非法 UTF-8、类型错误、负数、整数溢出或尾随多余 JSON 仍会被拒绝。
 
 | 字段 | 层级 | JSON 类型 | 约束说明 |
 | --- | --- | --- | --- |
 | `schema_version` | 顶层 | 整数 | 固定为 `1` |
-| `revision` | 顶层 | 十进制字符串 | 本上报端当日单调递增的 int64（`0` 至 `9223372036854775807`） |
+| `revision` | 顶层 | 十进制字符串 | 本上报端当日单调递增的 int64（`0` 至 `9223372036854775807`），不接受 `null` |
 | `items` | 顶层 | 数组 | 完整日快照；空数组 `[]` 清空当日已匹配统计并推进修订号 |
-| `model` | 明细项 | 字符串 | 非空合法 UTF-8，≤128 字节，无控制字符，去路径后非空 |
-| `total_tokens` | 明细项 | 十进制字符串 | `>= input_tokens + output_tokens`（可包含未归类余量） |
-| `input_tokens`<br>`output_tokens` | 明细项 | 十进制字符串 | 非负 int64 |
-| `cache_read_tokens`<br>`cache_write_tokens` | 明细项 | 十进制字符串 | `cache_read_tokens + cache_write_tokens <= input_tokens` |
-| `reasoning_tokens` | 明细项 | 十进制字符串 | `reasoning_tokens <= output_tokens` |
-| `request_count`<br>`success_count` | 明细项 | 十进制字符串 | `success_count <= request_count`；非零用量必须有 `request_count > 0` |
-| `ttft_avg_ms`<br>`latency_avg_ms` | 明细项 | 数字或 `null` | 有样本时有限且 `>= 0`；样本数为 `"0"` 时必须为 `null` |
-| `ttft_samples`<br>`latency_samples` | 明细项 | 十进制字符串 | 各自 `<= request_count` |
+| `model` | 明细项 | 字符串 | 合法 UTF-8；去首尾空白与最后一个 `/` 前缀后的末段（≤128 字节、无控制字符）参与匹配，异常或未知模型静默跳过 |
+| `total_tokens` | 明细项 | 十进制字符串 / 整数 / `null` | `>= input_tokens + output_tokens`（可包含未归类余量）；省略或 `null` 按 `0` 处理 |
+| `input_tokens`<br>`output_tokens` | 明细项 | 十进制字符串 / 整数 / `null` | 非负 int64（省略或 `null` 按 `0` 处理） |
+| `cache_read_tokens`<br>`cache_write_tokens` | 明细项 | 十进制字符串 / 整数 / `null` | `cache_read_tokens + cache_write_tokens <= input_tokens`（省略或 `null` 按 `0` 处理） |
+| `reasoning_tokens` | 明细项 | 十进制字符串 / 整数 / `null` | `reasoning_tokens <= output_tokens`（省略或 `null` 按 `0` 处理） |
+| `request_count`<br>`success_count` | 明细项 | 十进制字符串 / 整数 / `null` | `success_count <= request_count`；非零用量必须有 `request_count > 0`（省略或 `null` 按 `0` 处理） |
+| `ttft_avg_ms`<br>`latency_avg_ms` | 明细项 | 数字、十进制字符串或 `null` | 有限且 `>= 0`（如 `320.5` 或 `"320.5"`）；样本数为 `"0"` 时自动忽略 |
+| `ttft_samples`<br>`latency_samples` | 明细项 | 十进制字符串 / 整数 / `null` | 各自 `<= request_count`（省略或 `null` 按 `0` 处理） |
 
 十进制字符串不得带 `+` 号（建议不带前导零）。若因上游统计口径差异导致非负字段之间出现轻微不一致（如 `cache_read_tokens + cache_write_tokens > input_tokens`、`reasoning_tokens > output_tokens`、`input_tokens + output_tokens > total_tokens`、`success_count > request_count`、样本数与均值/请求数不匹配或有正用量但 `request_count` 为 `"0"`），服务端会自动执行下界补齐与安全钳制而不再整包拒收；负数、非有限浮点数以及整数或浮点聚合溢出仍会拒绝整份快照。
 
@@ -228,6 +231,7 @@ Content-Type: application/json
 ```
 
 **客户端可靠性约定：**
+- **推荐 `revision` 策略**：推荐使用单调递增的 UTC 毫秒时间戳作为当日 `revision`，避免客户端重装后低序号冲突；若持有当日完整权威统计并收到 `409 revision_conflict`，可读取响应顶层 `revision` 加 1 重发。
 - 发送前先持久化待发的 `{utc_day, revision, payload}`；仅当 HTTP 为 `200` **且**响应中的 `revision` 与本次请求发送的值**数值相等**时才标记成功（例如合法请求 `"001"` 会回执规范形式 `"1"`）。
 - 超时、连接中断或响应无法解析不代表写入失败：保留原 `revision` 与完整正文，有界退避重试。
 - 更高修订号可以下调统计或删除模型项；`items: []` 会清空当日已匹配统计。**切勿用空数组表示临时采集失败，也不要拆成多次增量 `PUT`。**
@@ -298,14 +302,15 @@ GET /v1/leaderboards/{board}/{period}
 
 - `board`：`overall`、`usage`、`cache`、`success`、`ttft`
 - `period`：`today`、`yesterday`、`week`（上一完整 UTC 自然周，周一起）、`month`（上一完整 UTC 自然月）、`year`（当前 UTC 自然年）、`all`（累计）
+- 支持 `GET`、`HEAD` 与 `OPTIONS`（`204 No Content`），并内置匿名公开只读 CORS 响应头（`Access-Control-Allow-Origin: *`、`Access-Control-Allow-Methods: GET, HEAD, OPTIONS`、`Access-Control-Allow-Headers: Accept, If-None-Match, Cache-Control`、`Access-Control-Expose-Headers: ETag, Retry-After`），便于第三方纯前端面板直接在浏览器中跨站拉取榜单。
 - 附加 URL 查询参数会被忽略（不提供分页或模型筛选）。
 - `client_id`、`avatar_id`、`metric` 均为十进制字符串（用量为整数，其余保留两位小数）；`rank` 为 JSON 整数，采用竞争排名（`1, 1, 3`）。仅 `overall` 条目附带 `details` 对象（`total_tokens`、`request_count`、`success_rate`、`cache_read_rate`、`ttft_mean_ms`、`latency_mean_ms`）。
 - 完整响应格式、五维评分公式与前端格式化规则见[排行榜与评分规则](leaderboards.zh.md)。
 
 ### 头像清单与图片
 
-- `GET /avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`。客户端可据此渲染注册头像选择器并默认选中 `default_avatar_id`；清单中 `avatar_id` 为 JSON 整数，`POST /v1/clients/register/start` 同时接受十进制字符串（推荐，与注册、榜单响应一致）与正 JSON 整数。
-- 将 `path` 相对 `/avatars/` 解析（例如 `/avatars/images/001.webp`），通过 `GET` 获取 `image/webp` 二进制图片或 `HEAD` 检查响应头，切勿按 ID 自行拼接路径。清单和图片均支持 `ETag` 条件请求（`304 Not Modified`）。详见[模型、头像与品牌资源目录](catalogs.zh.md#头像目录)。
+- `GET` / `HEAD` / `OPTIONS` `/avatars/catalog.json` 返回 `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`。客户端可据此渲染注册头像选择器并默认选中 `default_avatar_id`；清单中 `avatar_id` 为 JSON 整数，`POST /v1/clients/register/start` 同时接受十进制字符串（推荐，与注册、榜单响应一致）与正 JSON 整数。
+- 将 `path` 相对 `/avatars/` 解析（例如 `/avatars/images/001.webp`），通过 `GET` 获取 `image/webp` 二进制图片或 `HEAD` 检查响应头，切勿按 ID 自行拼接路径。清单和图片均支持 `ETag` 条件请求（`304 Not Modified`）、公开只读 CORS 响应头以及 `Cross-Origin-Resource-Policy: cross-origin`，供外部网页直接跨站展示。详见[模型、头像与品牌资源目录](catalogs.zh.md#头像目录)。
 
 ### 完成标志与非保证边界
 
@@ -331,6 +336,7 @@ GET /v1/leaderboards/{board}/{period}
 | --- | --- | --- |
 | `202` | —（含 `Retry-After` 头） | 等待浏览器授权；按间隔用原 `request_id` 与原 Bearer 重试 `complete` |
 | `400` / `422` | `invalid_request`、`invalid_source`<br>`invalid_parameter`、`invalid_day`<br>`invalid_report`、`too_many_items` | 修正参数或正文，不要原样无限重试 |
+| `422` | `future_day` | 目标 `{utc_day}` 晚于服务端 UTC 今日（例如跨 UTC 零点轻微时钟偏移），短暂退避后重试即可 |
 | `422` | `invalid_avatar` | 所选 `avatar_id` 不在 `/avatars/catalog.json` 目录中，刷新目录后重新选择 |
 | `401` | `invalid_credential`<br>（含 `WWW-Authenticate: Bearer`） | 检查入口、凭据与注册状态，不要自动重生成新凭据 |
 | `403` | `github_authorization_denied` | 本次 GitHub 授权未获批准（如用户拒绝或 OAuth 应用受限），停止流程且不自动再次拉起授权 |
@@ -357,11 +363,12 @@ GET /v1/leaderboards/{board}/{period}
 | 注册请求体上限 | `4,096` 字节 | 可配置 |
 | 开始注册请求额度 | 每来源 `20` 次、全局 `200` 次 / `1m` 窗口；最多 `10,000` 个活跃来源 | 可配置 |
 | 注册事务状态 | 最长 `10m` 有效；全站最多保留 `2,000` 笔未过期事务（容量满时，`denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，之后 `complete` 返回 `410 registration_request_expired`） | 固定常量 |
-| 上报正文与条目上限 | `131,072` 字节；`1,024` 条原始模型项（匹配目录前） | 可配置 |
+| 上报正文与条目上限 | `524,288` 字节（`512 KiB`）；`1,024` 条原始模型项（匹配目录前） | 可配置 |
 | 单席位上报额度（同席各端共用） | 每 `10s` 补充 `1` 个令牌，突发 `10`（单席限流拒绝不消耗全局额度） | 可配置 |
 | 全局上报额度 | 每 `5ms` 补充 `1` 个令牌，突发 `400` | 可配置 |
 
 **协议边界：**
 - 每个上报端应串行调度请求并持久化待确认任务，避免进程重启丢失凭据、修订号或当日汇总。
-- 当前不提供凭据找回/轮换、资料修改、席位合并、单客户端统计查询、已提交快照回查、过期日期修复、逐模型或分页查询接口；服务端未内建 CORS，如需浏览器跨域调用由部署者在反向代理层配置，更推荐由服务端或本地受信任进程上报。
+- 内建 CORS 严格限定在匿名公开只读路由（`/v1/leaderboards/{board}/{period}` 与 `/avatars/*`）；`/v1/clients/*` 与 `/v1/admin/*` 绝不输出 `Access-Control-Allow-Origin` 响应头，上报请由服务端或本地受信任进程完成。
+- 当前不提供凭据找回/轮换、独立资料修改接口、席位合并、单客户端统计查询、已提交快照回查、过期日期修复、逐模型或分页查询接口。
 - `/healthz` 与 `/readyz` 供独立运维监控使用，不属于客户端接入流程。

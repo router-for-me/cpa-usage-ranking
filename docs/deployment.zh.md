@@ -47,16 +47,16 @@ docker compose -p cpa-ranking up -d --no-build
 ## GitHub OAuth App
 
 1. 创建 **GitHub OAuth App**，将 Authorization callback URL 设为公开 HTTPS 入口加 `/auth/github/callback`（例如 `https://ranking.example.com/auth/github/callback`）；注意这**不是**客户端的 `return_to`。无需勾选仓库或邮箱权限。
-2. 在运行时同时传入 `RANKING_PUBLIC_ORIGIN`、`RANKING_GITHUB_CLIENT_ID` 与 `RANKING_GITHUB_CLIENT_SECRET`（切勿写入仓库或镜像）。`compose.yaml` 会自动透传这三个变量及可选的 `RANKING_REGISTRATION_ENABLED`。
-3. 将公网 HTTPS 下的 `/auth/github/*` 与 `/v1/*` 路由到同一 Ranking 实例，并确保容器可经 HTTPS 访问 `github.com` 与 `api.github.com`（服务端不会主动请求客户端 `return_to`）。
+2. 在运行时同时传入 `RANKING_PUBLIC_ORIGIN`、`RANKING_GITHUB_CLIENT_ID` 与 `RANKING_GITHUB_CLIENT_SECRET`（切勿写入仓库或镜像）。`compose.yaml` 会自动透传这三个变量以及可选的 `RANKING_REGISTRATION_ENABLED` 与 `RANKING_TRUSTED_PROXIES`。
+3. 将公网 HTTPS 下的 `/auth/github/*` 与 `/v1/*` 路由到同一 Ranking 实例，并确保容器可经 HTTPS 访问 `github.com` 与 `api.github.com`（服务端不会主动请求客户端 `return_to`）。仅用于本地联调时，`RANKING_PUBLIC_ORIGIN` 也允许回环 HTTP 入口（`http://localhost[:port]`、`http://127.0.0.1[:port]`、`http://[::1][:port]`）。
 
-三个 OAuth 变量均未设置或为空白，或 `RANKING_REGISTRATION_ENABLED=false` 时，新注册关闭，但公开读榜、已有上报端写入与主动退出仍正常工作；仅配置部分 OAuth 变量会在启动时报错退出。
+三个 OAuth 变量均未设置或为空白时，注册接口返回 `503 registration_closed`；若已配置 OAuth 且 `RANKING_REGISTRATION_ENABLED=false`，仅拒绝陌生未绑定凭据的新注册，已绑定老凭据仍可完成恢复或退榜重回，公开读榜、已有上报端写入与主动退出均正常工作；仅配置部分 OAuth 变量会在启动时报错退出。
 
 ## 反向代理、安全与来源识别
 
 - **必须前置 HTTPS**：注册、上报和管理登录均携带敏感凭据，切勿将 HTTP 监听直接暴露公网。容器内监听 `0.0.0.0:8080`，即使宿主机仅映射 `127.0.0.1:8080`，也应隔离同一 Docker 网络中的非受信任容器。
 - **脱敏代理日志**：禁止记录 `Authorization` 请求头、Cookie、请求体以及 `/auth/github/*` 的完整查询串（OAuth 路由仅记录路径）。
-- **可信代理（`RANKING_TRUSTED_PROXIES`）**：默认未设置，服务端忽略一切转发头并仅使用连接 `RemoteAddr`。部署在反代之后时，仅填入实际代理 IP 或 CIDR（如 `127.0.0.1,10.2.0.0/24`）；只有来自可信代理的连接才会解析 `X-Forwarded-For`（从右向左取首个非受信任跳）或 `X-Real-IP`，格式异常时回退为 `RemoteAddr`。切勿信任 `0.0.0.0/0` 或客户端可达网段。
+- **可信代理（`RANKING_TRUSTED_PROXIES`）**：默认未设置，服务端忽略一切转发头并仅使用连接 `RemoteAddr`。部署在反代之后时，仅填入实际代理 IP 或 CIDR（如 `127.0.0.1,10.2.0.0/24`，容忍空白分段与末尾逗号）；只有来自可信代理的连接才会解析 `X-Forwarded-For`（从右向左取首个非受信任跳）、`X-Real-IP`、`X-Forwarded-Proto`（取逗号首段且不区分大小写）以及合法单值 `X-Forwarded-Host`，格式异常时安全回退。若启用了管理员后台（且未开本地 HTTP 开关）或启用了 HTTPS GitHub OAuth 但 `RANKING_TRUSTED_PROXIES` 为空，启动会打印明确告警日志。切勿信任 `0.0.0.0/0` 或客户端可达网段。
 - **IPv6 来源归并（`RANKING_REGISTRATION_IPV6_64`）**：默认开启（`true`），注册与管理员登录限流将原生 IPv6 地址按 `/64` 前缀归并（IPv4 映射的 IPv6 还原为 IPv4）。来源键仅用于防滥用限流，不代表身份或席位归属。
 - **两层注册准入限流**：`POST /v1/clients/register/start` 在校验 Bearer 与正文**之前**先经过进程内每来源/全局固定窗口限流（重启清零）；被单来源限额或内存来源表满拒绝（`429 registration_capacity`）时不会消耗全局额度。通过初筛的合法请求再写入固定 `10m` 有效、最多 `2,000` 笔未过期记录的 SQLite 注册事务表（固定常量，不可通过环境变量修改）；表满时会优先清理已终结的 `denied`/`failed` 记录，再按需淘汰最早到期的 `completed` 记录，仅当活跃进行中的注册请求达到上限时返回 `429 registration_capacity`（此时已消耗来源与全局额度）。
 
@@ -75,20 +75,20 @@ docker compose -p cpa-ranking up -d --no-build
 | `RANKING_CACHE_REFRESH_INTERVAL` | `5m` | 排行榜缓存定时刷新周期 |
 | `RANKING_SHUTDOWN_TIMEOUT` | `10s` | 优雅停机各阶段排空超时 |
 | `RANKING_SETTLED_DAY_RETENTION_DAYS` | `31` | 已日结单日总计保留天数（范围 `1`–`36500`） |
-| `RANKING_HEALTHCHECK_URL` | 镜像：`http://127.0.0.1:8080/readyz` | 仅用于容器 `HEALTHCHECK`（Go 进程不读取） |
+| `RANKING_HEALTHCHECK_URL` | 镜像：`http://127.0.0.1:8080/healthz` | 仅用于容器 `HEALTHCHECK`（Go 进程不读取） |
 
-- **探针约定**：`GET /healthz` 存活时返回 `200 {"status":"ok"}`。`GET /readyz` 在 SQLite、目录及首轮榜单缓存就绪后返回 `200 {"status":"ready"}`，未就绪或运行中数据库不可用时返回 `503 {"status":"not_ready","reason":"initializing_or_unavailable"}`（镜像 `HEALTHCHECK` 使用此接口；改端口时须同步更新 `RANKING_HEALTHCHECK_URL`）。
+- **探针约定**：`GET` / `HEAD /healthz` 存活时返回 `200 {"status":"ok"}`（镜像默认 `HEALTHCHECK` 探测此接口，避免高写入负载下触发容器误重启；改端口时须同步更新 `RANKING_HEALTHCHECK_URL`）。`GET` / `HEAD /readyz` 在目录、首轮榜单缓存及带 `1s` 短时复用/并发合并的只读 SQLite 探针就绪后返回 `200 {"status":"ready"}`（不再争抢唯一写连接），否则返回 `503 {"status":"not_ready","reason":"initializing_or_unavailable"}`。
 
 ### 反向代理与 GitHub OAuth 注册
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RANKING_TRUSTED_PROXIES` | 未设置（不信任任何代理） | 逗号分隔的可信反向代理 IP 或 CIDR |
+| `RANKING_TRUSTED_PROXIES` | 未设置（不信任任何代理） | 逗号分隔的可信反向代理 IP 或 CIDR（容忍空白分段与末尾逗号） |
 | `RANKING_REGISTRATION_IPV6_64` | `true` | 原生 IPv6 限流键按 `/64` 前缀归并 |
-| `RANKING_PUBLIC_ORIGIN` | 未设置 | 公开 HTTPS 入口（`https://host[:port]`，无路径/查询/锚点） |
+| `RANKING_PUBLIC_ORIGIN` | 未设置 | 公开 HTTPS 入口（`https://host[:port]`，无路径/查询/锚点；本地联调也兼容回环 `http://localhost`、`127.0.0.1`、`[::1]`） |
 | `RANKING_GITHUB_CLIENT_ID` | 未设置 | GitHub OAuth App Client ID |
 | `RANKING_GITHUB_CLIENT_SECRET` | 未设置 | GitHub OAuth App Client Secret（仅运行时注入） |
-| `RANKING_REGISTRATION_ENABLED` | `true` | 配置 OAuth 后是否允许开始注册与绑定新上报端 |
+| `RANKING_REGISTRATION_ENABLED` | `true` | 配置 OAuth 后是否允许新/未绑定凭据注册（设为 `false` 时仍放行已绑定老凭据恢复或退榜重回） |
 | `RANKING_REGISTRATION_MAX_BODY_BYTES` | `4096` | 注册 `start` / `complete` 请求体最大字节数 |
 | `RANKING_REGISTRATION_SOURCE_REQUESTS` | `20` | 每来源每窗口 `/register/start` 次数上限 |
 | `RANKING_REGISTRATION_GLOBAL_REQUESTS` | `200` | 全局每窗口 `/register/start` 次数上限 |
@@ -99,7 +99,7 @@ docker compose -p cpa-ranking up -d --no-build
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | 单次上报 JSON 正文最大字节数（gzip 压缩流与解压后体积均受此限制） |
+| `RANKING_REPORT_MAX_BODY_BYTES` | `524288` | 单次上报 JSON 正文最大字节数（`512 KiB`；gzip 压缩流与解压后体积均受此限制） |
 | `RANKING_REPORT_MAX_ITEMS` | `1024` | 单次上报原始模型项上限（匹配目录前） |
 | `RANKING_REPORT_DECODE_CONCURRENCY` | `16` | 上报正文并发读取与解码上限 |
 | `RANKING_REPORT_QUEUE_CAPACITY` | `128` | 串行上报写队列待处理容量 |

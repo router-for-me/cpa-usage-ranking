@@ -47,16 +47,16 @@ Use `--no-build` so Compose does not rebuild locally. Registry tags can still be
 ## GitHub OAuth App
 
 1. Create a **GitHub OAuth App** with Authorization callback URL `https://<public-ranking-origin>/auth/github/callback` (for example `https://ranking.example.com/auth/github/callback`). This is **not** a client's `return_to` URL. Request no repository or email scopes.
-2. Supply `RANKING_PUBLIC_ORIGIN`, `RANKING_GITHUB_CLIENT_ID`, and `RANKING_GITHUB_CLIENT_SECRET` together as private runtime environment variables (never commit them or bake them into images). `compose.yaml` forwards these three variables and optional `RANKING_REGISTRATION_ENABLED` from the deployment environment.
-3. Route `/auth/github/*` and `/v1/*` on the same HTTPS origin to the same Ranking instance. Ensure Ranking can reach `github.com` and `api.github.com` over HTTPS; it never calls client `return_to` URLs.
+2. Supply `RANKING_PUBLIC_ORIGIN`, `RANKING_GITHUB_CLIENT_ID`, and `RANKING_GITHUB_CLIENT_SECRET` together as private runtime environment variables (never commit them or bake them into images). `compose.yaml` forwards these three variables along with optional `RANKING_REGISTRATION_ENABLED` and `RANKING_TRUSTED_PROXIES` from the deployment environment.
+3. Route `/auth/github/*` and `/v1/*` on the same HTTPS origin to the same Ranking instance. Ensure Ranking can reach `github.com` and `api.github.com` over HTTPS; it never calls client `return_to` URLs. For local loopback integration testing only, `RANKING_PUBLIC_ORIGIN` also accepts `http://localhost[:port]`, `http://127.0.0.1[:port]`, or `http://[::1][:port]`.
 
-If all three OAuth variables are unset or blank—or `RANKING_REGISTRATION_ENABLED=false`—new registrations stay closed while public reads, existing writer reports, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
+If all three OAuth variables are unset or blank, registration endpoints return `503 registration_closed`. If OAuth is configured and `RANKING_REGISTRATION_ENABLED=false`, new/unbound credentials are rejected with `503 registration_closed` while already-bound writer credentials can still recover or rejoin withdrawn seats, and public reads, reporting, and withdrawal continue. Partial or invalid OAuth configuration fails startup.
 
 ## Reverse Proxy, Security, and Source Resolution
 
 - **Terminate TLS in front of Ranking**: Registration, reporting, and admin login transmit credentials. Never expose the container's HTTP listener directly to the public internet. Even when the host port binds `127.0.0.1:8080`, the container listens on `0.0.0.0:8080` inside the Docker network—restrict container-network access appropriately.
 - **Scrub sensitive proxy logs**: Exclude `Authorization` headers, cookies, request bodies, and full `/auth/github/*` query strings (log path only on OAuth routes).
-- **Trusted proxies (`RANKING_TRUSTED_PROXIES`)**: Unset by default (all forwarded headers are ignored and only the connection's `RemoteAddr` is used). Behind a reverse proxy, explicitly list only your actual proxy IPs or CIDRs (for example `127.0.0.1,10.2.0.0/24`). Only connections from trusted peers honor `X-Forwarded-For` (right-to-left to the first untrusted hop) or `X-Real-IP`; malformed headers fall back to `RemoteAddr`. Never trust `0.0.0.0/0` or client-accessible subnets.
+- **Trusted proxies (`RANKING_TRUSTED_PROXIES`)**: Unset by default (all forwarded headers are ignored and only the connection's `RemoteAddr` is used). Behind a reverse proxy, explicitly list only your actual proxy IPs or CIDRs (for example `127.0.0.1,10.2.0.0/24`; empty comma segments and trailing commas are ignored). Only connections from trusted peers honor `X-Forwarded-For` (right-to-left to the first untrusted hop), `X-Real-IP`, `X-Forwarded-Proto` (first comma segment, case-insensitive), and single-value `X-Forwarded-Host`; malformed headers fall back safely. Startup logs a clear warning when the admin console (without `RANKING_ADMIN_ALLOW_INSECURE_LOCAL_HTTP=true`) or HTTPS GitHub OAuth is enabled with an empty `RANKING_TRUSTED_PROXIES`. Never trust `0.0.0.0/0` or client-accessible subnets.
 - **IPv6 source grouping (`RANKING_REGISTRATION_IPV6_64`)**: Enabled (`true`) by default, masking native IPv6 addresses to `/64` (IPv4-mapped IPv6 is unmapped to IPv4) for registration start and admin login rate limits. Source keys are abuse-control keys only—never identity or account ownership.
 - **Two-layer registration admission**: `POST /v1/clients/register/start` runs an in-memory per-source and global fixed-window gate **before** Bearer/body validation (resets on restart); requests rejected by per-source limits or a full in-memory source table (`429 registration_capacity`) do not spend global slots. Valid admitted requests then allocate a fixed `10m` SQLite transaction capped at `2,000` unexpired rows (not env-configurable); when the table is full, terminal `denied`/`failed` rows are pruned first and then the oldest `completed` rows are evicted, returning `429 registration_capacity` only when active in-flight requests reach the cap.
 
@@ -75,20 +75,20 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 | `RANKING_CACHE_REFRESH_INTERVAL` | `5m` | Periodic leaderboard cache rebuild interval |
 | `RANKING_SHUTDOWN_TIMEOUT` | `10s` | Drain deadline per graceful shutdown stage |
 | `RANKING_SETTLED_DAY_RETENTION_DAYS` | `31` | Retention days (`1`–`36500`) for finalized daily total summaries |
-| `RANKING_HEALTHCHECK_URL` | Image: `http://127.0.0.1:8080/readyz` | Container `HEALTHCHECK` URL only (not read by the Go binary) |
+| `RANKING_HEALTHCHECK_URL` | Image: `http://127.0.0.1:8080/healthz` | Container `HEALTHCHECK` URL only (not read by the Go binary) |
 
-- **Probes**: `GET /healthz` returns `200 {"status":"ok"}` while alive. `GET /readyz` returns `200 {"status":"ready"}` once SQLite, catalogs, and the initial cache round succeed, or `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` before readiness or if SQLite becomes unavailable (used by image `HEALTHCHECK`; update `RANKING_HEALTHCHECK_URL` if changing ports).
+- **Probes**: `GET` / `HEAD /healthz` returns `200 {"status":"ok"}` while alive (used by the default image `HEALTHCHECK` so heavy report write bursts do not trigger false container restarts; update `RANKING_HEALTHCHECK_URL` if changing ports). `GET` / `HEAD /readyz` returns `200 {"status":"ready"}` once catalogs, the initial cache round, and a 1-second coalesced read-only SQLite probe succeed (without contending for the SQLite writer connection), or `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` otherwise.
 
 ### Reverse Proxy and GitHub OAuth Registration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_TRUSTED_PROXIES` | unset (trust none) | Comma-separated trusted reverse-proxy IPs or CIDRs |
+| `RANKING_TRUSTED_PROXIES` | unset (trust none) | Comma-separated trusted reverse-proxy IPs or CIDRs (trailing commas/empty segments ignored) |
 | `RANKING_REGISTRATION_IPV6_64` | `true` | Group native IPv6 rate-limit keys by `/64` prefix |
-| `RANKING_PUBLIC_ORIGIN` | unset | Public HTTPS origin (`https://host[:port]`, no path/query/fragment) |
+| `RANKING_PUBLIC_ORIGIN` | unset | Public HTTPS origin (`https://host[:port]`, no path/query/fragment; loopback `http://localhost`, `127.0.0.1`, `[::1]` also accepted for local integration) |
 | `RANKING_GITHUB_CLIENT_ID` | unset | GitHub OAuth App client ID |
 | `RANKING_GITHUB_CLIENT_SECRET` | unset | GitHub OAuth App client secret (runtime only) |
-| `RANKING_REGISTRATION_ENABLED` | `true` | Permit starts and new writer bindings when OAuth is configured |
+| `RANKING_REGISTRATION_ENABLED` | `true` | Permit new/unbound credentials to register when OAuth is configured (`false` still allows already-bound credentials to recover or rejoin) |
 | `RANKING_REGISTRATION_MAX_BODY_BYTES` | `4096` | Max JSON body bytes for registration `start` and `complete` |
 | `RANKING_REGISTRATION_SOURCE_REQUESTS` | `20` | Max `/register/start` attempts per source per window |
 | `RANKING_REGISTRATION_GLOBAL_REQUESTS` | `200` | Max `/register/start` attempts globally per window |
@@ -99,7 +99,7 @@ Pass environment variables via Compose `environment` or `docker run -e` (host sh
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RANKING_REPORT_MAX_BODY_BYTES` | `131072` | Max JSON body bytes per report (applies to compressed and decompressed gzip bodies) |
+| `RANKING_REPORT_MAX_BODY_BYTES` | `524288` | Max JSON body bytes per report (`512 KiB`; applies to compressed and decompressed gzip bodies) |
 | `RANKING_REPORT_MAX_ITEMS` | `1024` | Max raw model items per report (before catalog matching) |
 | `RANKING_REPORT_DECODE_CONCURRENCY` | `16` | Max concurrent request body reads and decodes |
 | `RANKING_REPORT_QUEUE_CAPACITY` | `128` | Pending serialized report write queue length |
