@@ -33,7 +33,10 @@ jobs:
   checks:
     permissions:
       contents: read
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
+    with:
+      full: true
 
   publish:
     needs: [policy, checks]

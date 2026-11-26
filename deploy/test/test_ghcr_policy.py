@@ -166,18 +166,59 @@ class PublicationPolicyTest(unittest.TestCase):
 
 
 class CheckGateTest(unittest.TestCase):
-    def test_all_results_must_be_success(self):
-        keys = ("BACKEND_RESULT", "FRONTEND_RESULT", "CONTAINER_RESULT")
-        def run(values):
-            env = dict(os.environ, **values)
-            return subprocess.run(["python3", str(GATE)], env=env, capture_output=True).returncode
-        self.assertEqual(run(dict.fromkeys(keys, "success")), 0)
-        for key in keys:
+    KEYS = ("CHANGES_RESULT", "BACKEND_RESULT", "FRONTEND_RESULT", "CONTAINER_RESULT")
+
+    def run_gate(self, values):
+        env = dict(os.environ)
+        for key in ("FULL_CHECK", *self.KEYS):
+            env.pop(key, None)
+        env.update(values)
+        return subprocess.run(["python3", str(GATE)], env=env, capture_output=True).returncode
+
+    def test_full_check_requires_every_job_to_succeed(self):
+        base = {"FULL_CHECK": "true", **dict.fromkeys(self.KEYS, "success")}
+        self.assertEqual(self.run_gate(base), 0)
+        for key in self.KEYS:
             for value in ("failure", "cancelled", "skipped", "", "unknown", "success\ninjected=1"):
                 with self.subTest(key=key, value=value):
-                    results = dict.fromkeys(keys, "success")
+                    results = dict(base)
                     results[key] = value
-                    self.assertNotEqual(run(results), 0)
+                    self.assertNotEqual(self.run_gate(results), 0)
+
+    def test_filtered_pull_request_allows_skipped_checks_only(self):
+        base = {"FULL_CHECK": "false", **dict.fromkeys(self.KEYS, "success")}
+        self.assertEqual(self.run_gate(base), 0)
+        self.assertEqual(self.run_gate({
+            "FULL_CHECK": "false",
+            "CHANGES_RESULT": "success",
+            "BACKEND_RESULT": "skipped",
+            "FRONTEND_RESULT": "skipped",
+            "CONTAINER_RESULT": "skipped",
+        }), 0)
+        self.assertEqual(self.run_gate({
+            "FULL_CHECK": "false",
+            "CHANGES_RESULT": "success",
+            "BACKEND_RESULT": "success",
+            "FRONTEND_RESULT": "skipped",
+            "CONTAINER_RESULT": "skipped",
+        }), 0)
+        for bad_changes in ("failure", "cancelled", "skipped", "", "unknown", "success\ninjected=1"):
+            with self.subTest(changes=bad_changes):
+                results = dict(base, CHANGES_RESULT=bad_changes)
+                self.assertNotEqual(self.run_gate(results), 0)
+        for key in ("BACKEND_RESULT", "FRONTEND_RESULT", "CONTAINER_RESULT"):
+            for value in ("failure", "cancelled", "", "unknown", "skipped\ninjected=1"):
+                with self.subTest(key=key, value=value):
+                    results = dict(base)
+                    results[key] = value
+                    self.assertNotEqual(self.run_gate(results), 0)
+
+    def test_missing_or_malformed_full_check_fails_closed(self):
+        valid_results = dict.fromkeys(self.KEYS, "success")
+        self.assertNotEqual(self.run_gate(valid_results), 0)
+        for bad_flag in ("", "1", "0", "True", "False", "yes", "true\ninjected=1", "false\ninjected=1"):
+            with self.subTest(full_check=bad_flag):
+                self.assertNotEqual(self.run_gate({**valid_results, "FULL_CHECK": bad_flag}), 0)
 
 
 if __name__ == "__main__":

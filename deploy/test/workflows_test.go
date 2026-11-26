@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,6 +28,8 @@ type job struct {
 	Needs       []string          `yaml:"needs"`
 	If          string            `yaml:"if"`
 	Uses        string            `yaml:"uses"`
+	With        map[string]any    `yaml:"with"`
+	Outputs     map[string]string `yaml:"outputs"`
 	Permissions map[string]string `yaml:"permissions"`
 	Concurrency concurrencyConfig `yaml:"concurrency"`
 	Strategy    struct {
@@ -87,6 +90,41 @@ func findStep(t *testing.T, j job, name string) step {
 	return step{}
 }
 
+func workflowCallFullInput(t *testing.T, w workflow) (typ string, def any) {
+	t.Helper()
+	data, err := yaml.Marshal(w.On["workflow_call"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call struct {
+		Inputs map[string]struct {
+			Type    string `yaml:"type"`
+			Default any    `yaml:"default"`
+		} `yaml:"inputs"`
+	}
+	if err := yaml.Unmarshal(data, &call); err != nil {
+		t.Fatal(err)
+	}
+	full, ok := call.Inputs["full"]
+	if !ok {
+		t.Fatal("workflow_call must declare boolean input 'full'")
+	}
+	return full.Type, full.Default
+}
+
+func parsePathFilters(t *testing.T, raw any) map[string][]string {
+	t.Helper()
+	text, ok := raw.(string)
+	if !ok || text == "" {
+		t.Fatalf("expected non-empty filters YAML string, got %T", raw)
+	}
+	var filters map[string][]string
+	if err := yaml.Unmarshal([]byte(text), &filters); err != nil {
+		t.Fatalf("invalid paths-filter YAML: %v", err)
+	}
+	return filters
+}
+
 func TestCIRequiresRealChecksAndAllResults(t *testing.T) {
 	w := readWorkflow(t, "ci.yml")
 	if _, ok := w.On["push"]; ok {
@@ -100,13 +138,69 @@ func TestCIRequiresRealChecksAndAllResults(t *testing.T) {
 	if len(w.On) != 3 {
 		t.Fatalf("unexpected CI triggers: %v", w.On)
 	}
-	if !reflect.DeepEqual(w.Permissions, map[string]string{"contents": "read"}) {
-		t.Fatalf("CI must have read-only contents permission: %v", w.Permissions)
+	if typ, def := workflowCallFullInput(t, w); typ != "boolean" || def != false {
+		t.Fatalf("workflow_call full input must be boolean defaulting to false: type=%q default=%v", typ, def)
+	}
+	if !reflect.DeepEqual(w.Permissions, map[string]string{"contents": "read", "pull-requests": "read"}) {
+		t.Fatalf("CI must have read-only contents and pull-requests permissions: %v", w.Permissions)
 	}
 	if w.Concurrency.Group != "${{ github.workflow }}-${{ github.ref }}" ||
 		w.Concurrency.Cancel != "${{ github.event_name == 'pull_request' }}" {
 		t.Fatalf("CI must cancel only superseded pull request runs: %+v", w.Concurrency)
 	}
+
+	changes := w.Jobs["changes"]
+	if changes.If != "" || len(changes.Needs) != 0 {
+		t.Fatalf("changes job must always run first: %+v", changes)
+	}
+	for _, key := range []string{"backend", "frontend", "container"} {
+		want := fmt.Sprintf("${{ (github.event_name != 'pull_request' || inputs.full == true) && 'true' || steps.filter.outputs.%s }}", key)
+		if changes.Outputs[key] != want {
+			t.Fatalf("changes output %s = %q, want %q", key, changes.Outputs[key], want)
+		}
+	}
+	if changes.Outputs["other"] != "${{ steps.filter.outputs.other }}" {
+		t.Fatalf("unexpected other output: %q", changes.Outputs["other"])
+	}
+	filterStep := findStep(t, changes, "Detect changed paths")
+	if filterStep.ID != "filter" || filterStep.If != "${{ github.event_name == 'pull_request' && !inputs.full }}" ||
+		filterStep.Uses != "dorny/paths-filter@v4" || filterStep.With["predicate-quantifier"] != "some-with-excludes" {
+		t.Fatalf("unexpected paths-filter configuration: %+v", filterStep)
+	}
+	filters := parsePathFilters(t, filterStep.With["filters"])
+	for group, required := range map[string][]string{
+		"backend":   {"cmd/**", "internal/**", "config/**", "deploy/**", "Dockerfile", "Makefile", "go.mod", ".github/workflows/**"},
+		"frontend":  {"web/**", "THIRD_PARTY_NOTICES.md", "third_party/**", ".github/workflows/ci.yml"},
+		"container": {"Dockerfile", ".dockerignore", "compose.yaml", "deploy/**", "cmd/ranking/**", "internal/storage/**", "config/models.json", "THIRD_PARTY_NOTICES.md", "third_party/**", "web/vite.config.ts"},
+		"other":     {"**", "!docs/**", "!README.md", "!README.zh.md", "!LICENSE", "!assets/**", "!.gitignore"},
+	} {
+		for _, pattern := range required {
+			if !slices.Contains(filters[group], pattern) {
+				t.Errorf("paths-filter group %s missing required pattern %q", group, pattern)
+			}
+		}
+	}
+
+	expectedConditions := map[string]string{
+		"changes":   "",
+		"backend":   "${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.other == 'true' }}",
+		"frontend":  "${{ needs.changes.outputs.frontend == 'true' || needs.changes.outputs.other == 'true' }}",
+		"container": "${{ needs.changes.outputs.container == 'true' }}",
+		"gate":      "${{ always() }}",
+	}
+	for id, wantIf := range expectedConditions {
+		j := w.Jobs[id]
+		if len(j.Permissions) != 0 {
+			t.Errorf("CI job %s must not elevate permissions: %v", id, j.Permissions)
+		}
+		if j.If != wantIf {
+			t.Errorf("CI job %s if = %q, want %q", id, j.If, wantIf)
+		}
+		if (id == "backend" || id == "frontend" || id == "container") && !reflect.DeepEqual(j.Needs, []string{"changes"}) {
+			t.Errorf("CI job %s must depend on changes: %v", id, j.Needs)
+		}
+	}
+
 	if !reflect.DeepEqual(w.Jobs["container"].Strategy.Matrix.Arch, []string{"amd64", "arm64"}) {
 		t.Fatal("both architectures must be checked")
 	}
@@ -125,21 +219,17 @@ func TestCIRequiresRealChecksAndAllResults(t *testing.T) {
 		t.Fatal("ARM64 execution must explicitly use the selected emulator")
 	}
 	gate := w.Jobs["gate"]
-	if gate.If != "${{ always() }}" || !reflect.DeepEqual(gate.Needs, []string{"backend", "frontend", "container"}) {
-		t.Fatal("gate must inspect every required job even on failure/skip")
+	if gate.If != "${{ always() }}" || !reflect.DeepEqual(gate.Needs, []string{"changes", "backend", "frontend", "container"}) {
+		t.Fatal("gate must inspect changes and every required job even on failure/skip")
 	}
 	gateStep := findStep(t, gate, "Require every check to succeed")
 	if gateStep.Run != "python3 deploy/ci_gate.py" ||
+		gateStep.Env["FULL_CHECK"] != "${{ github.event_name != 'pull_request' || inputs.full == true }}" ||
+		gateStep.Env["CHANGES_RESULT"] != "${{ needs.changes.result }}" ||
 		gateStep.Env["BACKEND_RESULT"] != "${{ needs.backend.result }}" ||
 		gateStep.Env["FRONTEND_RESULT"] != "${{ needs.frontend.result }}" ||
 		gateStep.Env["CONTAINER_RESULT"] != "${{ needs.container.result }}" {
-		t.Fatal("gate must pass all actual job results to the tested gate script")
-	}
-	for _, id := range []string{"backend", "frontend", "container", "gate"} {
-		j := w.Jobs[id]
-		if len(j.Permissions) != 0 || (id != "gate" && j.If != "") {
-			t.Errorf("CI job %s must not elevate permissions or skip its checks", id)
-		}
+		t.Fatal("gate must pass full-check mode and all actual job results to the tested gate script")
 	}
 	if findStep(t, w.Jobs["backend"], "Test deployment policies").Run != "python3 -m unittest discover -s deploy/test -p 'test_*.py'" {
 		t.Fatal("policy and gate tests must execute in CI")
@@ -180,7 +270,8 @@ func TestPublicationNeedsChecksAndPolicyAndIsOnlyWriter(t *testing.T) {
 		t.Fatal("policy and full CI must not be conditionally skipped")
 	}
 	if w.Jobs["checks"].Uses != "./.github/workflows/ci.yml" ||
-		!reflect.DeepEqual(w.Jobs["checks"].Permissions, map[string]string{"contents": "read"}) {
+		w.Jobs["checks"].With["full"] != true ||
+		!reflect.DeepEqual(w.Jobs["checks"].Permissions, map[string]string{"contents": "read", "pull-requests": "read"}) {
 		t.Fatal("publication must call the full read-only CI")
 	}
 	pub := w.Jobs["publish"]
