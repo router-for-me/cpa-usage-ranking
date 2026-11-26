@@ -114,27 +114,53 @@ it('normalizes trailing slashes and bare /admin while preserving query and hash 
 it('stops session polling and focus checks on public pages when admin is disabled or visitor is anonymous', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   try {
+    let adminEnabled = true
     const fetcher = vi.fn((path: RequestInfo | URL) =>
-      Promise.resolve(json(String(path).includes('/admin/session') ? { enabled: true, authenticated: false } : String(path).includes('avatars') ? catalog : empty)))
+      Promise.resolve(json(String(path).includes('/admin/session') ? { enabled: adminEnabled, authenticated: false } : String(path).includes('avatars') ? catalog : empty)))
     vi.stubGlobal('fetch', fetcher)
-    const view = render(<RootApp />)
-    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1))
+    const publicView = render(<RootApp />)
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toBeVisible()
+    await act(async () => {})
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
     await act(async () => {
       window.dispatchEvent(new Event('focus'))
       await vi.advanceTimersByTimeAsync(120_000)
     })
     expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
-    view.unmount()
+    publicView.unmount()
 
     // On /admin/login with admin enabled, focus and 60s timer continue monitoring session state.
     fetcher.mockClear()
     window.history.replaceState({}, '', '/admin/login')
-    render(<RootApp />)
-    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1))
+    const loginView = render(<RootApp />)
+    expect(await screen.findByRole('heading', { name: 'Administrator Sign In' })).toBeVisible()
+    await act(async () => {})
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
     await act(async () => {
       window.dispatchEvent(new Event('focus'))
     })
     await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(2))
+    await act(async () => {})
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(3))
+    loginView.unmount()
+
+    // When admin is disabled, even /admin/login stops session polling and focus checks after the initial probe.
+    adminEnabled = false
+    fetcher.mockClear()
+    window.history.replaceState({}, '', '/admin/login')
+    const disabledView = render(<RootApp />)
+    expect(await screen.findByRole('heading', { name: 'Admin console is disabled' })).toBeVisible()
+    await act(async () => {})
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(120_000)
+    })
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
+    disabledView.unmount()
   } finally {
     vi.useRealTimers()
   }
