@@ -10,15 +10,15 @@ All paths are relative to the deployment's HTTPS origin (for example `https://ra
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA `server_id`, `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
-| `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization |
+| `POST` | `/v1/clients/register/start` | Writer `Bearer <secret>` | Submit CPA `server_id`, optional `return_to`, and optional `avatar_id`; receive `request_id` and `authorize_url` |
+| `POST` | `/v1/clients/register/complete` | Same `Bearer <secret>` | Complete registration after GitHub authorization (syncs display name and explicit avatar) |
 | `POST` | `/v1/clients/withdraw` | Registered `Bearer <secret>` | Withdraw the entire seat |
 | `PUT` | `/v1/clients/report/{utc_day}` | Registered `Bearer <secret>` | Atomically replace the seat's full cumulative snapshot for one UTC day |
-| `GET` | `/v1/leaderboards/{board}/{period}` | None | Fetch the latest published Top-100 leaderboard cache |
-| `GET` / `HEAD` | `/avatars/catalog.json` | None | Fetch the avatar catalog, default ID, and relative asset paths |
-| `GET` / `HEAD` | `/avatars/{path}` | None | Fetch an avatar WebP binary (`HEAD` returns headers only) |
-| `GET` | `/healthz` | None | Liveness probe (`200 {"status":"ok"}`) |
-| `GET` | `/readyz` | None | Readiness probe (`200` when DB, catalogs, and initial cache are ready; `503` otherwise) |
+| `GET` / `HEAD` / `OPTIONS` | `/v1/leaderboards/{board}/{period}` | None | Fetch the latest published Top-100 leaderboard cache (public read-only CORS enabled) |
+| `GET` / `HEAD` / `OPTIONS` | `/avatars/catalog.json` | None | Fetch the avatar catalog, default ID, and relative asset paths (CORS + cross-origin resource policy) |
+| `GET` / `HEAD` / `OPTIONS` | `/avatars/{path}` | None | Fetch an avatar WebP binary (`HEAD` returns headers only; CORS + cross-origin resource policy) |
+| `GET` / `HEAD` | `/healthz` | None | Liveness probe (`200 {"status":"ok"}`) |
+| `GET` / `HEAD` | `/readyz` | None | Readiness probe (`200` when DB, catalogs, and initial cache are ready; `503` otherwise) |
 
 Browsers also traverse `/auth/github/authorize` and `/auth/github/callback` during OAuth authorization; these are browser redirect routes rather than JSON client APIs. When unready or if SQLite becomes unavailable, `/readyz` returns `503 {"status":"not_ready","reason":"initializing_or_unavailable"}` (not the business `error.code` envelope).
 
@@ -49,16 +49,16 @@ sequenceDiagram
     participant R as Ranking Server
     participant G as GitHub
     Note over C: Generate & persist 32-byte Bearer secret locally
-    C->>R: POST /v1/clients/register/start (server_id, return_to, avatar_id?, Bearer)
+    C->>R: POST /v1/clients/register/start (server_id, return_to?, avatar_id?, Bearer)
     R-->>C: 200 {request_id, authorize_url} (no seat yet)
     C->>B: Open authorize_url
     B->>R: GET /auth/github/authorize
-    R-->>B: Redirect to GitHub with one-time state, PKCE & browser cookie
+    R-->>B: Redirect to GitHub with state, PKCE & browser cookie (re-openable until callback)
     B->>G: User approves or denies
     G-->>B: Redirect to /auth/github/callback
     B->>R: GET /auth/github/callback
     R->>G: Exchange code & read numeric GitHub user ID
-    R-->>B: Record decision & redirect to exact return_to (no extra params)
+    R-->>B: Record decision & redirect to return_to (or render static completion page if omitted)
     C->>R: POST /v1/clients/register/complete (request_id, same Bearer)
     R-->>C: 201 new seat / 200 reused or recovered / 202 pending / error
 ```
@@ -77,16 +77,18 @@ Content-Type: application/json
 }
 ```
 
-- `server_id`: Persistent, nonzero `8-4-4-4-12` hex UUID identifying the CPA instance (case-insensitive, stored lowercase; matches CPA's `server.server-id`, readable from CPA's `GET /v8/management/server/server-id` or the `X-CPA-SERVER-ID` header on authenticated management responses). Multiple collectors reporting for the same CPA instance must submit its shared `server_id` rather than inventing independent UUIDs.
-- `return_to`: Absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
-- `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`) or positive JSON integer (`12`) matching an entry in `GET /avatars/catalog.json`. Omit or pass `null` to use the catalog's `default_avatar_id` (`"1"`). Malformed values (`""`, `"0"`, `0`, negative numbers, leading zeros, non-numeric) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
+- `server_id`: Persistent, nonzero UUID identifying the CPA instance. Outer whitespace is trimmed, and both standard 36-character hyphenated (`8-4-4-4-12`) and 32-character compact hex UUIDs are accepted (normalized to 36-character lowercase hyphenated; all-zero UUID is rejected). Matches CPA's `server.server-id`, readable from CPA's `GET /v8/management/server/server-id` or the `X-CPA-SERVER-ID` header on authenticated management responses. Multiple collectors reporting for the same CPA instance must submit its shared `server_id` rather than inventing independent UUIDs.
+- `return_to` (optional): Omit, pass `null`, or pass a blank string for headless/CLI flows—after callback verification, Ranking renders a minimal static completion or cancellation page (`200 OK`, `text/html; charset=utf-8`, strict CSP) instructing the user to close the tab. When non-empty, must be an absolute `http` or `https` URL without userinfo (`localhost`, LAN IPs, public IPs, and DNS names are allowed; ports, paths, query strings, and fragments are preserved). Never put secrets in `return_to`.
+- `avatar_id` (optional): Positive int64 decimal string without leading zeros (for example `"12"`, outer whitespace tolerated) or positive JSON integer (`12`) matching an entry in `GET /avatars/catalog.json`. Omit or pass `null` when the user did not actively pick an avatar (for example headless mode, automatic recovery, or adding another writer)—new seats fall back to `default_avatar_id` (`"1"`), while existing seats preserve their current avatar instead of overwriting it. Malformed values (`""`, `"0"`, `0`, negative numbers, leading zeros, non-numeric) return `400 invalid_request`; valid positive IDs absent from the catalog return `422 invalid_avatar`.
 - `200 OK` returns `{"request_id":"...","authorize_url":"https://ranking.example.com/auth/github/authorize?request_id=..."}`. Save `request_id` (valid for up to 10 minutes; when the server-wide 2,000-transaction capacity is full, terminal `denied`, `failed`, or oldest `completed` records may be evicted early, causing `complete` to return `410 registration_request_expired` so clients can start a new registration with the original Bearer secret without waiting out the 10 minutes) and open `authorize_url` unchanged in the user's browser. This step grants no write permission.
 
 #### Step 2: Browser Authorization
 
-- Ranking binds the browser flow using a `Secure; HttpOnly; SameSite=Lax` cookie, one-time state, and `S256` PKCE.
+- Ranking binds the browser flow using an `HttpOnly; SameSite=Lax` cookie (`__Host-ranking-github-<state>` with `Secure` on HTTPS origins; `ranking-github-<state>` without `Secure` only for local loopback HTTP development origins), per-attempt state, and `S256` PKCE.
+- Link-preview or browser prefetch requests (`Purpose` or `Sec-Purpose` containing `prefetch`) receive `204 No Content` (`Cache-Control: no-store`) without consuming or rotating authorization state.
+- While a request is still in `pending` or `authorizing` stage and unexpired, reopening `authorize_url` rotates `(state, browser cookie, PKCE)` cleanly so a misfired tab or chat preview does not strand the user (rapid loops are bounded at `6` opens per minute per `request_id`, returning `429 registration_rate_limited` with `Retry-After`); once callback verification begins (`verifying` and terminal stages), reopening is rejected.
 - The server exchanges the authorization code server-side to read the authenticated GitHub user—requesting no repository or email scopes and storing no GitHub token.
-- After recording approval or denial, Ranking redirects to the exact saved `return_to` with no added query parameters and sets `Referrer-Policy: no-referrer`. Ranking never makes a server-side HTTP request to `return_to`, and a browser return is **not** proof of registration.
+- After recording approval or denial, Ranking redirects `302 Found` to the exact saved `return_to` with no added query parameters (or renders a static bilingual completion/cancellation HTML page when `return_to` was omitted) and sets `Referrer-Policy: no-referrer`. Ranking never makes a server-side HTTP request to `return_to`, and a browser return is **not** proof of registration.
 
 #### Step 3: Complete Registration
 
@@ -108,9 +110,10 @@ Success response (`client_id` and `avatar_id` are positive int64 decimal strings
 {"client_id": "42", "display_name": "Alice", "avatar_id": "12"}
 ```
 
-**Seat identity, profile, and recovery rules:**
-- **Seat key**: Uniquely identified by **`(GitHub numeric user ID, server_id)`**. Additional writers for the same pair share the seat without altering its profile; a credential can never be rebound to another seat.
-- **Initial profile**: New seats (`201 Created`) normalize GitHub `name` (falling back to `login` when empty or invisible) using Unicode NFKC, cleaning control/line-separator/bidi characters, trimming outer whitespace, and safely truncating to `≤32` code points / `≤128` UTF-8 bytes on rune boundaries (requiring at least one visible character), and save the `avatar_id` submitted in `start` (or the catalog default when omitted). Reusing an existing seat (`200 OK`) keeps its existing display name and avatar unchanged. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or post-registration profile-edit API.
+**Seat identity, profile sync, and recovery rules:**
+- **Seat key**: Uniquely identified by **`(GitHub numeric user ID, server_id)`**. Additional writers for the same pair share the seat; a credential can never be rebound to another seat.
+- **Profile sync on authorization**: Every completed GitHub authorization (`201 Created` new seat, or `200 OK` active reuse / withdrawn rejoin) normalizes the current GitHub `name` (falling back to `login` when empty or invisible) using Unicode NFKC, cleaning control/line-separator/bidi characters, trimming outer whitespace, and safely truncating to `≤32` code points / `≤128` UTF-8 bytes on rune boundaries (requiring at least one visible character) and syncs it to `clients.display_name`. If `avatar_id` was explicitly passed in `start`, `clients.avatar_id` updates to that selection; if `avatar_id` was omitted or `null`, new seats use the catalog default (`"1"`) and existing seats keep their current avatar unchanged. Clients should **omit `avatar_id`** (rather than hardcoding `"1"`) whenever the user did not actively pick an avatar. Any rejoin or actual name/avatar change triggers an asynchronous leaderboard cache refresh. Duplicate names are allowed; render `display_name` as escaped plain text. There is no GitHub avatar sync or separate post-registration profile-edit endpoint.
+- **Closed registration vs. existing credentials**: When `RANKING_REGISTRATION_ENABLED=false` (with GitHub OAuth configured), already-bound writer credentials can still run `start` → `authorize` → `complete` to recover lost responses or rejoin a withdrawn seat; only unbound credentials receive `503 registration_closed`.
 - **Lost-response recovery**: If a `start` response is lost, call `start` again with the same secret. If a `complete` response is lost or times out, retry `complete` with the same `request_id` and secret while the record is retained; if it has expired or was evicted early when the 2,000-transaction table filled (`410 registration_request_expired`), keep the **same secret** and run `start` → authorize → `complete` again with the same GitHub account and `server_id` (no need to wait out the 10 minutes).
 - **GitHub exchange failure**: If the server-side GitHub token exchange or user lookup fails, that transaction is marked `failed`: retrying the same `request_id` returns `500 internal_error` while the record remains retained, or `410 registration_request_expired` once expired or evicted early under capacity pressure. Once GitHub recovers, start a **new `request_id`** with the **original Bearer** and authorize again without waiting out the 10-minute window.
 - **Disabled, withdrawn, and GitHub revocation**: Clients cannot clear a `disabled` (admin-banned) seat by retrying or re-authorizing—only an operator can unban it. If a withdrawn seat is also banned, completing a new registration returns `403 client_disabled`. Unbanning does not itself restore the seat. Revoking the OAuth app on GitHub does **not** revoke already-bound writers; call `POST /v1/clients/withdraw` to stop a seat.
@@ -124,7 +127,7 @@ Authorization: Bearer <registered-writer-secret>
 
 - `204 No Content` confirms the seat is marked withdrawn in SQLite (idempotent if repeated by any writer of that seat; any optional query parameters or small request body such as `{}` are ignored and never override Bearer authentication).
 - Withdrawal immediately blocks reports from **every writer** on the seat. Retrying an already completed registration while the seat is withdrawn returns `403 client_withdrawn` and does not restore it. The next successful cache build excludes the seat from all leaderboards and scoring references. Other seats are unaffected.
-- **To rejoin**, run `start` → GitHub authorization → `complete` with the same GitHub account and `server_id`, using an existing writer's Bearer or a new one. For an unbanned seat, `complete` returns `200` with the original `client_id`. All bound writers can report again; the profile, `ranking_hidden`, historical stats, and existing writers' revisions are unchanged.
+- **To rejoin**, run `start` → GitHub authorization → `complete` with the same GitHub account and `server_id`, using an existing writer's Bearer or a new one. For an unbanned seat, `complete` returns `200` with the original `client_id`, syncs the latest GitHub display name (and updates the avatar only if `avatar_id` was explicitly supplied), and preserves `ranking_hidden`, historical stats, and existing writers' revisions. All bound writers can report again.
 
 ## Daily Cumulative Snapshot Reporting
 
@@ -149,11 +152,11 @@ sequenceDiagram
 
 ### Reporting Window and Aggregation Rules
 
-- `{utc_day}` must be `YYYY-MM-DD` in **UTC** (never local timezone) and within the open window: **UTC today or UTC yesterday**. Future dates return `422 invalid_day`; closed older dates return `410 expired_day`.
+- `{utc_day}` must be `YYYY-MM-DD` in **UTC** (never local timezone) and within the open window: **UTC today or UTC yesterday**. Future UTC dates return `422 future_day` (distinguished from malformed `422 invalid_day`); closed older dates return `410 expired_day`.
 - Every `PUT` sends the **complete cumulative snapshot** for that seat and UTC day—not per-request events or incremental deltas. After restarting, a client must reconstruct the full day's totals before reporting.
-- Prefer merging local sources for the same canonical model into **one item per model** (legacy `service_tier` fields are ignored). If multiple items resolve to the same canonical model (including duplicate names, prefixes, or aliases), the server merges them additively.
+- Prefer merging local sources for the same canonical model into **one item per model** (legacy `service_tier` fields are ignored). If multiple items resolve to the same canonical model (including duplicate names, prefixes, case variants, or gateway suffixes), the server merges them additively.
 - Compute `ttft_avg_ms` and `latency_avg_ms` from summed durations divided by their own sample counts (sample-weighted when merging groups; never average group averages equally). When no sample exists, send `null` with `"0"` samples—never fabricate zero latency.
-- Model names are stripped through the final `/` and matched **exact, case-sensitive** against the [model catalog](catalogs.md#model-catalog). Valid unmatched models are skipped from totals without error and are not returned; any malformed item (even an unknown model) rejects the whole snapshot.
+- Model names are trimmed, stripped through the final `/`, and matched **ASCII case-insensitively** against the [model catalog](catalogs.md#model-catalog) (falling back to stripping up to two controlled trailing gateway mode/channel suffixes if needed). Unmatched or malformed unknown model entries are silently skipped during aggregation so a single unfamiliar model never rejects valid models in the same day's snapshot (invalid UTF-8, negative counts, non-finite floats, and overflow still reject the snapshot).
 
 ### Request Schema and Validation
 
@@ -187,21 +190,21 @@ Content-Type: application/json
 }
 ```
 
-The canonical 13-field item schema is shown below (sending decimal strings for 64-bit counts avoids JavaScript precision issues). For compatibility, the server also accepts JSON integers for count/revision fields, defaults omitted optional item counters to `0` and omitted latency averages to `null`, and ignores unknown extension fields (such as legacy `service_tier`). Invalid UTF-8, wrong JSON types, negative values, overflow, and trailing JSON values are still rejected.
+The canonical 13-field item schema is shown below (sending decimal strings for 64-bit counts avoids JavaScript precision issues). For compatibility, the server also accepts JSON integers for count/revision fields, treats omitted or `null` optional item counters as `0` (top-level `revision` still rejects `null`), accepts finite non-negative numbers, finite non-negative decimal strings (such as `"320.5"`), or `null` for `ttft_avg_ms`/`latency_avg_ms`, and ignores unknown extension fields (such as legacy `service_tier`). Invalid UTF-8, wrong JSON types, negative values, overflow, and trailing JSON values are still rejected.
 
 | Field | Scope | JSON Type | Constraints |
 | --- | --- | --- | --- |
 | `schema_version` | Root | Integer | Must be `1` |
-| `revision` | Root | Decimal string | Writer-scoped monotonic int64 (`0` to `9223372036854775807`) |
+| `revision` | Root | Decimal string | Writer-scoped monotonic int64 (`0` to `9223372036854775807`); `null` rejected |
 | `items` | Root | Array | Complete day snapshot; `[]` clears matched totals while advancing revision |
-| `model` | Item | String | Nonempty UTF-8 ≤128 bytes, no control chars, nonempty final path segment |
-| `total_tokens` | Item | Decimal string | `>= input_tokens + output_tokens` (may include unclassified remainder) |
-| `input_tokens`<br>`output_tokens` | Item | Decimal string | Nonnegative int64 |
-| `cache_read_tokens`<br>`cache_write_tokens` | Item | Decimal string | `cache_read_tokens + cache_write_tokens <= input_tokens` |
-| `reasoning_tokens` | Item | Decimal string | `reasoning_tokens <= output_tokens` |
-| `request_count`<br>`success_count` | Item | Decimal string | `success_count <= request_count`; nonzero usage requires `request_count > 0` |
-| `ttft_avg_ms`<br>`latency_avg_ms` | Item | Number or `null` | Finite and `>= 0` when samples `> 0`; must be `null` when samples `== "0"` |
-| `ttft_samples`<br>`latency_samples` | Item | Decimal string | Each `<= request_count` |
+| `model` | Item | String | Valid UTF-8; final segment after `/` (`<= 128` bytes, no control chars) matched against catalog; malformed/unmatched items are skipped |
+| `total_tokens` | Item | Decimal string / integer / `null` | `>= input_tokens + output_tokens` (may include unclassified remainder); `null` or omitted defaults to `0` |
+| `input_tokens`<br>`output_tokens` | Item | Decimal string / integer / `null` | Nonnegative int64 (`null` or omitted defaults to `0`) |
+| `cache_read_tokens`<br>`cache_write_tokens` | Item | Decimal string / integer / `null` | `cache_read_tokens + cache_write_tokens <= input_tokens` (`null` or omitted defaults to `0`) |
+| `reasoning_tokens` | Item | Decimal string / integer / `null` | `reasoning_tokens <= output_tokens` (`null` or omitted defaults to `0`) |
+| `request_count`<br>`success_count` | Item | Decimal string / integer / `null` | `success_count <= request_count`; nonzero usage requires `request_count > 0` (`null` or omitted defaults to `0`) |
+| `ttft_avg_ms`<br>`latency_avg_ms` | Item | Number, decimal string, or `null` | Finite and `>= 0` (e.g. `320.5` or `"320.5"`); ignored when samples `== "0"` |
+| `ttft_samples`<br>`latency_samples` | Item | Decimal string / integer / `null` | Each `<= request_count` (`null` or omitted defaults to `0`) |
 
 Decimal strings must contain nonnegative int64 digits without `+` signs (avoid leading zeros). For upstream accounting quirks where non-negative cross-field invariants diverge slightly (for example `cache_read_tokens + cache_write_tokens > input_tokens`, `reasoning_tokens > output_tokens`, `input_tokens + output_tokens > total_tokens`, `success_count > request_count`, sample/average mismatches, or positive usage with `request_count: "0"`), the server applies safe lower-bound normalization and clamping rather than rejecting the whole snapshot. Negative counts, non-finite floats, and integer or floating-point aggregation overflow still reject the snapshot.
 
@@ -228,6 +231,7 @@ Decimal strings must contain nonnegative int64 digits without `+` signs (avoid l
 ```
 
 **Client reliability rules:**
+- **Recommended `revision` strategy**: Use a monotonic UTC millisecond timestamp (for example `Date.now()`) as `revision` to avoid low-counter collisions after client reinstalls. If a writer holding the authoritative complete day totals receives `409 revision_conflict`, it may inspect the returned top-level `revision`, advance to `current + 1`, and resend.
 - Persist the pending `{utc_day, revision, payload}` locally before sending. Confirm success only when HTTP is `200` **and** the returned `revision` is **numerically equal** to the revision sent in that request (for example, valid `"001"` returns canonical `"1"`).
 - On timeout, dropped connection, or unreadable response, keep the exact same `revision` and payload and retry with bounded backoff.
 - A higher revision may decrease metrics or omit models; `items: []` clears matched totals for that day. Never send `items: []` to represent a temporary local collection failure, and never split one day across multiple incremental `PUT`s.
@@ -298,14 +302,15 @@ GET /v1/leaderboards/{board}/{period}
 
 - `board`: `overall`, `usage`, `cache`, `success`, `ttft`
 - `period`: `today`, `yesterday`, `week` (previous complete Monday-start UTC week), `month` (previous complete UTC calendar month), `year` (current UTC year), `all` (all-time)
+- Supports `GET`, `HEAD`, and `OPTIONS` (`204 No Content`), emitting anonymous read-only CORS headers (`Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: GET, HEAD, OPTIONS`, `Access-Control-Allow-Headers: Accept, If-None-Match, Cache-Control`, `Access-Control-Expose-Headers: ETag, Retry-After`) so third-party browser dashboards can fetch standings directly.
 - Extra URL query parameters are ignored (there is no pagination or model filter).
 - `client_id`, `avatar_id`, and `metric` are decimal strings (`usage` is an integer; other metrics have two decimal places); `rank` is an integer with competition ranking (`1, 1, 3`). Only `overall` entries include a `details` object (`total_tokens`, `request_count`, `success_rate`, `cache_read_rate`, `ttft_mean_ms`, `latency_mean_ms`).
 - Full response examples, scoring formulas, and UI formatting rules are in [Leaderboards and Scoring](leaderboards.md).
 
 ### Fetching Avatars
 
-- `GET /avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`. Use it to render a registration avatar picker with `default_avatar_id` preselected; note `avatar_id` is a JSON integer in the catalog, while `POST /v1/clients/register/start` accepts either a decimal string (recommended, matching registration and leaderboard responses) or a positive JSON integer.
-- Resolve each `path` relative to `/avatars/` (for example `/avatars/images/001.webp`) and request with `GET` (`Content-Type: image/webp`, binary WebP) or `HEAD`. Do not guess image paths from IDs. Both catalog and image endpoints support `ETag` conditional requests (`304 Not Modified`). See [Model, Avatar, and Brand Catalogs](catalogs.md#avatar-catalog).
+- `GET` / `HEAD` / `OPTIONS` `/avatars/catalog.json` returns `{"default_avatar_id": 1, "avatars": [{"avatar_id": 1, "path": "images/001.webp"}, ...]}`. Use it to render a registration avatar picker with `default_avatar_id` preselected; note `avatar_id` is a JSON integer in the catalog, while `POST /v1/clients/register/start` accepts either a decimal string (recommended, matching registration and leaderboard responses) or a positive JSON integer.
+- Resolve each `path` relative to `/avatars/` (for example `/avatars/images/001.webp`) and request with `GET` (`Content-Type: image/webp`, binary WebP) or `HEAD`. Do not guess image paths from IDs. Both catalog and image endpoints support `ETag` conditional requests (`304 Not Modified`), public read-only CORS headers, and `Cross-Origin-Resource-Policy: cross-origin` for embedding in external web apps. See [Model, Avatar, and Brand Catalogs](catalogs.md#avatar-catalog).
 
 ### Completion Signals vs. Non-Guarantees
 
@@ -331,6 +336,7 @@ Business API errors use the JSON envelope below. Branch on HTTP status and `erro
 | --- | --- | --- |
 | `202` | — (`Retry-After` header) | Registration pending browser approval; retry `complete` with same `request_id` and Bearer |
 | `400` / `422` | `invalid_request`, `invalid_source`<br>`invalid_parameter`, `invalid_day`<br>`invalid_report`, `too_many_items` | Fix request payload or path; do not retry unchanged |
+| `422` | `future_day` | Target `{utc_day}` is ahead of server UTC today (e.g. slight clock skew across UTC midnight); back off briefly and retry |
 | `422` | `invalid_avatar` | Submitted `avatar_id` is not in `/avatars/catalog.json`; refresh the catalog and choose a valid ID |
 | `401` | `invalid_credential`<br>(`WWW-Authenticate: Bearer`) | Verify origin, Bearer secret, and registration state; do not auto-generate a new secret |
 | `403` | `github_authorization_denied` | GitHub authorization was not approved (e.g., denied by user or restricted OAuth app); stop without automatic retry |
@@ -357,11 +363,12 @@ Deployers can tune configurable defaults via [environment variables](deployment.
 | Registration request body | `4,096` bytes | Yes |
 | Registration start rate | `20`/source and `200` global per `1m` window; max `10,000` sources | Yes |
 | Registration transactions | Up to `10m` lifetime; max `2,000` unexpired transactions server-wide (when full, terminal `denied`, `failed`, or oldest `completed` records may be evicted early; `complete` then returns `410 registration_request_expired`) | Fixed |
-| Report body and items | `131,072` bytes; `1,024` raw items (before catalog matching) | Yes |
+| Report body and items | `524,288` bytes (`512 KiB`); `1,024` raw items (before catalog matching) | Yes |
 | Report rate per seat (shared by writers) | `1` token per `10s`, burst `10` (per-seat rejections do not consume global budget) | Yes |
 | Global report rate | `1` token per `5ms`, burst `400` | Yes |
 
 **Explicit boundaries:**
 - Serialize scheduling per writer and persist pending jobs across restarts.
-- The server provides no credential recovery/rotation, profile edit, seat merge, single-client stats, submitted-snapshot query, closed-day backfill, per-model query, or built-in CORS layer (handle browser cross-origin policies at the reverse proxy, or report from a trusted backend/local process).
+- Built-in CORS is intentionally scoped to anonymous public read-only routes (`/v1/leaderboards/{board}/{period}` and `/avatars/*`); `/v1/clients/*` and `/v1/admin/*` never emit `Access-Control-Allow-Origin` headers (report from a trusted backend/local process rather than cross-origin browser scripts).
+- The server provides no credential recovery/rotation, standalone profile-edit endpoint, seat merge, single-client stats, submitted-snapshot query, closed-day backfill, or per-model query.
 - `/healthz` and `/readyz` are operator probes, not part of client registration or reporting workflows.

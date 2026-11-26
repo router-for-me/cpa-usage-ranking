@@ -259,12 +259,15 @@ func TestNewServiceRequiresValidCatalog(t *testing.T) {
 	}
 }
 
-func TestRegistrationAvatarSelectionAndExistingSeatPreservation(t *testing.T) {
+func TestRegistrationAvatarSelectionAndProfileSync(t *testing.T) {
 	ctx := context.Background()
-	db, svc := open(t, filepath.Join(t.TempDir(), "registration.db"), registration.DefaultOptions())
+	refreshes := 0
+	opts := registration.DefaultOptions()
+	opts.RequestRefresh = func() { refreshes++ }
+	db, svc := open(t, filepath.Join(t.TempDir(), "registration.db"), opts)
 
-	// Omitting avatar_id uses the catalog default (1).
-	defaultID, err := svc.Start(ctx, digest(1), serverID, returnTo, nil)
+	// Omitting avatar_id uses the catalog default (1), and compact/padded server_id + empty return_to are accepted.
+	defaultID, err := svc.Start(ctx, digest(1), "  550E8400E29B41D4A716446655440000  ", "   ", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,20 +288,92 @@ func TestRegistrationAvatarSelectionAndExistingSeatPreservation(t *testing.T) {
 	if err != nil || !customSeat.Created || customSeat.Client.AvatarID != 66 || customSeat.Client.DisplayName != "GitHub User" {
 		t.Fatalf("custom avatar seat: %+v %v", customSeat, err)
 	}
+	if refreshes != 0 {
+		t.Fatalf("new seat creation should not trigger refresh: %d", refreshes)
+	}
 
-	// Second writer for the same (github_id, server_id) with a different avatar_id preserves the existing seat (Strategy A).
-	secondWriterID, err := svc.Start(ctx, digest(3), otherServerID, returnTo, avatarPtr(15))
+	// Omitting avatar_id on an existing seat syncs display_name while preserving the existing avatar_id.
+	secondWriterID, err := svc.Start(ctx, digest(3), otherServerID, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='Different Name' WHERE id=?`, secondWriterID); err != nil {
+	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='Synced Name' WHERE id=?`, secondWriterID); err != nil {
 		t.Fatal(err)
 	}
 	reused, err := svc.Complete(ctx, digest(3), secondWriterID)
-	if err != nil || reused.Created || reused.Client.ID != customSeat.Client.ID || reused.Client.AvatarID != 66 || reused.Client.DisplayName != "GitHub User" {
-		t.Fatalf("existing seat profile mutated: %+v %v", reused, err)
+	if err != nil || reused.Created || reused.Client.ID != customSeat.Client.ID || reused.Client.AvatarID != 66 || reused.Client.DisplayName != "Synced Name" {
+		t.Fatalf("omitted avatar profile sync: %+v %v", reused, err)
 	}
-	counts(t, db, 2, 3, 3)
+	if refreshes != 1 {
+		t.Fatalf("display_name sync should trigger 1 refresh, got %d", refreshes)
+	}
+
+	// Explicit avatar_id on an existing seat updates both display_name and avatar_id.
+	thirdWriterID, err := svc.Start(ctx, digest(4), otherServerID, "", avatarPtr(15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='Different Name' WHERE id=?`, thirdWriterID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Complete(ctx, digest(4), thirdWriterID)
+	if err != nil || updated.Created || updated.Client.ID != customSeat.Client.ID || updated.Client.AvatarID != 15 || updated.Client.DisplayName != "Different Name" {
+		t.Fatalf("explicit avatar profile sync: %+v %v", updated, err)
+	}
+	if refreshes != 2 {
+		t.Fatalf("explicit avatar sync should trigger refresh, got %d", refreshes)
+	}
+
+	// Re-completing with unchanged name and omitted avatar triggers no extra refresh.
+	unchangedID, err := svc.Start(ctx, digest(4), otherServerID, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer.Exec(`UPDATE registration_requests SET stage='approved',github_id=42,display_name='Different Name' WHERE id=?`, unchangedID); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := svc.Complete(ctx, digest(4), unchangedID)
+	if err != nil || unchanged.Created || unchanged.Client.AvatarID != 15 || unchanged.Client.DisplayName != "Different Name" || refreshes != 2 {
+		t.Fatalf("unchanged re-auth: %+v err=%v refreshes=%d", unchanged, err, refreshes)
+	}
+
+	// Zero compact UUID is rejected.
+	if _, err := svc.Start(ctx, digest(5), "00000000000000000000000000000000", "", nil); !errors.Is(err, registration.ErrInvalidRequest) {
+		t.Fatalf("zero compact UUID accepted: %v", err)
+	}
+	counts(t, db, 2, 4, 5)
+}
+
+func TestGitHubOriginValidationAndCookieSecurity(t *testing.T) {
+	for _, tc := range []struct {
+		origin     string
+		wantValid  bool
+		wantSecure bool
+	}{
+		{"https://ranking.example", true, true},
+		{"https://ranking.example:8443/", true, true},
+		{"http://localhost:8080", true, false},
+		{"http://LOCALHOST", true, false},
+		{"http://127.0.0.1:8080", true, false},
+		{"http://[::1]:8080", true, false},
+		{"http://ranking.example", false, false},
+		{"http://192.168.1.10:8080", false, false},
+		{"http://localhost:8080/auth", false, false},
+		{"http://localhost:8080?x=1", false, false},
+	} {
+		gh, err := registration.NewGitHub(registration.GitHubOptions{
+			PublicOrigin: tc.origin,
+			ClientID:     "id",
+			ClientSecret: "secret",
+		}, nil)
+		if tc.wantValid {
+			if err != nil || gh.SecureCookie() != tc.wantSecure {
+				t.Fatalf("origin %q: err=%v secure=%v wantSecure=%v", tc.origin, err, gh != nil && gh.SecureCookie(), tc.wantSecure)
+			}
+		} else if err == nil {
+			t.Fatalf("origin %q unexpectedly accepted", tc.origin)
+		}
+	}
 }
 
 func TestRegistrationAvatarValidationAndLargeCatalogIDs(t *testing.T) {

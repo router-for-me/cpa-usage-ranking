@@ -8,7 +8,9 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"cpa-usage-ranking/internal/admin"
@@ -35,7 +37,7 @@ type adminHTTP struct {
 
 // MountAdmin always exposes only safe enable/session state when disabled.
 func MountAdmin(router *gin.Engine, service *admin.Service, frontend *Frontend, logger *slog.Logger, options AdminHTTPOptions) error {
-	limiter, err := registration.NewRequestLimiter(registration.RequestLimits{SourceRequests: 5, GlobalRequests: 40, Window: time.Minute, MaxSources: 4096}, nil)
+	limiter, err := registration.NewRequestLimiter(registration.RequestLimits{SourceRequests: 5, GlobalRequests: 2000, Window: time.Minute, MaxSources: 4096}, nil)
 	if err != nil {
 		return err
 	}
@@ -53,9 +55,21 @@ func MountAdmin(router *gin.Engine, service *admin.Service, frontend *Frontend, 
 	router.POST("/v1/admin/accounts", h.sameOrigin, h.authorize, h.ownerOnly, h.csrf, h.createAccount)
 	router.DELETE("/v1/admin/accounts/:id", h.sameOrigin, h.authorize, h.ownerOnly, h.csrf, h.deleteAccount)
 	if frontend != nil {
+		redirect := func(target string) gin.HandlerFunc {
+			return func(c *gin.Context) {
+				c.Header("Location", target)
+				c.Status(http.StatusFound)
+			}
+		}
+		for _, root := range []string{"/admin", "/admin/"} {
+			router.GET(root, redirect("/admin/leaderboards"))
+			router.HEAD(root, redirect("/admin/leaderboards"))
+		}
 		for _, path := range []string{"/admin/login", "/admin/leaderboards", "/admin/accounts", "/admin/users"} {
 			router.GET(path, func(c *gin.Context) { frontend.serveIndex(c) })
 			router.HEAD(path, func(c *gin.Context) { frontend.serveIndex(c) })
+			router.GET(path+"/", redirect(path))
+			router.HEAD(path+"/", redirect(path))
 		}
 	}
 	return nil
@@ -144,18 +158,19 @@ func (h *adminHTTP) logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Only explicitly trusted proxy peers may assert HTTPS. When AllowLocalHTTP is
-// enabled for local or container HTTP testing, non-HTTPS requests use scheme
-// "http" while keeping strict same-origin, non-cross-site, and CSRF checks.
+// Only explicitly trusted proxy peers may assert HTTPS or X-Forwarded-Host.
+// When AllowLocalHTTP is enabled for local or container HTTP testing, non-HTTPS
+// requests use scheme "http" while keeping strict same-origin, non-cross-site, and CSRF checks.
 func (h *adminHTTP) sameOrigin(c *gin.Context) {
 	scheme := "https"
 	secure := c.Request.TLS != nil
-	peer, _, _ := net.SplitHostPort(c.Request.RemoteAddr)
-	ip := net.ParseIP(peer)
-	for _, entry := range h.options.TrustedProxies {
-		_, block, _ := net.ParseCIDR(entry)
-		if (ip != nil && ip.Equal(net.ParseIP(entry))) || (block != nil && block.Contains(ip)) {
-			secure = secure || c.GetHeader("X-Forwarded-Proto") == "https"
+	expectedHost := c.Request.Host
+	if isTrustedPeer(c.Request.RemoteAddr, h.options.TrustedProxies) {
+		if proto := firstCommaSegment(c.GetHeader("X-Forwarded-Proto")); strings.EqualFold(proto, "https") {
+			secure = true
+		}
+		if forwardedHost, ok := singleForwardedHost(c.Request.Header.Values("X-Forwarded-Host")); ok {
+			expectedHost = forwardedHost
 		}
 	}
 	if !secure {
@@ -166,22 +181,103 @@ func (h *adminHTTP) sameOrigin(c *gin.Context) {
 			return
 		}
 	}
-	if c.GetHeader("Origin") != scheme+"://"+c.Request.Host || c.GetHeader("Sec-Fetch-Site") == "cross-site" {
+	if !originMatches(c.GetHeader("Origin"), scheme, expectedHost) || c.GetHeader("Sec-Fetch-Site") == "cross-site" {
 		writeError(c, http.StatusForbidden, "same_origin_required", "Same-origin request required")
 		return
 	}
 	c.Next()
 }
 
-func decodeAdmin(c *gin.Context, input any) bool {
-	media, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-	if err != nil || media != "application/json" {
-		writeError(c, http.StatusUnsupportedMediaType, "json_required", "JSON required")
+func isTrustedPeer(remoteAddr string, trusted []string) bool {
+	peer, _, _ := net.SplitHostPort(remoteAddr)
+	ip := net.ParseIP(peer)
+	if ip == nil {
 		return false
+	}
+	for _, entry := range trusted {
+		if entryIP := net.ParseIP(entry); entryIP != nil && ip.Equal(entryIP) {
+			return true
+		}
+		if _, block, err := net.ParseCIDR(entry); err == nil && block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstCommaSegment(raw string) string {
+	if i := strings.IndexByte(raw, ','); i >= 0 {
+		raw = raw[:i]
+	}
+	return strings.TrimSpace(raw)
+}
+
+func singleForwardedHost(values []string) (string, bool) {
+	if len(values) != 1 {
+		return "", false
+	}
+	host := strings.TrimSpace(values[0])
+	if host == "" || strings.ContainsAny(host, ",/\\@?# \t\r\n") {
+		return "", false
+	}
+	u, err := url.Parse("http://" + host)
+	if err != nil || u.Host != host || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	if port := u.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return "", false
+		}
+	}
+	return host, true
+}
+
+func normalizeHostForScheme(host, scheme string) (string, bool) {
+	host = strings.TrimSpace(host)
+	if host == "" || strings.ContainsAny(host, "/\\@?# \t\r\n") {
+		return "", false
+	}
+	u, err := url.Parse(scheme + "://" + host)
+	if err != nil || u.Host != host || u.Hostname() == "" || u.User != nil || u.Path != "" {
+		return "", false
+	}
+	hostname := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if strings.ContainsRune(hostname, ':') {
+		hostname = "[" + hostname + "]"
+	}
+	if port != "" {
+		return hostname + ":" + port, true
+	}
+	return hostname, true
+}
+
+func originMatches(origin, scheme, expectedHost string) bool {
+	if origin == "" || strings.ContainsAny(origin, " \t\r\n?#\\") {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || !strings.EqualFold(u.Scheme, scheme) || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	gotHost, ok1 := normalizeHostForScheme(u.Host, scheme)
+	wantHost, ok2 := normalizeHostForScheme(expectedHost, scheme)
+	return ok1 && ok2 && gotHost == wantHost
+}
+
+func decodeAdmin(c *gin.Context, input any) bool {
+	if ct := strings.TrimSpace(c.GetHeader("Content-Type")); ct != "" {
+		media, _, err := mime.ParseMediaType(ct)
+		if err != nil || media != "application/json" {
+			writeError(c, http.StatusUnsupportedMediaType, "json_required", "JSON required")
+			return false
+		}
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
 	decoder := json.NewDecoder(c.Request.Body)
-	decoder.DisallowUnknownFields()
 	if decoder.Decode(input) != nil || decoder.Decode(new(any)) != io.EOF {
 		writeError(c, http.StatusBadRequest, "invalid_request", "Invalid request")
 		return false

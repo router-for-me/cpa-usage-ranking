@@ -16,7 +16,8 @@ type leaderboardCache interface {
 
 // MountLeaderboards 只读取已发布的缓存轮次，不触发数据库查询或计算。
 func MountLeaderboards(router *gin.Engine, source leaderboardCache) {
-	router.GET("/v1/leaderboards/:board/:period", func(c *gin.Context) {
+	serve := func(c *gin.Context) {
+		setPublicReadCORS(c)
 		board, period := c.Param("board"), c.Param("period")
 		switch board {
 		case leaderboard.Overall, leaderboard.Usage, leaderboard.Cache, leaderboard.Success, leaderboard.TTFT:
@@ -53,7 +54,7 @@ func MountLeaderboards(router *gin.Engine, source leaderboardCache) {
 		if entry.End != "" {
 			end = &entry.End
 		}
-		c.JSON(http.StatusOK, struct {
+		writeJSON(c, http.StatusOK, struct {
 			Board       string          `json:"board"`
 			Period      string          `json:"period"`
 			Start       string          `json:"start"`
@@ -61,5 +62,12 @@ func MountLeaderboards(router *gin.Engine, source leaderboardCache) {
 			GeneratedAt string          `json:"generated_at"`
 			Entries     json.RawMessage `json:"entries"`
 		}{board, period, entry.Start, end, entry.GeneratedAt, boards[board]})
-	})
+	}
+	options := func(c *gin.Context) {
+		setPublicReadCORS(c)
+		c.Status(http.StatusNoContent)
+	}
+	router.GET("/v1/leaderboards/:board/:period", serve)
+	router.HEAD("/v1/leaderboards/:board/:period", serve)
+	router.OPTIONS("/v1/leaderboards/:board/:period", options)
 }

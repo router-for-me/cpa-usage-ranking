@@ -33,6 +33,8 @@ func MountAvatars(router *gin.Engine, catalog *avatars.Catalog, files fs.FS) err
 		resources[path] = resource{data: data, etag: fmt.Sprintf(`"%x"`, sha256.Sum256(data))}
 	}
 	serve := func(c *gin.Context) {
+		setPublicReadCORS(c)
+		c.Header("Cross-Origin-Resource-Policy", "cross-origin")
 		name := strings.TrimPrefix(c.Request.URL.Path, "/avatars/")
 		file, ok := resources[name]
 		if !ok {
@@ -48,7 +50,13 @@ func MountAvatars(router *gin.Engine, catalog *avatars.Catalog, files fs.FS) err
 		// 稳定文件名不标 immutable；内容变化产生新的 ETag。
 		http.ServeContent(c.Writer, c.Request, name, time.Time{}, bytes.NewReader(file.data))
 	}
+	options := func(c *gin.Context) {
+		setPublicReadCORS(c)
+		c.Header("Cross-Origin-Resource-Policy", "cross-origin")
+		c.Status(http.StatusNoContent)
+	}
 	router.GET("/avatars/*path", serve)
 	router.HEAD("/avatars/*path", serve)
+	router.OPTIONS("/avatars/*path", options)
 	return nil
 }

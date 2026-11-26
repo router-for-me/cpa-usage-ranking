@@ -28,7 +28,7 @@
 | --- | --- |
 | `clients` | 自增正整数 `id`；唯一席位 `(github_id, server_id)`；`display_name`、`avatar_id`、`created_at_ms`；独立的 `disabled`、`ranking_hidden`、`withdrawn` 标志 |
 | `client_writers` | `(id, client_id)` 与全局唯一 32 字节 `SHA-256` `token_hash`（不存凭据原文，不跨席位改绑） |
-| `registration_requests` | `WITHOUT ROWID`（主键 `id`）；有界 OAuth 请求（最长 `10m` 有效、全站最多 `2,000` 笔未过期；容量满时 `denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，提前回收后 `complete` 返回 `410 registration_request_expired`），保存 `server_id`、`return_to`、`avatar_id`、摘要、state/PKCE 与完成结果 |
+| `registration_requests` | `WITHOUT ROWID`（主键 `id`）；有界 OAuth 请求（最长 `10m` 有效、全站最多 `2,000` 笔未过期；容量满时 `denied`、`failed` 或最早的 `completed` 终态记录可能被提前回收，提前回收后 `complete` 返回 `410 registration_request_expired`），保存 `server_id`、`return_to`（省略时为空串 `""`）、可空正整数 `avatar_id`（省略时为 `NULL`）、摘要、state/PKCE 与完成结果 |
 | `models` | 稳定正整数 ID 与唯一标准模型名映射（ID `0` 保留给内部总计；别名与价格不入库） |
 | `daily_reports` | `WITHOUT ROWID`（主键 `(day, client_id)`）；席位单日父表（记录 `received_at_ms`），日结删除时级联清理版本与统计行 |
 | `daily_writer_versions` | `WITHOUT ROWID`（主键 `(day, writer_id)`）；各上报端最新 `revision` 与 32 字节内容摘要 |
@@ -55,5 +55,5 @@
 
 - **单事务只读合并**：候选读取在单个 `mode=ro` 事务中合并 `period_stats` 已结行与未结 `daily_stats`（年度合并已结月行与本年未结日行，累计含全部未结积压），并同快照读取席位资料与状态标志，在评分前过滤封禁、下榜与退出席位。
 - **指标存储与派生**：Token 数、执行次数与耗时样本数按精确 `int64`（`INTEGER`）存储，`ttft_sum_ms` 与 `latency_sum_ms` 按 `float64`（`REAL`）存储。比例与均值直接派生而不改动底层行；分母为零返回 `null` 而非伪造零值。
-- **原子 6 周期缓存**：单个串行 worker 在启动时及每 `RANKING_CACHE_REFRESH_INTERVAL`（`5m`）构建全部 6 周期 × 5 榜单，仅整轮成功后原子替换只读快照（失败保留旧快照）。普通上报与日结不触发立即重建，管理员治理、席位退出与席位恢复（`withdrawn` 从 `1` 变为 `0`）均在提交后触发异步合并刷新。
+- **原子 6 周期缓存**：单个串行 worker 在启动时及每 `RANKING_CACHE_REFRESH_INTERVAL`（`5m`）构建全部 6 周期 × 5 榜单，仅整轮成功后原子替换只读快照（失败保留旧快照）。普通上报与日结不触发立即重建，管理员治理、席位退出、席位恢复（`withdrawn` 从 `1` 变为 `0`）以及重授权导致的昵称/头像变更均在提交后触发异步合并刷新。
 - **内存保护边界**：默认单视图最多 `100,000` 候选人、整轮编码上限 `16 MiB`、最多 `32` 个构建项，属于防 OOM 安全边界而非容量保证。

@@ -56,15 +56,40 @@ func TestOwnerSessions(t *testing.T) {
 
 func TestBoundedConcurrentSessions(t *testing.T) {
 	s := testService(t)
-	for range maxSessions {
-		if _, _, err := s.createSession(s.owner); err != nil {
+	base := time.Date(2026, 11, 16, 1, 0, 0, 0, time.UTC)
+	now := base
+	s.now = func() time.Time { return now }
+	var firstToken, lastToken string
+	for i := range maxSessions {
+		now = base.Add(time.Duration(i) * time.Millisecond)
+		tok, _, err := s.createSession(s.owner)
+		if err != nil {
 			t.Fatal(err)
 		}
+		if i == 0 {
+			firstToken = tok
+		}
+		lastToken = tok
 	}
-	if _, _, err := s.createSession(s.owner); !errors.Is(err, ErrCapacity) {
-		t.Fatal("unbounded sessions")
+	// 满额时创建新会话应淘汰最早到期的旧会话，而非阻塞管理员登录。
+	now = base.Add(time.Duration(maxSessions) * time.Millisecond)
+	newestToken, _, err := s.createSession(s.owner)
+	if err != nil {
+		t.Fatalf("eviction at capacity failed: %v", err)
 	}
-	s.now = func() time.Time { return time.Now().Add(SessionTTL + time.Minute) }
+	if len(s.sessions) != maxSessions {
+		t.Fatalf("session map exceeded cap: %d", len(s.sessions))
+	}
+	if _, err := s.Lookup(context.Background(), firstToken); !errors.Is(err, ErrSession) {
+		t.Fatal("earliest-expiring session was not evicted")
+	}
+	if _, err := s.Lookup(context.Background(), lastToken); err != nil {
+		t.Fatalf("newer session was evicted: %v", err)
+	}
+	if _, err := s.Lookup(context.Background(), newestToken); err != nil {
+		t.Fatalf("newest session missing: %v", err)
+	}
+	s.now = func() time.Time { return base.Add(SessionTTL + time.Minute) }
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {

@@ -76,6 +76,9 @@ func Load() (Config, error) {
 	if value, ok := lookupTrimmed("RANKING_TRUSTED_PROXIES"); ok {
 		for _, entry := range strings.Split(value, ",") {
 			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
 			if net.ParseIP(entry) == nil {
 				if _, _, err := net.ParseCIDR(entry); err != nil {
 					return Config{}, fmt.Errorf("RANKING_TRUSTED_PROXIES must contain comma-separated IP addresses or CIDRs")

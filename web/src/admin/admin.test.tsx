@@ -129,3 +129,59 @@ it('clears expired logout state instead of showing a stale alert after re-login'
   expect(await screen.findByRole('navigation', { name: 'Console navigation' })).toBeVisible()
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
+
+it('sends DELETE requests with only X-CSRF-Token and without Content-Type or JSON body', async () => {
+  const deleteCalls: Array<{ url: string; init?: RequestInit }> = []
+  vi.stubGlobal('fetch', vi.fn((path: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(path)
+    if (init?.method === 'DELETE') {
+      deleteCalls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 204 }))
+    }
+    if (url === '/v1/admin/accounts') {
+      return Promise.resolve(json({ owner: { username: 'owner' }, accounts: [{ id: '9', username: 'staff', created_at: '2026-11-16T00:00:00Z' }] }))
+    }
+    if (url.startsWith('/v1/admin/users')) {
+      return Promise.resolve(json({ users: [], next_cursor: '' }))
+    }
+    return Promise.resolve(json({ enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'csrf-del' }))
+  }))
+  const user = userEvent.setup()
+  const view = render(<Accounts session={{ enabled: true, authenticated: true, csrf_token: 'csrf-del' }} onExpired={vi.fn()} />)
+  await user.click(await screen.findByRole('button', { name: 'Delete' }))
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  view.unmount()
+
+  window.history.replaceState({}, '', '/admin/users')
+  render(<AdminApp />)
+  await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+
+  expect(deleteCalls.map((c) => c.url)).toEqual(['/v1/admin/accounts/9', '/v1/admin/session'])
+  for (const call of deleteCalls) {
+    expect(call.init?.body).toBeUndefined()
+    expect(call.init?.headers).toEqual({ 'X-CSRF-Token': 'csrf-del' })
+  }
+})
+
+it('shows specific HTTPS and same-origin proxy hints on 403 login errors', async () => {
+  for (const [code, enHint, zhHint] of [
+    ['https_required', /RANKING_TRUSTED_PROXIES.*X-Forwarded-Proto/, /RANKING_TRUSTED_PROXIES.*X-Forwarded-Proto/],
+    ['same_origin_required', /Same-origin check failed.*X-Forwarded-Host/, /同源校验失败.*X-Forwarded-Host/],
+  ] as const) {
+    window.history.replaceState({}, '', '/admin/login')
+    vi.stubGlobal('fetch', vi.fn((_path: RequestInfo | URL, init?: RequestInit) =>
+      Promise.resolve(init?.method === 'POST'
+        ? json({ error: { code, message: code } }, 403)
+        : json({ enabled: true, authenticated: false }))))
+    const user = userEvent.setup()
+    const view = render(<AdminApp />)
+    await user.type(await screen.findByLabelText('Username'), 'owner')
+    await user.type(screen.getByLabelText('Password'), 'isolated-test-password')
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(enHint)
+    await user.click(screen.getByRole('button', { name: 'Switch language to Chinese' }))
+    expect(screen.getByRole('alert')).toHaveTextContent(zhHint)
+    await user.click(screen.getByRole('button', { name: '切换为英文' }))
+    view.unmount()
+  }
+})

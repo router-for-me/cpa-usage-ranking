@@ -42,7 +42,7 @@ func TestAdminBanHTTPAndRefreshNotification(t *testing.T) {
 		{"1", `{}`, ownerCookie, owner.CSRF, "https://ranking.test", 400},
 		{"1", `{"disabled":null}`, ownerCookie, owner.CSRF, "https://ranking.test", 400},
 		{"1", `{"disabled":"true"}`, ownerCookie, owner.CSRF, "https://ranking.test", 400},
-		{"1", `{"disabled":true,"owner":true}`, ownerCookie, owner.CSRF, "https://ranking.test", 400},
+		{"1", `{"disabled":true}{}`, ownerCookie, owner.CSRF, "https://ranking.test", 400},
 	} {
 		if got := adminCall(router, "PUT", "/v1/admin/users/"+scenario.path+"/ban", scenario.body, scenario.cookie, scenario.csrf, scenario.origin, true).Code; got != scenario.want {
 			t.Fatal("unexpected ban status", got, scenario.want)

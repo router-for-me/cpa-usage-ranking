@@ -25,17 +25,17 @@
 
 Clients integrate over standard **HTTPS + UTF-8 JSON (optional gzip on registration and reports)**, with no SDK requirement or coupling to any specific client codebase:
 
-- **Read-only dashboards**: Call `GET /v1/leaderboards/{board}/{period}` and `/avatars/*` directly—no registration or credentials required.
+- **Read-only dashboards**: Call `GET` / `HEAD` `/v1/leaderboards/{board}/{period}` and `/avatars/*` directly (including cross-origin browser requests via built-in read-only CORS)—no registration or credentials required.
 - **Usage reporters**: Persist one 32-byte `base64url` Bearer secret per installation, bind `(GitHub user ID, CPA server ID)` through GitHub OAuth, and upload complete UTC daily cumulative snapshots.
 
 | Step | Endpoint | Auth | Purpose |
 | --- | --- | --- | --- |
-| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `server_id`, `return_to`, and optional `avatar_id`; receive `authorize_url` |
-| Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending) |
+| Start registration | `POST /v1/clients/register/start` | Writer `Bearer` | Submit `server_id`, optional `return_to`, and optional `avatar_id`; receive `authorize_url` |
+| Complete registration | `POST /v1/clients/register/complete` | Same `Bearer` | Bind seat (`201` new, `200` reused/recovered, `202` pending); syncs GitHub display name and explicit avatar |
 | Push daily snapshot | `PUT /v1/clients/report/{utc_day}` | Registered `Bearer` | Atomically replace the seat's full UTC today/yesterday snapshot |
 | Withdraw seat | `POST /v1/clients/withdraw` | Registered `Bearer` | Withdraw the entire seat (`204`, no response body); repeat registration with the same GitHub account and `server_id` to rejoin if not banned |
-| Read leaderboards | `GET /v1/leaderboards/{board}/{period}` | None | Fetch the published Top-100 cached standings |
-| Fetch avatars | `GET /avatars/catalog.json`, `/avatars/{path}` | None | Read the avatar catalog and static WebP images (`ETag` supported) |
+| Read leaderboards | `GET` / `HEAD` `/v1/leaderboards/{board}/{period}` | None | Fetch the published Top-100 cached standings (public read-only CORS enabled) |
+| Fetch avatars | `GET` / `HEAD` `/avatars/catalog.json`, `/avatars/{path}` | None | Read the avatar catalog and static WebP images (`ETag` and cross-origin reads supported) |
 
 **Key protocol guarantees:**
 - **Client-owned credentials**: Only the `SHA-256` digest of each 32-byte secret is stored; multiple writers for one `(GitHub ID, server_id)` seat hold independent credentials.

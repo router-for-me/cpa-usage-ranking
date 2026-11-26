@@ -34,7 +34,28 @@ var (
 
 const PendingRetryAfter = 2 * time.Second
 
-var serverIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var (
+	serverIDPattern      = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	compactServerIDRegex = regexp.MustCompile(`(?i)^[0-9a-f]{32}$`)
+)
+
+func normalizeServerID(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	var normalized string
+	switch {
+	case serverIDPattern.MatchString(trimmed):
+		normalized = strings.ToLower(trimmed)
+	case compactServerIDRegex.MatchString(trimmed):
+		lower := strings.ToLower(trimmed)
+		normalized = lower[0:8] + "-" + lower[8:12] + "-" + lower[12:16] + "-" + lower[16:20] + "-" + lower[20:32]
+	default:
+		return "", false
+	}
+	if normalized == "00000000-0000-0000-0000-000000000000" {
+		return "", false
+	}
+	return normalized, true
+}
 
 type Result struct {
 	Client  clients.Client
@@ -54,10 +75,11 @@ func DefaultOptions() Options {
 }
 
 type Service struct {
-	reader  *sql.DB
-	writer  *sql.DB
-	catalog *avatars.Catalog
-	options Options
+	reader           *sql.DB
+	writer           *sql.DB
+	catalog          *avatars.Catalog
+	options          Options
+	authorizeLimiter *RequestLimiter
 }
 
 func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Service, error) {
@@ -67,7 +89,16 @@ func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Ser
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	return &Service{reader: db.Reader, writer: db.Writer, catalog: catalog, options: options}, nil
+	authorizeLimiter, err := NewRequestLimiter(RequestLimits{
+		SourceRequests: 6,
+		GlobalRequests: 3000,
+		Window:         time.Minute,
+		MaxSources:     max(options.Capacity, 2000),
+	}, options.Now)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{reader: db.Reader, writer: db.Writer, catalog: catalog, options: options, authorizeLimiter: authorizeLimiter}, nil
 }
 
 func opaqueToken() string {
@@ -108,26 +139,60 @@ func httpURL(raw string) (*url.URL, bool) {
 	return u, true
 }
 
-// Start 固定 server_id、原样返回地址、所选头像和凭据摘要，不创建席位或上报端。
+func (s *Service) isBoundCredential(ctx context.Context, queryRow func(context.Context, string, ...any) *sql.Row, tokenHash []byte) (bool, error) {
+	var exists int
+	err := queryRow(ctx, `SELECT 1 FROM client_writers WHERE token_hash=?`, tokenHash).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Start 固定 server_id、可选返回地址、显式所选头像和凭据摘要，不创建席位或上报端。
 func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, serverID, returnTo string, avatarID *int64) (string, error) {
-	if _, valid := httpURL(returnTo); !valid || !serverIDPattern.MatchString(serverID) || serverID == "00000000-0000-0000-0000-000000000000" {
+	normalizedServerID, ok := normalizeServerID(serverID)
+	if !ok {
+		return "", ErrInvalidRequest
+	}
+	if strings.TrimSpace(returnTo) == "" {
+		returnTo = ""
+	} else if _, valid := httpURL(returnTo); !valid {
 		return "", ErrInvalidRequest
 	}
 	if !s.options.Enabled {
-		return "", ErrRegistrationClosed
+		// 关闭新注册时放行已绑定老凭据，支持老设备恢复或退榜重回。
+		bound, err := s.isBoundCredential(ctx, s.reader.QueryRowContext, hash[:])
+		if err != nil {
+			return "", err
+		}
+		if !bound {
+			return "", ErrRegistrationClosed
+		}
 	}
-	resolvedAvatarID := s.catalog.DefaultID()
+	var storedAvatar any
 	if avatarID != nil {
-		resolvedAvatarID = *avatarID
-		if _, ok := s.catalog.Lookup(resolvedAvatarID); !ok {
+		if _, ok := s.catalog.Lookup(*avatarID); !ok {
 			return "", ErrInvalidAvatar
 		}
+		storedAvatar = *avatarID
 	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	if !s.options.Enabled {
+		bound, err := s.isBoundCredential(ctx, tx.QueryRowContext, hash[:])
+		if err != nil {
+			return "", err
+		}
+		if !bound {
+			return "", ErrRegistrationClosed
+		}
+	}
 	now := s.options.Now()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM registration_requests WHERE expires_at_ms<=?`, now.UnixMilli()); err != nil {
 		return "", err
@@ -163,7 +228,7 @@ func (s *Service) Start(ctx context.Context, hash clients.CredentialHash, server
 	}
 	id := opaqueToken()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO registration_requests(id,token_hash,server_id,return_to,avatar_id,expires_at_ms,stage)
-		VALUES(?,?,?,?,?,?,'pending')`, id, hash[:], strings.ToLower(serverID), returnTo, resolvedAvatarID, now.Add(s.options.TTL).UnixMilli()); err != nil {
+		VALUES(?,?,?,?,?,?,'pending')`, id, hash[:], normalizedServerID, returnTo, storedAvatar, now.Add(s.options.TTL).UnixMilli()); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -185,7 +250,7 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	var now time.Time
 	var expiry int64
 	var stage, serverID string
-	var avatarID int64
+	var avatarID sql.NullInt64
 	var githubID sql.NullInt64
 	var name sql.NullString
 	checkRequest := func(queryRow func(context.Context, string, ...any) *sql.Row) (Result, error) {
@@ -265,18 +330,34 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 		return Result{}, ErrRegistrationClosed
 	}
 	rejoined := seat.Withdrawn
+	profileChanged := false
 	if newSeat {
-		seat = clients.Client{DisplayName: name.String, AvatarID: avatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
+		seatAvatarID := s.catalog.DefaultID()
+		if avatarID.Valid {
+			seatAvatarID = avatarID.Int64
+		}
+		seat = clients.Client{DisplayName: name.String, AvatarID: seatAvatarID, CreatedAt: time.UnixMilli(now.UnixMilli()).UTC()}
 		err = tx.QueryRowContext(ctx, `INSERT INTO clients(github_id,server_id,display_name,avatar_id,created_at_ms)
 			VALUES(?,?,?,?,?) RETURNING id`, githubID.Int64, serverID, seat.DisplayName, seat.AvatarID, now.UnixMilli()).Scan(&seat.ID)
 		if err != nil {
 			return Result{}, err
 		}
-	} else if rejoined {
-		if _, err := tx.ExecContext(ctx, `UPDATE clients SET withdrawn=0 WHERE id=?`, seat.ID); err != nil {
-			return Result{}, err
+	} else {
+		// 已有席位授权完成时自动同步最新昵称；仅显式提交 avatar_id 时更新头像。
+		nextName := name.String
+		nextAvatarID := seat.AvatarID
+		if avatarID.Valid {
+			nextAvatarID = avatarID.Int64
 		}
-		seat.Withdrawn = false
+		profileChanged = nextName != seat.DisplayName || nextAvatarID != seat.AvatarID
+		if rejoined || profileChanged {
+			if _, err := tx.ExecContext(ctx, `UPDATE clients SET withdrawn=0, display_name=?, avatar_id=? WHERE id=?`, nextName, nextAvatarID, seat.ID); err != nil {
+				return Result{}, err
+			}
+			seat.Withdrawn = false
+			seat.DisplayName = nextName
+			seat.AvatarID = nextAvatarID
+		}
 	}
 	if boundID == 0 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO client_writers(client_id,token_hash) VALUES(?,?)`, seat.ID, hash[:]); err != nil {
@@ -292,7 +373,7 @@ func (s *Service) Complete(ctx context.Context, hash clients.CredentialHash, id 
 	if err := tx.Commit(); err != nil {
 		return Result{}, err
 	}
-	if rejoined && s.options.RequestRefresh != nil {
+	if (rejoined || profileChanged) && s.options.RequestRefresh != nil {
 		s.options.RequestRefresh()
 	}
 	return Result{Client: seat, Created: newSeat}, nil

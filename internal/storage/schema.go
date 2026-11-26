@@ -40,7 +40,7 @@ func InitSchema(ctx context.Context, writer *sql.DB) error {
 		token_hash BLOB NOT NULL CHECK (typeof(token_hash) = 'blob' AND length(token_hash) = 32),
 		server_id TEXT NOT NULL CHECK (length(server_id) = 36),
 		return_to TEXT NOT NULL,
-		avatar_id INTEGER NOT NULL CHECK (typeof(avatar_id) = 'integer' AND avatar_id > 0),
+		avatar_id INTEGER CHECK (avatar_id IS NULL OR (typeof(avatar_id) = 'integer' AND avatar_id > 0)),
 		expires_at_ms INTEGER NOT NULL,
 		stage TEXT NOT NULL CHECK (stage IN ('pending', 'authorizing', 'verifying', 'approved', 'denied', 'failed', 'completed')),
 		state TEXT UNIQUE,

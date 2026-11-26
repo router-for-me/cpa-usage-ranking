@@ -53,7 +53,7 @@ func TestMultiWriterReportAndWholeSeatWithdrawal(t *testing.T) {
 	otherID := f.start(t, other, "550e8400-e29b-41d4-a716-446655440001", returnURL)
 	f.approve(t, otherID, 42, "Other CPA", "test", returnURL)
 	otherSeat := identity(t, f.complete(t, other, otherID))
-	if seata != seatb || seata.ID == otherSeat.ID {
+	if seata.ID != seatb.ID || seatb.Name != "Ignored" || seata.ID == otherSeat.ID {
 		t.Fatal("test did not allocate a shared seat and a distinct seat")
 	}
 	assertTotal := func(id int64, expected int) {

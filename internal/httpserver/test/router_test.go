@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -98,5 +99,60 @@ func TestForwardedHeadersAreNotTrustedByDefault(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Body.String() != "192.0.2.10" {
 		t.Fatalf("untrusted proxy header changed client IP: %s", rec.Body.String())
+	}
+}
+
+func TestHealthAndReadyHeadAndNoCORSOnNonPublicRoutes(t *testing.T) {
+	ready := false
+	router := httpserver.NewRouterWithReadiness(quietLogger(), func(context.Context) bool { return ready })
+	if err := httpserver.MountAdmin(router, nil, nil, quietLogger(), httpserver.AdminHTTPOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	reg := newRegistrationFixture(t, defaultRegistrationSettings())
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{http.MethodHead, "/healthz", http.StatusOK},
+		{http.MethodHead, "/readyz", http.StatusServiceUnavailable},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.status || rec.Body.Len() != 0 {
+			t.Fatalf("%s %s: status=%d body=%q", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%s %s unexpectedly exposed CORS header", tc.method, tc.path)
+		}
+	}
+
+	ready = true
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/readyz", nil))
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("ready HEAD /readyz: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	for _, tc := range []struct {
+		engine *gin.Engine
+		method string
+		path   string
+	}{
+		{reg.router, http.MethodPost, startPath},
+		{reg.router, http.MethodOptions, startPath},
+		{reg.router, http.MethodPost, completePath},
+		{reg.router, http.MethodPost, withdrawPath},
+		{router, http.MethodGet, "/v1/admin/session"},
+		{router, http.MethodOptions, "/v1/admin/session"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("Origin", "https://dashboard.example")
+		rec := httptest.NewRecorder()
+		tc.engine.ServeHTTP(rec, req)
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%s %s must never emit Access-Control-Allow-Origin", tc.method, tc.path)
+		}
 	}
 }

@@ -54,7 +54,7 @@ ENV RANKING_HTTP_ADDR=0.0.0.0:8080 \
     RANKING_SQLITE_PATH=/data/ranking.db \
     RANKING_WEB_DIR=/app/web \
     RANKING_MODELS_PATH=/app/config/models.json \
-    RANKING_HEALTHCHECK_URL=http://127.0.0.1:8080/readyz
+    RANKING_HEALTHCHECK_URL=http://127.0.0.1:8080/healthz
 USER 10001:10001
 VOLUME ["/data"]
 EXPOSE 8080

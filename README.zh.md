@@ -25,17 +25,17 @@
 
 接入方通过标准 **HTTPS + UTF-8 JSON（注册与上报请求体支持可选 gzip）** 与服务端通信，无需专用 SDK，也不依赖特定客户端实现：
 
-- **只读展示端**：直接匿名调用 `GET /v1/leaderboards/{board}/{period}` 与 `/avatars/*`，无需注册或凭据。
+- **只读展示端**：直接匿名调用 `GET` / `HEAD` `/v1/leaderboards/{board}/{period}` 与 `/avatars/*`（已内置匿名公开只读 CORS，支持浏览器跨站直连），无需注册或凭据。
 - **用量上报端**：每个安装实例本地持久化一份 32 字节 `base64url` Bearer 凭据，经 GitHub OAuth 绑定 `(GitHub 用户 ID, CPA server_id)` 席位后，按 UTC 自然日上报完整累计快照。
 
 | 步骤 | 接口 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `server_id`、`return_to` 与可选 `avatar_id`，获取 `authorize_url` |
-| 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权） |
+| 开始注册 | `POST /v1/clients/register/start` | 本端 `Bearer` | 提交 `server_id`、可选 `return_to` 与可选 `avatar_id`，获取 `authorize_url` |
+| 完成注册 | `POST /v1/clients/register/complete` | 同一 `Bearer` | 绑定席位（`201` 新席位、`200` 复用/恢复、`202` 待授权），同步最新 GitHub 昵称与显式头像 |
 | 上报日快照 | `PUT /v1/clients/report/{utc_day}` | 已注册 `Bearer` | 原子替换席位在 UTC 今日/昨日的完整累计快照 |
 | 退出席位 | `POST /v1/clients/withdraw` | 已注册 `Bearer` | 整席退出（`204`，无响应体）；未被封禁时，可用同一 GitHub 账号和 `server_id` 重新注册以恢复原席位 |
-| 读取榜单 | `GET /v1/leaderboards/{board}/{period}` | 无需 | 获取最新发布的 Top 100 缓存榜单 |
-| 获取头像 | `GET /avatars/catalog.json`、`/avatars/{path}` | 无需 | 读取头像清单与内置 WebP 图片（支持 `ETag`） |
+| 读取榜单 | `GET` / `HEAD` `/v1/leaderboards/{board}/{period}` | 无需 | 获取最新发布的 Top 100 缓存榜单（支持公开只读 CORS） |
+| 获取头像 | `GET` / `HEAD` `/avatars/catalog.json`、`/avatars/{path}` | 无需 | 读取头像清单与内置 WebP 图片（支持 `ETag` 与跨站读取） |
 
 **核心协议特性：**
 - **凭据由客户端自持**：服务端仅存 32 字节随机密钥的 `SHA-256` 摘要；同一 `(GitHub ID, server_id)` 席位下的多个上报端各自持有独立凭据。

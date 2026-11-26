@@ -35,6 +35,10 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pendingUnbound, err := service.Start(ctx, digest(2), serverID, returnTo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	approve(t, db, other)
 	opts := registration.DefaultOptions()
 	opts.Enabled = false
@@ -43,8 +47,20 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if err != nil || r.Created || r.Client.ID != first.Client.ID {
 		t.Fatalf("closed retry: %+v %v", r, err)
 	}
-	if _, err := closed.Start(ctx, hash, serverID, returnTo, nil); !errors.Is(err, registration.ErrRegistrationClosed) {
-		t.Fatalf("new start accepted when closed: %v", err)
+	// 关闭新注册时，已绑定老凭据仍可重新 Start 与 Authorize 以完成恢复或退榜重回。
+	boundRetryID, err := closed.Start(ctx, hash, serverID, returnTo, nil)
+	if err != nil {
+		t.Fatalf("bound credential start rejected when closed: %v", err)
+	}
+	if _, err := closed.Authorize(ctx, boundRetryID); err != nil {
+		t.Fatalf("bound credential authorize rejected when closed: %v", err)
+	}
+	// 未绑定的陌生凭据在 Start、Authorize 与 Complete 均应被拒绝。
+	if _, err := closed.Start(ctx, digest(1), serverID, returnTo, nil); !errors.Is(err, registration.ErrRegistrationClosed) {
+		t.Fatalf("unbound start accepted when closed: %v", err)
+	}
+	if _, err := closed.Authorize(ctx, pendingUnbound); !errors.Is(err, registration.ErrRegistrationClosed) {
+		t.Fatalf("unbound authorize accepted when closed: %v", err)
 	}
 	if _, err := closed.Complete(ctx, digest(1), other); !errors.Is(err, registration.ErrRegistrationClosed) {
 		t.Fatalf("new writer accepted when closed: %v", err)
@@ -65,5 +81,5 @@ func TestClosedRegistrationKeepsExistingRetryAndAuthentication(t *testing.T) {
 	if _, err := authenticator.Authenticate(ctx, headers); !errors.Is(err, clients.ErrDisabled) {
 		t.Fatalf("disabled authentication: %v", err)
 	}
-	counts(t, db, 1, 1, 2)
+	counts(t, db, 1, 1, 4)
 }

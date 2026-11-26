@@ -30,7 +30,7 @@ type IngestionLimits struct {
 }
 
 func DefaultIngestionLimits() IngestionLimits {
-	return IngestionLimits{MaxBodyBytes: 128 << 10, MaxItems: 1024, ConcurrentDecodes: 16,
+	return IngestionLimits{MaxBodyBytes: 512 << 10, MaxItems: 1024, ConcurrentDecodes: 16,
 		ClientInterval: 10 * time.Second, ClientBurst: 10, GlobalInterval: 5 * time.Millisecond,
 		GlobalBurst: 400, MaxClients: 100000, StateTTL: 10 * time.Minute}
 }

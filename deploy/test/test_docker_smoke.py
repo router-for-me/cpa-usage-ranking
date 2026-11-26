@@ -1,5 +1,6 @@
 """Safety checks for the Docker smoke runner; no Docker daemon is used."""
 import json
+from pathlib import Path
 import sqlite3
 import subprocess
 from types import SimpleNamespace
@@ -108,6 +109,11 @@ class SmokeSafetyTests(unittest.TestCase):
         args = call.call_args.args
         for key, value in [("--cpus", "2"), ("--memory", "1g"), ("--memory-swap", "1g")]:
             self.assertEqual(args[args.index(key) + 1], value)
+
+    def test_dockerfile_healthcheck_defaults_to_healthz(self):
+        dockerfile = (Path(__file__).resolve().parents[2] / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("RANKING_HEALTHCHECK_URL=http://127.0.0.1:8080/healthz", dockerfile)
+        self.assertNotIn("RANKING_HEALTHCHECK_URL=http://127.0.0.1:8080/readyz", dockerfile)
 
 
 if __name__ == "__main__":

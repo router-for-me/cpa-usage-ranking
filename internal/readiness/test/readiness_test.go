@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,9 +138,28 @@ func TestReadinessTracksRealDependenciesAndCompleteCache(t *testing.T) {
 	if currentEntry != oldEntry {
 		t.Fatal("failed refresh replaced old cache")
 	}
+	// 写连接持锁期间 /readyz 不应阻塞或误报未就绪，且支持并发探针合并。
+	writerTx, err := db.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if status("/readyz") != 200 {
+				t.Error("readyz failed while writer held transaction")
+			}
+		})
+	}
+	wg.Wait()
+	if err := writerTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Reader.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// 等待 1s 探针缓存过期后，关闭只读库应被准确检出为 503。
+	time.Sleep(1100 * time.Millisecond)
 	if status("/readyz") != 503 || status("/healthz") != 200 {
 		t.Fatal("closed database was ready or liveness failed")
 	}
@@ -168,6 +188,81 @@ func TestReadinessNoBuildItemsNotReady(t *testing.T) {
 		t.Fatal("no items marked ready")
 	}
 	if _, err := c.Current(); !errors.Is(err, cache.ErrUnavailable) {
+		t.Fatal("missing unavailable error")
+	}
+}
+
+func TestReadinessFirstProbeHonorsCallerCancellation(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "cancel.db"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = storage.InitSchema(ctx, db.Writer); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err = os.WriteFile(path, []byte(`{"models":[{"model_name":"alpha"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := models.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := models.Register(ctx, db.Writer, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	avatar, err := avatars.Load(avatars.BuiltinFS())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := statistics.NewReader(db.Reader, 10, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := cache.Item{ID: "fixture", Kind: periods.All, Encode: func(_ context.Context, _ statistics.Snapshot, w io.Writer) error {
+		_, err := io.WriteString(w, "ok")
+		return err
+	}}
+	opts := cache.DefaultOptions()
+	opts.Interval = time.Hour
+	c, err := cache.New(reader, []cache.Item{item}, opts, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stopCache := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- c.Run(runCtx) }()
+	defer func() { stopCache(); <-done }()
+	for {
+		if _, err := c.Current(); err == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// 占满读池唯一连接使首个探针阻塞，验证首个调用方取消请求时可立即返回而非等满 1s。
+	db.Reader.SetMaxOpenConns(1)
+	held, err := db.Reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	check := readiness.New(db, reg, avatar, c)
+	callerCtx, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if check.Ready(callerCtx) {
+		t.Fatal("cancelled first probe unexpectedly succeeded")
+	}
+	if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
+		t.Fatalf("first probe ignored caller cancellation; took %v", elapsed)
+	}
+	_ = held.Close()
+	if !check.Ready(ctx) {
+		t.Fatal("probe did not recover after reader connection released")
 	}
 }

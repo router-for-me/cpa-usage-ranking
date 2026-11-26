@@ -11,6 +11,7 @@ services:
       - RANKING_GITHUB_CLIENT_ID
       - RANKING_GITHUB_CLIENT_SECRET
       - RANKING_REGISTRATION_ENABLED
+      - RANKING_TRUSTED_PROXIES
     volumes:
       - ranking-data:/data
     stop_grace_period: 30s

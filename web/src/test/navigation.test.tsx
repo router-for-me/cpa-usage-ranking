@@ -1,7 +1,8 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import RootApp from '../RootApp'
+import { isAppRoute, navigate } from '../navigation'
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 const session = { enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'csrf', expires_at: new Date(Date.now() + 3600000).toISOString() }
@@ -91,4 +92,50 @@ it('does not fetch public leaderboards or avatars while the public view is hidde
   await user.click(within(screen.getByRole('navigation', { name: 'Page navigation' })).getByRole('link', { name: 'Sign in' }))
   expect(await screen.findByRole('heading', { name: 'Administrator Sign In' })).toBeVisible()
   expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/leaderboards/overall/today')).toHaveLength(publicReads)
+})
+
+it('normalizes trailing slashes and bare /admin while preserving query and hash in navigation', async () => {
+  expect(isAppRoute('/admin/users/?q=alice#row-1')).toBe(true)
+  expect(isAppRoute('/admin/')).toBe(true)
+  expect(isAppRoute('https://external.example/admin/users')).toBe(false)
+  navigate('/admin/users/?q=alice#row-1')
+  expect(window.location.pathname).toBe('/admin/users')
+  expect(window.location.search).toBe('?q=alice')
+  expect(window.location.hash).toBe('#row-1')
+
+  vi.stubGlobal('fetch', vi.fn((path: RequestInfo | URL) =>
+    Promise.resolve(json(String(path).includes('/admin/session') ? session : String(path).includes('avatars') ? catalog : empty))))
+  window.history.replaceState({}, '', '/admin/')
+  render(<RootApp />)
+  await waitFor(() => expect(window.location.pathname).toBe('/admin/leaderboards'))
+  expect(await screen.findByRole('navigation', { name: 'Console navigation' })).toBeVisible()
+})
+
+it('stops session polling and focus checks on public pages when admin is disabled or visitor is anonymous', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    const fetcher = vi.fn((path: RequestInfo | URL) =>
+      Promise.resolve(json(String(path).includes('/admin/session') ? { enabled: true, authenticated: false } : String(path).includes('avatars') ? catalog : empty)))
+    vi.stubGlobal('fetch', fetcher)
+    const view = render(<RootApp />)
+    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1))
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(120_000)
+    })
+    expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1)
+    view.unmount()
+
+    // On /admin/login with admin enabled, focus and 60s timer continue monitoring session state.
+    fetcher.mockClear()
+    window.history.replaceState({}, '', '/admin/login')
+    render(<RootApp />)
+    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(1))
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() => expect(fetcher.mock.calls.filter(([path]) => String(path) === '/v1/admin/session')).toHaveLength(2))
+  } finally {
+    vi.useRealTimers()
+  }
 })

@@ -9,7 +9,7 @@ import (
 
 func TestAdminUserListHTTP(t *testing.T) {
 	router, service, db := adminDatabaseRouter(t)
-	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,disabled,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','no reports',1,0,123),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','literal %_ <img>',1,1,456)`); err != nil {
+	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,disabled,withdrawn,created_at_ms) VALUES(1,1001,'550e8400-e29b-41d4-a716-446655440000','no reports',1,0,1,123),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440001','literal %_ <img>',1,1,0,456)`); err != nil {
 		t.Fatal(err)
 	}
 	ownerCookie, owner := adminLoginCookie(t, service, "owner", "isolated-test-password")
@@ -24,22 +24,25 @@ func TestAdminUserListHTTP(t *testing.T) {
 		}
 		var page struct {
 			Users []struct {
-				ID       string `json:"id"`
-				Disabled bool   `json:"disabled"`
+				ID        string `json:"id"`
+				GitHubID  string `json:"github_id"`
+				ServerID  string `json:"server_id"`
+				Disabled  bool   `json:"disabled"`
+				Withdrawn bool   `json:"withdrawn"`
 			}
 			Next string `json:"next_cursor"`
 		}
 		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
-		if len(page.Users) != 1 || page.Users[0].ID != "1" || page.Next != "1" {
-			t.Fatal("bad first page")
+		if len(page.Users) != 1 || page.Users[0].ID != "1" || page.Users[0].GitHubID != "1001" || page.Users[0].ServerID != "550e8400-e29b-41d4-a716-446655440000" || !page.Users[0].Withdrawn || page.Next != "1" {
+			t.Fatalf("bad first page: %+v", page)
 		}
 		next := adminCall(router, "GET", "/v1/admin/users?after=1", "", cookie, "", "", true)
 		if err := json.Unmarshal(next.Body.Bytes(), &page); err != nil {
 			t.Fatal(err)
 		}
-		if len(page.Users) != 1 || page.Users[0].ID != "9007199254740993" || !page.Users[0].Disabled || page.Next != "" {
+		if len(page.Users) != 1 || page.Users[0].ID != "9007199254740993" || page.Users[0].GitHubID != "9007199254740993" || !page.Users[0].Disabled || page.Users[0].Withdrawn || page.Next != "" {
 			t.Fatal("ID precision or banned user missing")
 		}
 		for _, secret := range []string{"password", "hash", "token", "revision", "staff"} {
@@ -47,13 +50,13 @@ func TestAdminUserListHTTP(t *testing.T) {
 				t.Fatal("private data leaked")
 			}
 		}
-		for _, query := range []string{"disabled=true", "name=%25_", "id=9007199254740993", "q=&disabled=&hidden=&limit=50", "unknown=x&limit=1", "id=1&name=no"} {
+		for _, query := range []string{"disabled=true", "withdrawn=true", "withdrawn=false", "name=%25_", "id=9007199254740993", "q=&disabled=&hidden=&withdrawn=&limit=50", "unknown=x&limit=1", "id=1&name=no"} {
 			if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", cookie, "", "", true).Code; got != 200 {
 				t.Fatalf("query %q: %d", query, got)
 			}
 		}
 	}
-	for _, query := range []string{"limit=101", "limit=0", "limit=-1", "id=0", "id=90071992547409930000", "after=+1", "disabled=1", "limit=1&limit=2"} {
+	for _, query := range []string{"limit=101", "limit=0", "limit=-1", "id=0", "id=90071992547409930000", "after=+1", "disabled=1", "withdrawn=1", "limit=1&limit=2"} {
 		if got := adminCall(router, "GET", "/v1/admin/users?"+query, "", ownerCookie, "", "", true).Code; got != 400 {
 			t.Fatalf("accepted %q: %d", query, got)
 		}

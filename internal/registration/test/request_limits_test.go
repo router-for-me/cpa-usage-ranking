@@ -2,10 +2,14 @@ package test
 
 import (
 	"errors"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
+	"weak"
 
 	"cpa-usage-ranking/internal/registration"
 )
@@ -137,5 +141,39 @@ func TestRequestLimitValidationAndRetryAfter(t *testing.T) {
 		if got := (&registration.LimitError{RetryAfter: tc.duration}).RetryAfterSeconds(); got != tc.seconds {
 			t.Fatalf("Retry-After %d, want %d", got, tc.seconds)
 		}
+	}
+}
+
+func TestRequestLimiterDetachesSubstringBackingBuffer(t *testing.T) {
+	limiter, err := registration.NewRequestLimiter(registration.RequestLimits{SourceRequests: 2, GlobalRequests: 10, Window: time.Minute, MaxSources: 10}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ptr weak.Pointer[byte]
+	func() {
+		raw := make([]byte, 1<<20)
+		copy(raw, "short-request-id-key")
+		ptr = weak.Make(&raw[0])
+		sub := unsafe.String(&raw[0], len(raw))[:20]
+		if err := limiter.Admit(sub); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	for range 4 {
+		runtime.GC()
+		if ptr.Value() == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ptr.Value() != nil {
+		t.Fatal("limiter retained caller URI backing buffer")
+	}
+	// Cloned key continues tracking subsequent requests accurately.
+	if err := limiter.Admit(strings.Repeat("short-request-id-key", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := limiter.Admit("short-request-id-key"); err == nil {
+		t.Fatal("expected third request on cloned key to be rate-limited")
 	}
 }

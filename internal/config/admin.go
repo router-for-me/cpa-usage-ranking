@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,8 +21,8 @@ func loadAdmin(cfg *Config) error {
 		}
 		defer file.Close()
 		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() || info.Size() > 8192 {
-			return errors.New("administrator configuration must be a small regular JSON file")
+		if err != nil || info.IsDir() || (info.Mode().IsRegular() && info.Size() > 8192) {
+			return errors.New("administrator configuration must be a small JSON file")
 		}
 		// 权限过宽时在启动阶段输出告警，不因容器只读挂载或 Secret 挂载权限阻止服务启动。
 		if info.Mode().Perm()&0037 != 0 {
@@ -42,8 +43,12 @@ func loadAdmin(cfg *Config) error {
 				return errors.New("administrator configuration must be outside the frontend directory")
 			}
 		}
-		decoder := json.NewDecoder(io.LimitReader(file, 8193))
-		decoder.DisallowUnknownFields()
+		// 统一以 LimitReader 限长读取，兼容容器 Secret 挂载、符号链接与命名管道。
+		data, err := io.ReadAll(io.LimitReader(file, 8193))
+		if err != nil || len(data) > 8192 {
+			return errors.New("administrator configuration must be a small JSON file")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
 		var owner admin.Owner
 		if decoder.Decode(&owner) != nil || decoder.Decode(new(any)) != io.EOF || !admin.ValidCredentials(owner.Username, owner.Password) {
 			return errors.New("invalid administrator configuration: use a 3-64 character ASCII username and a 12-72 byte password")

@@ -127,8 +127,10 @@ func writeReportResult(c *gin.Context, result reports.WriteResult) {
 		c.JSON(http.StatusOK, gin.H{"revision": strconv.FormatInt(result.Revision, 10)})
 	case errors.As(result.Err, &conflict):
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": gin.H{"code": "revision_conflict", "message": "Report revision conflicts with the writer's current revision"}, "revision": strconv.FormatInt(conflict.Current, 10)})
-	case errors.Is(result.Err, reports.ErrInvalidDay), errors.Is(result.Err, reports.ErrFutureDay):
-		writeError(c, http.StatusUnprocessableEntity, "invalid_day", "Invalid or future UTC day")
+	case errors.Is(result.Err, reports.ErrFutureDay):
+		writeError(c, http.StatusUnprocessableEntity, "future_day", "Future UTC day is not accepted")
+	case errors.Is(result.Err, reports.ErrInvalidDay):
+		writeError(c, http.StatusUnprocessableEntity, "invalid_day", "Invalid UTC day")
 	case errors.Is(result.Err, reports.ErrExpiredDay):
 		writeError(c, http.StatusGone, "expired_day", "Report window has closed")
 	case errors.Is(result.Err, reports.ErrInvalid):

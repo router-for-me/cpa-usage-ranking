@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math"
 	"slices"
+	"unicode/utf8"
 
 	"cpa-usage-ranking/internal/models"
 )
@@ -32,7 +33,7 @@ func Prepare(report Report) (Prepared, error) {
 	copy(items, report.Items)
 	for i := range items {
 		item := &items[i]
-		if _, err := models.NormalizeReportedName(item.Model); err != nil {
+		if !utf8.ValidString(item.Model) {
 			return Prepared{}, ErrInvalid
 		}
 		// Copy pointers and normalize signed zero, so semantically equal JSON
@@ -131,10 +132,8 @@ func (p Prepared) Aggregate(registry *models.Registry) (map[Key]Metrics, error) 
 	rows := make(map[Key]Metrics)
 	for _, item := range p.items {
 		resolved, err := registry.Resolve(item.Model)
-		if err != nil {
-			return nil, ErrInvalid
-		}
-		if !resolved.Matched {
+		if err != nil || !resolved.Matched {
+			// 单条陌生或异常模型名静默跳过，避免整日合法模型用量被连坐拒收。
 			continue
 		}
 		metric, err := itemMetrics(item)

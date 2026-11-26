@@ -42,6 +42,14 @@ func TestDecodeVersionedReport(t *testing.T) {
 	if got.Model != "alpha" || got.TotalTokens != 50 || got.InputTokens != 0 || got.OutputTokens != 0 || got.RequestCount != 0 || got.TTFTAvgMS != nil || got.LatencyAvgMS != nil {
 		t.Fatalf("minimal defaults: %+v", got)
 	}
+	nullable, err := reports.Decode([]byte(`{"schema_version":1,"revision":"3","items":[{"model":"alpha","total_tokens":null,"input_tokens":null,"output_tokens":null,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null,"request_count":null,"success_count":null,"ttft_avg_ms":"320.5","ttft_samples":null,"latency_avg_ms":"0","latency_samples":null}]}`))
+	if err != nil || len(nullable.Items) != 1 {
+		t.Fatalf("nullable optional fields decode: %+v %v", nullable, err)
+	}
+	ni := nullable.Items[0]
+	if ni.TotalTokens != 0 || ni.InputTokens != 0 || ni.RequestCount != 0 || ni.TTFTSamples != 0 || ni.TTFTAvgMS == nil || *ni.TTFTAvgMS != 320.5 || ni.LatencyAvgMS == nil || *ni.LatencyAvgMS != 0 {
+		t.Fatalf("nullable optional fields values: %+v", ni)
+	}
 }
 
 func TestDecodeRejectsMissingNullIncorrectTypesAndTrailing(t *testing.T) {
@@ -64,14 +72,19 @@ func TestDecodeRejectsMissingNullIncorrectTypesAndTrailing(t *testing.T) {
 		"null item":          `{"schema_version":1,"revision":"0","items":[null]}`,
 		"missing model":      strings.Replace(validPayload, `"model":"vendor/model",`, "", 1),
 		"null model":         strings.Replace(validPayload, `"model":"vendor/model"`, `"model":null`, 1),
-		"null tokens":        strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":null`, 1),
 		"bool tokens":        strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":true`, 1),
 		"fraction tokens":    strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":"1.0"`, 1),
 		"num fraction":       strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":1.5`, 1),
 		"sci tokens":         strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":1e3`, 1),
 		"token overflow":     strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":"9223372036854775808"`, 1),
 		"num token overflow": strings.Replace(validPayload, `"input_tokens":"10"`, `"input_tokens":9223372036854775808`, 1),
-		"string avg":         strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"0"`, 1),
+		"negative avg":       strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":-1`, 1),
+		"negative str avg":   strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"-1.5"`, 1),
+		"nan str avg":        strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"NaN"`, 1),
+		"inf str avg":        strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"Inf"`, 1),
+		"sci str avg":        strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"1e2"`, 1),
+		"dot str avg":        strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":"320."`, 1),
+		"empty str avg":      strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":""`, 1),
 		"boolean avg":        strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":false`, 1),
 		"nonfinite":          strings.Replace(validPayload, `"ttft_avg_ms":null`, `"ttft_avg_ms":1e999`, 1),
 		"trailing object":    validPayload + `{}`,

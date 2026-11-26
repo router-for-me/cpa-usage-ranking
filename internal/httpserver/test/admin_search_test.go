@@ -8,14 +8,28 @@ import (
 
 func TestAdminUnifiedSearchHTTP(t *testing.T) {
 	router, service, db := adminDatabaseRouter(t)
-	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,created_at_ms) VALUES(1,1,'550e8400-e29b-41d4-a716-446655440000','100',1,0),(100,100,'550e8400-e29b-41d4-a716-446655440000','target',1,0),(9007199254740993,9007199254740993,'550e8400-e29b-41d4-a716-446655440000','large',1,0)`); err != nil {
+	if _, err := db.Writer.Exec(`INSERT INTO clients(id,github_id,server_id,display_name,avatar_id,created_at_ms) VALUES(1,1001,'550e8400-e29b-41d4-a716-446655440000','100',1,0),(100,2002,'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','target',1,0),(9007199254740993,9007199254740994,'550e8400-e29b-41d4-a716-446655440002','large',1,0)`); err != nil {
 		t.Fatal(err)
 	}
 	cookie, _ := adminLoginCookie(t, service, "owner", "isolated-test-password")
 	for _, scenario := range []struct {
 		query string
 		count int
-	}{{"q=100", 2}, {"q=9007199254740993", 1}, {"q=target", 1}, {"q=%27+OR+1%3D1", 0}, {"q=none", 0}, {"q=100&id=1", 1}, {"q=100&name=target", 1}, {"q=&limit=50", 3}, {"q=target&extra=ignored", 1}} {
+	}{
+		{"q=100", 2},
+		{"q=2002", 1},
+		{"q=9007199254740994", 1},
+		{"q=9007199254740993", 1},
+		{"q=BBBB-CCCC", 1},
+		{"q=+target+", 1},
+		{"q=target", 1},
+		{"q=%27+OR+1%3D1", 0},
+		{"q=none", 0},
+		{"q=100&id=1", 1},
+		{"q=100&name=target", 1},
+		{"q=&limit=50", 3},
+		{"q=target&extra=ignored", 1},
+	} {
 		response := adminCall(router, "GET", "/v1/admin/users?"+scenario.query, "", cookie, "", "", true)
 		var data struct {
 			Users []struct {
