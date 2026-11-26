@@ -2,17 +2,112 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches:
-      - '**'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      full:
+        description: 'Run all checks before publishing an image'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ (github.event_name != 'pull_request' || inputs.full == true) && 'true' || steps.filter.outputs.backend }}
+      frontend: ${{ (github.event_name != 'pull_request' || inputs.full == true) && 'true' || steps.filter.outputs.frontend }}
+      container: ${{ (github.event_name != 'pull_request' || inputs.full == true) && 'true' || steps.filter.outputs.container }}
+      other: ${{ steps.filter.outputs.other }}
+    steps:
+      - name: Checkout repository
+        if: ${{ github.event_name == 'pull_request' && !inputs.full }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 20
+          persist-credentials: false
+      - name: Detect changed paths
+        id: filter
+        # PR 按路径筛选；手动检查与镜像发布验证强制执行全量检查。
+        if: ${{ github.event_name == 'pull_request' && !inputs.full }}
+        uses: dorny/paths-filter@v4
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            backend:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'config/**'
+              - 'deploy/**'
+              - 'Dockerfile'
+              - 'Makefile'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/**'
+            frontend:
+              - 'web/**'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'third_party/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/publish.yml'
+            container:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'compose.yaml'
+              - 'deploy/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'cmd/ranking/**'
+              - 'internal/storage/**'
+              - 'internal/avatars/*.go'
+              - 'internal/avatars/assets/catalog.json'
+              - 'internal/avatars/assets/images/**'
+              - 'config/models.json'
+              - 'web/package.json'
+              - 'web/package-lock.json'
+              - 'web/index.html'
+              - 'web/tsconfig.json'
+              - 'web/vite.config.ts'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'third_party/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/publish.yml'
+            other:
+              # 未识别路径保守执行前后端检查，避免新增目录静默漏测。
+              - '**'
+              - '!cmd/**'
+              - '!internal/**'
+              - '!config/**'
+              - '!deploy/**'
+              - '!web/**'
+              - '!Dockerfile'
+              - '!.dockerignore'
+              - '!compose.yaml'
+              - '!Makefile'
+              - '!go.mod'
+              - '!go.sum'
+              - '!THIRD_PARTY_NOTICES.md'
+              - '!third_party/**'
+              - '!.github/workflows/**'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!README.md'
+              - '!README.zh.md'
+              - '!LICENSE'
+              - '!.gitignore'
+              - '!assets/**'
+              - '!docs/**'
+
   backend:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.other == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -36,6 +131,8 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.9
 
   frontend:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.frontend == 'true' || needs.changes.outputs.other == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -52,6 +149,8 @@ jobs:
       - run: npm --prefix web run build
 
   container:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.container == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -90,7 +189,7 @@ jobs:
 
   gate:
     if: ${{ always() }}
-    needs: [backend, frontend, container]
+    needs: [changes, backend, frontend, container]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -99,6 +198,8 @@ jobs:
           persist-credentials: false
       - name: Require every check to succeed
         env:
+          FULL_CHECK: ${{ github.event_name != 'pull_request' || inputs.full == true }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           CONTAINER_RESULT: ${{ needs.container.result }}
