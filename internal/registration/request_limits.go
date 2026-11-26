@@ -3,6 +3,7 @@ package registration
 import (
 	"container/list"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -106,8 +107,10 @@ func (l *RequestLimiter) Admit(source string) error {
 		if len(l.sources) >= l.limits.MaxSources {
 			return &LimitError{Code: "registration_capacity", RetryAfter: l.expiry.Front().Value.(*requestWindow).until.Sub(now)}
 		}
-		window = &requestWindow{source: source, until: now.Add(l.limits.Window)}
-		l.sources[source] = window
+		// 仅拷贝保留短键本身，避免切自请求头或原始 URI 的子串长期挂住大块底层内存。
+		cloned := strings.Clone(source)
+		window = &requestWindow{source: cloned, until: now.Add(l.limits.Window)}
+		l.sources[cloned] = window
 		l.expiry.PushBack(window)
 	}
 	if window.count >= l.limits.SourceRequests {
