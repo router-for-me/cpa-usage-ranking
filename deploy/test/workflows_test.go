@@ -11,9 +11,15 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
+type concurrencyConfig struct {
+	Group  string `yaml:"group"`
+	Cancel any    `yaml:"cancel-in-progress"`
+}
+
 type workflow struct {
 	On          map[string]any    `yaml:"on"`
 	Permissions map[string]string `yaml:"permissions"`
+	Concurrency concurrencyConfig `yaml:"concurrency"`
 	Jobs        map[string]job    `yaml:"jobs"`
 }
 
@@ -22,11 +28,8 @@ type job struct {
 	If          string            `yaml:"if"`
 	Uses        string            `yaml:"uses"`
 	Permissions map[string]string `yaml:"permissions"`
-	Concurrency struct {
-		Group  string `yaml:"group"`
-		Cancel bool   `yaml:"cancel-in-progress"`
-	} `yaml:"concurrency"`
-	Strategy struct {
+	Concurrency concurrencyConfig `yaml:"concurrency"`
+	Strategy    struct {
 		Matrix struct {
 			Arch []string `yaml:"arch"`
 		} `yaml:"matrix"`
@@ -86,17 +89,23 @@ func findStep(t *testing.T, j job, name string) step {
 
 func TestCIRequiresRealChecksAndAllResults(t *testing.T) {
 	w := readWorkflow(t, "ci.yml")
-	for _, event := range []string{"pull_request", "push", "workflow_dispatch", "workflow_call"} {
+	if _, ok := w.On["push"]; ok {
+		t.Fatal("CI must not rerun on branch pushes after a PR merge")
+	}
+	for _, event := range []string{"pull_request", "workflow_dispatch", "workflow_call"} {
 		if _, ok := w.On[event]; !ok {
 			t.Errorf("CI missing trigger %s", event)
 		}
 	}
+	if len(w.On) != 3 {
+		t.Fatalf("unexpected CI triggers: %v", w.On)
+	}
 	if !reflect.DeepEqual(w.Permissions, map[string]string{"contents": "read"}) {
 		t.Fatalf("CI must have read-only contents permission: %v", w.Permissions)
 	}
-	branches, tags := pushFilter(t, w)
-	if !reflect.DeepEqual(branches, []string{"**"}) || len(tags) != 0 {
-		t.Fatal("ordinary push CI must be branch-only; tag publishing calls the full CI")
+	if w.Concurrency.Group != "${{ github.workflow }}-${{ github.ref }}" ||
+		w.Concurrency.Cancel != "${{ github.event_name == 'pull_request' }}" {
+		t.Fatalf("CI must cancel only superseded pull request runs: %+v", w.Concurrency)
 	}
 	if !reflect.DeepEqual(w.Jobs["container"].Strategy.Matrix.Arch, []string{"amd64", "arm64"}) {
 		t.Fatal("both architectures must be checked")
@@ -180,7 +189,7 @@ func TestPublicationNeedsChecksAndPolicyAndIsOnlyWriter(t *testing.T) {
 		t.Fatal("publication must require successful policy and CI, never failure/skip")
 	}
 	if !reflect.DeepEqual(pub.Permissions, map[string]string{"contents": "read", "packages": "write"}) ||
-		pub.Concurrency.Group != "ghcr-${{ github.repository }}" || pub.Concurrency.Cancel {
+		pub.Concurrency.Group != "ghcr-${{ github.repository }}" || pub.Concurrency.Cancel != false {
 		t.Fatal("only the serialized publish job may write packages")
 	}
 	for id, j := range w.Jobs {
