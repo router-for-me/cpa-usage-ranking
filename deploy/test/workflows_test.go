@@ -169,16 +169,24 @@ func TestCIRequiresRealChecksAndAllResults(t *testing.T) {
 	}
 	filters := parsePathFilters(t, filterStep.With["filters"])
 	for group, required := range map[string][]string{
-		"backend":   {"cmd/**", "internal/**", "config/**", "deploy/**", "Dockerfile", "Makefile", "go.mod", ".github/workflows/**"},
-		"frontend":  {"web/**", "THIRD_PARTY_NOTICES.md", "third_party/**", ".github/workflows/ci.yml"},
-		"container": {"Dockerfile", ".dockerignore", "compose.yaml", "deploy/**", "cmd/ranking/**", "internal/storage/**", "config/models.json", "THIRD_PARTY_NOTICES.md", "third_party/**", "web/vite.config.ts"},
-		"other":     {"**", "!docs/**", "!README.md", "!README.zh.md", "!LICENSE", "!assets/**", "!.gitignore"},
+		"backend":  {"cmd/**", "internal/**", "config/**", "deploy/**", "Dockerfile", "Makefile", "go.mod", ".github/workflows/**"},
+		"frontend": {"web/**", "THIRD_PARTY_NOTICES.md", "third_party/**", ".github/workflows/ci.yml"},
+		"container": {
+			"Dockerfile", ".dockerignore", "compose.yaml", "deploy/**", "cmd/ranking/**",
+			"internal/storage/**", "internal/avatars/*.go", "internal/avatars/assets/catalog.json", "internal/avatars/assets/images/**",
+			"config/models.json", "THIRD_PARTY_NOTICES.md", "third_party/**",
+			"web/index.html", "web/tsconfig.json", "web/vite.config.ts",
+		},
+		"other": {"**", "!docs/**", "!README.md", "!README.zh.md", "!LICENSE", "!assets/**", "!.gitignore"},
 	} {
 		for _, pattern := range required {
 			if !slices.Contains(filters[group], pattern) {
 				t.Errorf("paths-filter group %s missing required pattern %q", group, pattern)
 			}
 		}
+	}
+	if slices.Contains(filters["container"], "internal/avatars/**") {
+		t.Error("container filter must not match avatar provenance markdown files")
 	}
 
 	expectedConditions := map[string]string{
