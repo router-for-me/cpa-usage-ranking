@@ -90,8 +90,8 @@ func NewService(db *storage.DB, catalog *avatars.Catalog, options Options) (*Ser
 		options.Now = time.Now
 	}
 	authorizeLimiter, err := NewRequestLimiter(RequestLimits{
-		SourceRequests: 10,
-		GlobalRequests: 600,
+		SourceRequests: 6,
+		GlobalRequests: 3000,
 		Window:         time.Minute,
 		MaxSources:     max(options.Capacity, 2000),
 	}, options.Now)

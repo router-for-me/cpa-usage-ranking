@@ -289,7 +289,7 @@ func TestGitHubAuthorizeReopenRateLimitedPerRequestID(t *testing.T) {
 		}
 	}
 	last := f.open(t, id)
-	for i := 1; i < 10; i++ {
+	for i := 1; i < 6; i++ {
 		last = f.open(t, id)
 		if last.state == "" {
 			t.Fatalf("open %d produced empty state", i)
@@ -300,7 +300,14 @@ func TestGitHubAuthorizeReopenRateLimitedPerRequestID(t *testing.T) {
 	if limited.header.Get("Retry-After") == "" {
 		t.Fatal("missing Retry-After header on rate-limited authorize")
 	}
-	// Another request_id remains unaffected, and the last issued state on the limited request still works.
+	// Even if one source exhausts its full per-minute start budget (up to 18 more requests here) and hits per-ID reopen limits, another user's first open still succeeds.
+	for i := range 18 {
+		batchID := f.start(t, testSecret(byte(10+i)), serverID, returnURL)
+		for range 6 {
+			_ = f.open(t, batchID)
+		}
+		requireHTTPError(t, f.api(t, "GET", "/auth/github/authorize?request_id="+batchID, "", "", nil), http.StatusTooManyRequests, "registration_rate_limited")
+	}
 	_ = f.open(t, otherID)
 	f.github.setGrant("after-limit", fakeGrant{challenge: last.challenge, userJSON: `{"id":99,"login":"ok"}`})
 	if cb := f.callback(t, last.state, last.cookie, "code=after-limit"); cb.status != http.StatusFound {

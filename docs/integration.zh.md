@@ -86,7 +86,7 @@ Content-Type: application/json
 
 - 服务端通过 `HttpOnly; SameSite=Lax` Cookie（生产 HTTPS 为带 `Secure` 的 `__Host-ranking-github-<state>`；本地回环 HTTP 联调自动降级为不带 `Secure` 的 `ranking-github-<state>`）、会话 `state` 与 `S256` PKCE 绑定浏览器会话。
 - 带有 `Purpose` 或 `Sec-Purpose` 含 `prefetch` 的链接预览/预取请求会直接返回 `204 No Content`（`Cache-Control: no-store`），不消耗也不轮换授权状态。
-- 在进入回调核销之前（`pending` 或 `authorizing` 且未过期），用户可重复打开 `authorize_url` 重新签发最新 `(state, 浏览器 Cookie, PKCE)`，避免远程 CLI 链接被聊天预览或误关标签页作废（单笔 `request_id` 高频刷开受每分钟 `10` 次上限保护，超限返回 `429 registration_rate_limited` 及 `Retry-After`）；进入 `verifying` 及终态后仍严格拒绝重入。
+- 在进入回调核销之前（`pending` 或 `authorizing` 且未过期），用户可重复打开 `authorize_url` 重新签发最新 `(state, 浏览器 Cookie, PKCE)`，避免远程 CLI 链接被聊天预览或误关标签页作废（单笔 `request_id` 高频刷开受每分钟 `6` 次上限保护，超限返回 `429 registration_rate_limited` 及 `Retry-After`）；进入 `verifying` 及终态后仍严格拒绝重入。
 - 服务端用回调授权码向 GitHub 换取访问令牌并读取数字用户 ID，不申请仓库或邮箱权限，也不持久化 GitHub Token。
 - 记录同意或拒绝后，服务端带 `Referrer-Policy: no-referrer` 响应：若保存了 `return_to` 则 `302 Found` 原样跳回（不附加任何参数），若省略了 `return_to` 则直接渲染静态中英双语提示页。服务端绝不会主动请求 `return_to`，浏览器回跳**不是**注册成功的确认凭证。
 
