@@ -17,6 +17,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const pending = useRef<Promise<void> | null>(null)
   const accept = useCallback((value: AdminSession) => {
     generation.current++
+    pending.current = null
     const expired = value.expires_at && Date.parse(value.expires_at) <= Date.now()
     setSession(expired ? { enabled: value.enabled, authenticated: false } : value)
     setRawError(null)

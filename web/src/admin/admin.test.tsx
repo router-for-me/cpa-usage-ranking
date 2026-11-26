@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
 import { renderWithSession as render } from '../test/renderWithSession'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -184,4 +184,46 @@ it('shows specific HTTPS and same-origin proxy hints on 403 login errors', async
     await user.click(screen.getByRole('button', { name: '切换为英文' }))
     view.unmount()
   }
+})
+
+it('releases a superseded in-flight session probe when session state is accepted', async () => {
+  window.history.replaceState({}, '', '/admin/leaderboards')
+  let resolveStale!: (response: Response) => void
+  let sessionCalls = 0
+  const fetcher = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === '/v1/admin/session') {
+      sessionCalls++
+      if (sessionCalls === 1) {
+        return Promise.resolve(json({ enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'csrf' }))
+      }
+      if (sessionCalls === 2) {
+        return new Promise<Response>((resolve) => { resolveStale = resolve })
+      }
+      return Promise.resolve(json({ enabled: false, authenticated: false }))
+    }
+    if (url.startsWith('/v1/admin/users')) {
+      return Promise.resolve(json({}, 401))
+    }
+    return Promise.resolve(json({ board: 'overall', period: 'today', start: '2026-11-16', end: '2026-11-17', generated_at: '2026-11-16T00:00:00Z', entries: [] }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const user = userEvent.setup()
+  render(<AdminApp />)
+  const usersLink = await screen.findByRole('link', { name: 'Users' })
+  await act(async () => {})
+  await act(async () => {
+    window.dispatchEvent(new Event('focus'))
+  })
+  expect(sessionCalls).toBe(2)
+
+  await user.click(usersLink)
+  expect(await screen.findByRole('heading', { name: 'Admin console is disabled' })).toBeVisible()
+  expect(sessionCalls).toBe(3)
+
+  await act(async () => {
+    resolveStale(json({ enabled: true, authenticated: true, user: { id: 'owner', username: 'owner', owner: true }, csrf_token: 'stale' }))
+  })
+  expect(screen.getByRole('heading', { name: 'Admin console is disabled' })).toBeVisible()
+  expect(sessionCalls).toBe(3)
 })
