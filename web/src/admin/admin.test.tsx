@@ -1,4 +1,4 @@
-import { act, screen, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { renderWithSession as render } from '../test/renderWithSession'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -10,15 +10,18 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 afterEach(() => { vi.unstubAllGlobals(); window.history.replaceState({}, '', '/') })
 
 it('hides the disabled entry and shows login or console from session state', async () => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ enabled: false, authenticated: false })))
+  const disabledFetch = vi.fn(() => Promise.resolve(json({ enabled: false, authenticated: false })))
+  vi.stubGlobal('fetch', disabledFetch)
   const first = render(<AdminEntry />)
+  await waitFor(() => expect(disabledFetch).toHaveBeenCalledTimes(1))
+  await act(async () => {})
   expect(screen.queryByRole('link')).not.toBeInTheDocument()
   first.unmount()
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ enabled: true, authenticated: false })))
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json({ enabled: true, authenticated: false }))))
   const second = render(<AdminEntry />)
   expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/admin/login')
   second.unmount()
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ enabled: true, authenticated: true })))
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(json({ enabled: true, authenticated: true }))))
   render(<AdminEntry />)
   expect(await screen.findByRole('link', { name: 'Console' })).toHaveAttribute('href', '/admin/leaderboards')
 })
