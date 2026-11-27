@@ -21,15 +21,15 @@
     "2026-11-27: enforce official non-promotional list USD prices, shorter cache_write TTLs (Anthropic/Kimi 5m, OpenAI 30m), and explicit Gemini thinking-intensity aliases."
   ],
   "counts": {
-    "models": 134,
-    "aliases": 413,
-    "models_with_official_prices": 129,
+    "models": 133,
+    "aliases": 411,
+    "models_with_official_prices": 128,
     "models_with_reference_fallback_prices": 4,
     "models_with_all_prices_unknown": 1,
-    "non_null_price_fields": 658,
+    "non_null_price_fields": 655,
     "groups": {
       "anthropic": 15,
-      "deepseek": 4,
+      "deepseek": 3,
       "doubao": 8,
       "glm": 11,
       "google": 16,
@@ -639,43 +639,6 @@
         }
       }
     },
-    "deepseek-v4-flash": {
-      "price_source_key": "official:https://api-docs.deepseek.com/news/news260813",
-      "source_keys": [
-        "deepseek-v4-flash",
-        "DeepSeek-V4-Flash",
-        "deepseek-v4-flash-0731",
-        "DeepSeek-V4-Flash-0731",
-        "deepseek-v4-flash-ga-260731",
-        "deepseek-v4-flash-260425",
-        "deepseek-chat",
-        "deepseek-reasoner"
-      ],
-      "official_url": "https://api-docs.deepseek.com/news/news260813",
-      "reference_url": null,
-      "official_id_urls": [
-        "https://api-docs.deepseek.com/news/news260813",
-        "https://api-docs.deepseek.com/news/news260424"
-      ],
-      "source_prices": {
-        "default": {
-          "input": "0.44",
-          "output": "1.32",
-          "cache_read": "0.014",
-          "cache_write": null
-        }
-      },
-      "detail": "Official historical DeepSeek V4-Flash peak rate ($0.44/$1.32/$0.014 effective 2026-08-13); includes 2026-04-25 preview, 2026-07-31 GA, and legacy deepseek-chat / deepseek-reasoner routes.",
-      "source_group": "deepseek",
-      "accepted_prices": {
-        "default": {
-          "input": "0.44",
-          "output": "1.32",
-          "cache_read": "0.014",
-          "cache_write": null
-        }
-      }
-    },
     "deepseek-v4-pro": {
       "price_source_key": "official:https://api-docs.deepseek.com/quick_start/pricing",
       "source_keys": [
@@ -723,13 +686,18 @@
         "deepseek-v4.1-flash-1017",
         "deepseek-v4-1-flash-261017",
         "deepseek-v4-1-flash-260910",
+        "deepseek-v4-flash",
+        "DeepSeek-V4-Flash",
         "deepseek-v4-flash-vision-exp",
+        "deepseek-chat",
+        "deepseek-reasoner",
         "deepseek-flash-latest"
       ],
       "official_url": "https://api-docs.deepseek.com/quick_start/pricing",
       "reference_url": null,
       "official_id_urls": [
-        "https://api-docs.deepseek.com/quick_start/pricing"
+        "https://api-docs.deepseek.com/quick_start/pricing",
+        "https://api-docs.deepseek.com/news/news260424"
       ],
       "source_prices": {
         "default": {
@@ -739,7 +707,7 @@
           "cache_write": null
         }
       },
-      "detail": "Official DeepSeek API standard (peak) pricing for DeepSeek-V4.1-Flash.",
+      "detail": "Official DeepSeek API standard (peak) pricing for DeepSeek-V4.1-Flash; includes legacy deepseek-v4-flash, deepseek-chat, and deepseek-reasoner routes.",
       "source_group": "deepseek",
       "accepted_prices": {
         "default": {
@@ -750,18 +718,20 @@
         }
       }
     },
-    "devstral-medium": {
+    "devstral-2512": {
       "price_source_key": "official:https://docs.mistral.ai/getting-started/models",
       "source_keys": [
-        "devstral-medium",
         "devstral-2512",
-        "devstral-medium-latest",
-        "devstral-latest"
+        "devstral-2",
+        "devstral-2-25-12",
+        "devstral-latest",
+        "devstral-medium-latest"
       ],
       "official_url": "https://docs.mistral.ai/getting-started/models",
       "reference_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
       "official_id_urls": [
-        "https://docs.mistral.ai/getting-started/models"
+        "https://docs.mistral.ai/getting-started/models",
+        "https://openrouter.ai/api/v1/models"
       ],
       "source_prices": {
         "default": {

@@ -294,26 +294,6 @@
       }
     },
     {
-      "model_name": "deepseek-v4-flash",
-      "alias": [
-        "DeepSeek-V4-Flash",
-        "deepseek-v4-flash-0731",
-        "DeepSeek-V4-Flash-0731",
-        "deepseek-v4-flash-ga-260731",
-        "deepseek-v4-flash-260425",
-        "deepseek-chat",
-        "deepseek-reasoner"
-      ],
-      "prices": {
-        "default": {
-          "input": "0.44",
-          "output": "1.32",
-          "cache_read": "0.014",
-          "cache_write": null
-        }
-      }
-    },
-    {
       "model_name": "deepseek-v4-pro",
       "alias": [
         "DeepSeek-V4-Pro",
@@ -343,7 +323,11 @@
         "deepseek-v4.1-flash-1017",
         "deepseek-v4-1-flash-261017",
         "deepseek-v4-1-flash-260910",
+        "deepseek-v4-flash",
+        "DeepSeek-V4-Flash",
         "deepseek-v4-flash-vision-exp",
+        "deepseek-chat",
+        "deepseek-reasoner",
         "deepseek-flash-latest"
       ],
       "prices": {
@@ -356,11 +340,12 @@
       }
     },
     {
-      "model_name": "devstral-medium",
+      "model_name": "devstral-2512",
       "alias": [
-        "devstral-2512",
-        "devstral-medium-latest",
-        "devstral-latest"
+        "devstral-2",
+        "devstral-2-25-12",
+        "devstral-latest",
+        "devstral-medium-latest"
       ],
       "prices": {
         "default": {

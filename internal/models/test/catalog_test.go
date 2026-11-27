@@ -45,7 +45,7 @@ func TestShippedCatalogLoads(t *testing.T) {
 			aliasOwner[alias] = entry.Name
 		}
 	}
-	if len(entries) != 134 || aliases != 413 {
+	if len(entries) != 133 || aliases != 411 {
 		t.Fatalf("shipped seed: %d models, %d aliases", len(entries), aliases)
 	}
 
@@ -55,9 +55,9 @@ func TestShippedCatalogLoads(t *testing.T) {
 		"claude-fable-5-2", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5",
 		"gemini-4-carbon", "gemini-4-argon", "gemini-4-neon", "gemini-4-hydrogen",
 		"gemini-3.8-flash", "qwen4-max", "qwen3.8-max", "qwen3.8-27b", "glm-5.4",
-		"glm-5.3", "kimi-k3.1-pro", "deepseek-v4.1-flash", "deepseek-v4-flash",
+		"glm-5.3", "kimi-k3.1-pro", "deepseek-v4.1-flash",
 		"deepseek-v4-pro", "grok-4.7", "MiniMax-M3.1-Flash", "doubao-seed-2-1-pro",
-		"hy4", "hy4-flash", "muse-wonder-1.0", "mistral-large-4",
+		"hy4", "hy4-flash", "muse-wonder-1.0", "mistral-large-4", "devstral-2512",
 	} {
 		if _, ok := byName[want]; !ok {
 			t.Fatalf("missing mainstream model %q", want)
@@ -88,12 +88,13 @@ func TestShippedCatalogLoads(t *testing.T) {
 		"Qwen4-Max":                 "qwen4-max",
 		"qwen4-max-preview":         "qwen4-max",
 		"qwen4.0-max-preview":       "qwen4-max",
-		"deepseek-v4-flash-0731":    "deepseek-v4-flash",
-		"deepseek-chat":             "deepseek-v4-flash",
-		"deepseek-reasoner":         "deepseek-v4-flash",
+		"deepseek-v4-flash":         "deepseek-v4.1-flash",
+		"deepseek-chat":             "deepseek-v4.1-flash",
+		"deepseek-reasoner":         "deepseek-v4.1-flash",
 		"dola-seed-2-1-turbo":       "doubao-seed-2-1-turbo",
 		"k3.1-pro":                  "kimi-k3.1-pro",
 		"codestral-25-08":           "codestral",
+		"devstral-2-25-12":          "devstral-2512",
 		"anthropic.claude-opus-5-5": "claude-opus-5-5",
 	} {
 		if got := aliasOwner[alias]; got != canonical {
@@ -107,7 +108,6 @@ func TestShippedCatalogLoads(t *testing.T) {
 		"gemini-4-carbon":     {"4", "20", "0.2"},
 		"gemini-3.8-flash":    {"1.5", "7.5", "0.15"},
 		"deepseek-v4.1-flash": {"0.3", "1.2", "0.006"},
-		"deepseek-v4-flash":   {"0.44", "1.32", "0.014"},
 		"deepseek-v4-pro":     {"1.32", "3.96", "0.044"},
 		"deepseek-v3.2":       {"0.28", "0.42", "0.028"},
 		"qwen3.8-27b":         {"0.5", "3", "0.1"},
