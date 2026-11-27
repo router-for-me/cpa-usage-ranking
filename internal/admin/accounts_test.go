@@ -91,3 +91,38 @@ func TestOrdinaryAccountLifecycle(t *testing.T) {
 		t.Fatal("old cookie inherited recreated account")
 	}
 }
+
+func TestOrdinaryLookupKeepsSessionOnCanceledContext(t *testing.T) {
+	ctx := context.Background()
+	s, db := serviceDB(t)
+	account, err := s.CreateAccount(ctx, s.owner, "staff", "ordinary-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, session, err := s.Login(ctx, "staff", "ordinary-test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.Lookup(canceled, token); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled lookup error = %v, want context.Canceled", err)
+	}
+	got, err := s.Lookup(ctx, token)
+	if err != nil || got.Identity != session.Identity || got.CSRF != session.CSRF {
+		t.Fatalf("session lost after canceled lookup: got=%+v err=%v", got, err)
+	}
+	// 直接删除数据库账号行，验证 Lookup 命中 sql.ErrNoRows 时仍会销毁内存会话并返回 ErrSession。
+	if _, err := db.Writer.ExecContext(ctx, "DELETE FROM admin_accounts WHERE id = ?", account.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Lookup(ctx, token); !errors.Is(err, ErrSession) {
+		t.Fatalf("deleted account lookup error = %v, want ErrSession", err)
+	}
+	s.mu.Lock()
+	_, stillCached := s.sessions[token]
+	s.mu.Unlock()
+	if stillCached {
+		t.Fatal("deleted account session remained in memory")
+	}
+}

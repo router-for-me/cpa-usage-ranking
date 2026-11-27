@@ -6,6 +6,9 @@
 /.worktrees/
 /AGENTS.md
 
+# Local test scratch directory.
+/test/
+
 # Local configuration, dependencies and generated output.
 .env
 .env.*
