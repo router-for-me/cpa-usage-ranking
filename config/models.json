@@ -3,8 +3,54 @@
   "price_unit": "per_million_tokens",
   "models": [
     {
-      "model_name": "claude-fable-5",
+      "model_name": "chat-latest",
       "alias": [],
+      "prices": {
+        "default": {
+          "input": "5",
+          "output": "30",
+          "cache_read": "0.5",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "claude-3-5-haiku",
+      "alias": [
+        "claude-3.5-haiku",
+        "claude-3-5-haiku-20241022",
+        "claude-3-5-haiku-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.8",
+          "output": "4",
+          "cache_read": "0.08",
+          "cache_write": "1"
+        }
+      }
+    },
+    {
+      "model_name": "claude-3-7-sonnet",
+      "alias": [
+        "claude-3.7-sonnet",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-7-sonnet-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "3",
+          "output": "15",
+          "cache_read": "0.3",
+          "cache_write": "3.75"
+        }
+      }
+    },
+    {
+      "model_name": "claude-fable-5",
+      "alias": [
+        "claude-5-fable"
+      ],
       "prices": {
         "default": {
           "input": "10",
@@ -16,7 +62,9 @@
     },
     {
       "model_name": "claude-fable-5-1",
-      "alias": [],
+      "alias": [
+        "claude-fable-5.1"
+      ],
       "prices": {
         "default": {
           "input": "10",
@@ -27,8 +75,23 @@
       }
     },
     {
+      "model_name": "claude-fable-5-2",
+      "alias": [
+        "claude-fable-5.2"
+      ],
+      "prices": {
+        "default": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.2",
+          "cache_write": "10"
+        }
+      }
+    },
+    {
       "model_name": "claude-haiku-4-5",
       "alias": [
+        "claude-haiku-4.5",
         "claude-haiku-4-5-20251001"
       ],
       "prices": {
@@ -42,7 +105,9 @@
     },
     {
       "model_name": "claude-haiku-5-5",
-      "alias": [],
+      "alias": [
+        "claude-haiku-5.5"
+      ],
       "prices": {
         "default": {
           "input": "0.1",
@@ -53,8 +118,79 @@
       }
     },
     {
+      "model_name": "claude-mythos-5",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": "1",
+          "cache_write": "12.5"
+        }
+      }
+    },
+    {
+      "model_name": "claude-mythos-5-1",
+      "alias": [
+        "claude-mythos-5.1"
+      ],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": "0.25",
+          "cache_write": "12.5"
+        }
+      }
+    },
+    {
+      "model_name": "claude-mythos-5-2",
+      "alias": [
+        "claude-mythos-5.2"
+      ],
+      "prices": {
+        "default": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.2",
+          "cache_write": "10"
+        }
+      }
+    },
+    {
+      "model_name": "claude-opus-4",
+      "alias": [
+        "claude-opus-4-0",
+        "claude-opus-4-20250514"
+      ],
+      "prices": {
+        "default": {
+          "input": "15",
+          "output": "75",
+          "cache_read": "1.5",
+          "cache_write": "18.75"
+        }
+      }
+    },
+    {
+      "model_name": "claude-opus-4-1",
+      "alias": [
+        "claude-opus-4.1",
+        "claude-opus-4-1-20250805"
+      ],
+      "prices": {
+        "default": {
+          "input": "15",
+          "output": "75",
+          "cache_read": "1.5",
+          "cache_write": "18.75"
+        }
+      }
+    },
+    {
       "model_name": "claude-opus-4-5",
       "alias": [
+        "claude-opus-4.5",
         "claude-opus-4-5-20251101"
       ],
       "prices": {
@@ -68,7 +204,10 @@
     },
     {
       "model_name": "claude-opus-4-6",
-      "alias": [],
+      "alias": [
+        "claude-opus-4.6",
+        "claude-opus-4-6-1m"
+      ],
       "prices": {
         "default": {
           "input": "5",
@@ -80,7 +219,9 @@
     },
     {
       "model_name": "claude-opus-4-7",
-      "alias": [],
+      "alias": [
+        "claude-opus-4.7"
+      ],
       "prices": {
         "default": {
           "input": "5",
@@ -92,13 +233,29 @@
     },
     {
       "model_name": "claude-opus-4-8",
-      "alias": [],
+      "alias": [
+        "claude-opus-4.8"
+      ],
       "prices": {
         "default": {
           "input": "5",
           "output": "25",
           "cache_read": "0.5",
           "cache_write": "6.25"
+        }
+      }
+    },
+    {
+      "model_name": "claude-opus-4-8-fast",
+      "alias": [
+        "claude-opus-4.8-fast"
+      ],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": null,
+          "cache_write": null
         }
       }
     },
@@ -116,7 +273,9 @@
     },
     {
       "model_name": "claude-opus-5-5",
-      "alias": [],
+      "alias": [
+        "claude-opus-5.5"
+      ],
       "prices": {
         "default": {
           "input": "4",
@@ -127,8 +286,41 @@
       }
     },
     {
+      "model_name": "claude-sonnet-4",
+      "alias": [
+        "claude-sonnet-4-0",
+        "claude-sonnet-4-20250514"
+      ],
+      "prices": {
+        "default": {
+          "input": "3",
+          "output": "15",
+          "cache_read": "0.3",
+          "cache_write": "3.75"
+        }
+      }
+    },
+    {
+      "model_name": "claude-sonnet-4-5",
+      "alias": [
+        "claude-sonnet-4.5",
+        "claude-sonnet-4-5-20250929"
+      ],
+      "prices": {
+        "default": {
+          "input": "3",
+          "output": "15",
+          "cache_read": "0.3",
+          "cache_write": "3.75"
+        }
+      }
+    },
+    {
       "model_name": "claude-sonnet-4-6",
-      "alias": [],
+      "alias": [
+        "claude-sonnet-4.6",
+        "claude-sonnet-4-6-1m"
+      ],
       "prices": {
         "default": {
           "input": "3",
@@ -152,7 +344,9 @@
     },
     {
       "model_name": "claude-sonnet-5-5",
-      "alias": [],
+      "alias": [
+        "claude-sonnet-5.5"
+      ],
       "prices": {
         "default": {
           "input": "2",
@@ -178,15 +372,90 @@
       }
     },
     {
-      "model_name": "command-a-plus",
+      "model_name": "deep-research-max-preview-04-2026",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "12",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "deep-research-preview-04-2026",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "12",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "deepseek-r1",
       "alias": [
-        "command-a-plus-05-2026"
+        "DeepSeek-R1",
+        "deepseek-r1-0528",
+        "DeepSeek-R1-0528"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.55",
+          "output": "2.19",
+          "cache_read": "0.14",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "deepseek-v3",
+      "alias": [
+        "DeepSeek-V3",
+        "deepseek-chat-v3-0324"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.27",
+          "output": "1.1",
+          "cache_read": "0.07",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "deepseek-v3.1",
+      "alias": [
+        "DeepSeek-V3.1",
+        "deepseek-v3.1-terminus",
+        "deepseek-chat-v3.1"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.27",
+          "output": "1",
+          "cache_read": "0.13",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "deepseek-v3.2",
+      "alias": [
+        "DeepSeek-V3.2",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v3.2-exp",
+        "deepseek-v3-2-251201"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.28",
+          "output": "0.42",
+          "cache_read": "0.028",
           "cache_write": null
         }
       }
@@ -196,7 +465,9 @@
       "alias": [
         "DeepSeek-V4-Pro",
         "DeepSeek-V4-Pro-0813",
-        "deepseek-v4-pro-0813"
+        "deepseek-v4-pro-0813",
+        "deepseek-v4-pro-ga-260813",
+        "deepseek-pro-latest"
       ],
       "prices": {
         "default": {
@@ -215,7 +486,12 @@
         "DeepSeek-V4.1-Flash",
         "DeepSeek-V4.1-flash",
         "DeepSeek-V4.1-Flash-1017",
-        "deepseek-v4.1-flash-1017"
+        "deepseek-v4.1-flash-1017",
+        "deepseek-v4-1-flash-261017",
+        "deepseek-v4-1-flash-260910",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-flash-latest"
       ],
       "prices": {
         "default": {
@@ -227,15 +503,116 @@
       }
     },
     {
-      "model_name": "doubao-seed-2-0-mini",
+      "model_name": "devstral-medium",
       "alias": [
-        "doubao-seed-2-0-mini-260428"
+        "devstral-2512",
+        "devstral-medium-latest",
+        "devstral-latest"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.4",
+          "output": "2",
+          "cache_read": "0.04",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "devstral-small",
+      "alias": [
+        "devstral-small-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.3",
+          "cache_read": "0.01",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-1-8",
+      "alias": [
+        "doubao-seed-1.8",
+        "doubao-seed-1-8-251228"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.11",
+          "output": "0.28",
+          "cache_read": "0.023",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-2-0-code",
+      "alias": [
+        "doubao-seed-2.0-code",
+        "doubao-seed-2-0-code-preview",
+        "doubao-seed-2-0-code-preview-260215",
+        "seed-2-0-code-preview-260328"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.5",
+          "output": "3",
+          "cache_read": "0.1",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-2-0-lite",
+      "alias": [
+        "doubao-seed-2.0-lite",
+        "doubao-seed-2-0-lite-260428",
+        "doubao-seed-2-0-lite-260215",
+        "seed-2-0-lite-260428",
+        "seed-2.0-lite"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.25",
+          "output": "2",
+          "cache_read": "0.05",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-2-0-mini",
+      "alias": [
+        "doubao-seed-2.0-mini",
+        "doubao-seed-2-0-mini-260428",
+        "doubao-seed-2-0-mini-260215",
+        "seed-2-0-mini-260428",
+        "seed-2.0-mini"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.4",
+          "cache_read": "0.02",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-2-0-pro",
+      "alias": [
+        "doubao-seed-2.0-pro",
+        "doubao-seed-2-0-pro-260215",
+        "seed-2-0-pro-260328",
+        "seed-2.0-pro"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.5",
+          "output": "3",
+          "cache_read": "0.1",
           "cache_write": null
         }
       }
@@ -243,13 +620,16 @@
     {
       "model_name": "doubao-seed-2-1-lite",
       "alias": [
-        "doubao-seed-2-1-lite-260915"
+        "doubao-seed-2.1-lite",
+        "doubao-seed-2-1-lite-260915",
+        "seed-2-1-lite",
+        "seed-2.1-lite"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.115",
+          "output": "0.388126",
+          "cache_read": "0.023",
           "cache_write": null
         }
       }
@@ -257,13 +637,35 @@
     {
       "model_name": "doubao-seed-2-1-pro",
       "alias": [
-        "doubao-seed-2-1-pro-260915"
+        "doubao-seed-2.1-pro",
+        "doubao-seed-2-1-pro-260915",
+        "doubao-seed-2-1-pro-260628",
+        "seed-2-1-pro",
+        "seed-2.1-pro"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.8625",
+          "output": "4.3125",
+          "cache_read": "0.1725",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "doubao-seed-2-1-turbo",
+      "alias": [
+        "doubao-seed-2.1-turbo",
+        "doubao-seed-2-1-turbo-260628",
+        "dola-seed-2-1-turbo-260628",
+        "seed-2-1-turbo",
+        "seed-2.1-turbo"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.5",
+          "output": "2.5",
+          "cache_read": "0.1",
           "cache_write": null
         }
       }
@@ -273,16 +675,139 @@
       "alias": [],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "0.8906",
+          "output": "4.45301",
+          "cache_read": "0.17812",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-2.5-flash",
+      "alias": [
+        "gemini-2-5-flash",
+        "gemini-2.5-flash-low",
+        "gemini-2.5-flash-medium",
+        "gemini-2.5-flash-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "2.5",
+          "cache_read": "0.03",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.15",
+          "output": "1.25",
+          "cache_read": "0.03",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.54",
+          "output": "4.5",
+          "cache_read": "0.054",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-2.5-flash-image",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "2.5",
+          "cache_read": null,
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.15",
+          "output": "1.25",
+          "cache_read": null,
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.54",
+          "output": "4.5",
           "cache_read": null,
           "cache_write": null
         }
       }
     },
     {
+      "model_name": "gemini-2.5-flash-lite",
+      "alias": [
+        "gemini-2-5-flash-lite",
+        "gemini-2.5-flash-lite-low",
+        "gemini-2.5-flash-lite-medium",
+        "gemini-2.5-flash-lite-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.4",
+          "cache_read": "0.01",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.05",
+          "output": "0.2",
+          "cache_read": "0.01",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.18",
+          "output": "0.72",
+          "cache_read": "0.018",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-2.5-pro",
+      "alias": [
+        "gemini-2-5-pro",
+        "gemini-2.5-pro-low",
+        "gemini-2.5-pro-medium",
+        "gemini-2.5-pro-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "10",
+          "cache_read": "0.125",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.625",
+          "output": "5",
+          "cache_read": "0.125",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.25",
+          "output": "18",
+          "cache_read": "0.225",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "gemini-3-flash-preview",
-      "alias": [],
+      "alias": [
+        "gemini-3-flash",
+        "gemini-3.0-flash",
+        "gemini-3.0-flash-preview",
+        "gemini-3-flash-preview-minimal",
+        "gemini-3-flash-preview-low",
+        "gemini-3-flash-preview-medium",
+        "gemini-3-flash-preview-high",
+        "gemini-3-flash-minimal",
+        "gemini-3-flash-low",
+        "gemini-3-flash-medium",
+        "gemini-3-flash-high"
+      ],
       "prices": {
         "default": {
           "input": "0.5",
@@ -305,8 +830,67 @@
       }
     },
     {
+      "model_name": "gemini-3-pro-image",
+      "alias": [
+        "gemini-3-pro-image-preview"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "12",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-3-pro-preview",
+      "alias": [
+        "gemini-3-pro",
+        "gemini-3.0-pro",
+        "gemini-3.0-pro-preview",
+        "gemini-3-pro-preview-low",
+        "gemini-3-pro-preview-high",
+        "gemini-3-pro-low",
+        "gemini-3-pro-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "12",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-3.1-flash-image",
+      "alias": [
+        "gemini-3.1-flash-image-preview"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.5",
+          "output": "3",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "gemini-3.1-flash-lite",
-      "alias": [],
+      "alias": [
+        "gemini-3-1-flash-lite",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite-minimal",
+        "gemini-3.1-flash-lite-low",
+        "gemini-3.1-flash-lite-medium",
+        "gemini-3.1-flash-lite-high",
+        "gemini-3.1-flash-lite-preview-minimal",
+        "gemini-3.1-flash-lite-preview-low",
+        "gemini-3.1-flash-lite-preview-medium",
+        "gemini-3.1-flash-lite-preview-high"
+      ],
       "prices": {
         "default": {
           "input": "0.25",
@@ -329,8 +913,34 @@
       }
     },
     {
+      "model_name": "gemini-3.1-flash-lite-image",
+      "alias": [
+        "gemini-3.1-flash-lite-image-minimal",
+        "gemini-3.1-flash-lite-image-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.25",
+          "output": "1.5",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "gemini-3.1-pro-preview",
-      "alias": [],
+      "alias": [
+        "gemini-3.1-pro",
+        "gemini-3-1-pro",
+        "gemini-3-1-pro-preview",
+        "gemini-pro-latest",
+        "gemini-3.1-pro-preview-low",
+        "gemini-3.1-pro-preview-medium",
+        "gemini-3.1-pro-preview-high",
+        "gemini-3.1-pro-low",
+        "gemini-3.1-pro-medium",
+        "gemini-3.1-pro-high"
+      ],
       "prices": {
         "default": {
           "input": "2",
@@ -354,7 +964,11 @@
     },
     {
       "model_name": "gemini-3.1-pro-preview-customtools",
-      "alias": [],
+      "alias": [
+        "gemini-3.1-pro-preview-customtools-low",
+        "gemini-3.1-pro-preview-customtools-medium",
+        "gemini-3.1-pro-preview-customtools-high"
+      ],
       "prices": {
         "default": {
           "input": "2",
@@ -378,7 +992,13 @@
     },
     {
       "model_name": "gemini-3.5-flash",
-      "alias": [],
+      "alias": [
+        "gemini-3-5-flash",
+        "gemini-3.5-flash-minimal",
+        "gemini-3.5-flash-low",
+        "gemini-3.5-flash-medium",
+        "gemini-3.5-flash-high"
+      ],
       "prices": {
         "default": {
           "input": "1.5",
@@ -402,7 +1022,14 @@
     },
     {
       "model_name": "gemini-3.5-flash-lite",
-      "alias": [],
+      "alias": [
+        "gemini-3-5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite-minimal",
+        "gemini-3.5-flash-lite-low",
+        "gemini-3.5-flash-lite-medium",
+        "gemini-3.5-flash-lite-high"
+      ],
       "prices": {
         "default": {
           "input": "0.3",
@@ -426,96 +1053,228 @@
     },
     {
       "model_name": "gemini-3.6-flash",
-      "alias": [],
+      "alias": [
+        "gemini-3-6-flash",
+        "gemini-3.6-flash-minimal",
+        "gemini-3.6-flash-low",
+        "gemini-3.6-flash-medium",
+        "gemini-3.6-flash-high"
+      ],
       "prices": {
         "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.15",
+          "cache_write": null
+        },
+        "flex": {
           "input": "0.75",
           "output": "3.75",
           "cache_read": "0.075",
           "cache_write": null
         },
-        "flex": {
-          "input": "0.375",
-          "output": "1.875",
-          "cache_read": "0.0375",
-          "cache_write": null
-        },
         "priority": {
-          "input": "1.35",
-          "output": "6.75",
-          "cache_read": "0.135",
+          "input": "2.7",
+          "output": "13.5",
+          "cache_read": "0.27",
           "cache_write": null
         }
       }
     },
     {
       "model_name": "gemini-3.7-flash",
-      "alias": [],
+      "alias": [
+        "gemini-3-7-flash",
+        "gemini-3.7-flash-low",
+        "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-high"
+      ],
       "prices": {
         "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.15",
+          "cache_write": null
+        },
+        "flex": {
           "input": "0.75",
           "output": "3.75",
           "cache_read": "0.075",
           "cache_write": null
         },
-        "flex": {
-          "input": "0.375",
-          "output": "1.875",
-          "cache_read": "0.0375",
-          "cache_write": null
-        },
         "priority": {
-          "input": "1.35",
-          "output": "6.75",
-          "cache_read": "0.135",
+          "input": "2.7",
+          "output": "13.5",
+          "cache_read": "0.27",
           "cache_write": null
         }
       }
     },
     {
       "model_name": "gemini-3.8-flash",
-      "alias": [],
+      "alias": [
+        "gemini-3-8-flash",
+        "gemini-3.8-flash-tiered",
+        "gemini-flash-latest",
+        "gemini-3.8-flash-low",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-high"
+      ],
       "prices": {
         "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.15",
+          "cache_write": null
+        },
+        "flex": {
           "input": "0.75",
           "output": "3.75",
           "cache_read": "0.075",
           "cache_write": null
         },
-        "flex": {
-          "input": "0.375",
-          "output": "1.875",
-          "cache_read": "0.0375",
-          "cache_write": null
-        },
         "priority": {
-          "input": "1.35",
-          "output": "6.75",
-          "cache_read": "0.135",
+          "input": "2.7",
+          "output": "13.5",
+          "cache_read": "0.27",
           "cache_write": null
         }
       }
     },
     {
       "model_name": "gemini-4-argon",
-      "alias": [],
+      "alias": [
+        "gemini-4-argon-low",
+        "gemini-4-argon-medium",
+        "gemini-4-argon-high"
+      ],
       "prices": {
         "default": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": null
+        },
+        "flex": {
           "input": "2",
           "output": "10",
           "cache_read": "0.1",
           "cache_write": null
         },
+        "priority": {
+          "input": "7.2",
+          "output": "36",
+          "cache_read": "0.36",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-4-carbon",
+      "alias": [
+        "gemini-4-carbon-low",
+        "gemini-4-carbon-medium",
+        "gemini-4-carbon-high"
+      ],
+      "prices": {
+        "default": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": null
+        },
         "flex": {
-          "input": "1",
-          "output": "5",
-          "cache_read": "0.05",
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.1",
           "cache_write": null
         },
         "priority": {
-          "input": "3.6",
-          "output": "18",
-          "cache_read": "0.18",
+          "input": "7.2",
+          "output": "36",
+          "cache_read": "0.36",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-4-hydrogen",
+      "alias": [
+        "gemini-4-hydrogen-low",
+        "gemini-4-hydrogen-medium",
+        "gemini-4-hydrogen-high",
+        "gemini-4-hydrogen-xhigh"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.075",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.75",
+          "output": "3.75",
+          "cache_read": "0.0375",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.7",
+          "output": "13.5",
+          "cache_read": "0.135",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-4-neon",
+      "alias": [
+        "gemini-4-neon-low",
+        "gemini-4-neon-medium",
+        "gemini-4-neon-high",
+        "gemini-4-neon-xhigh"
+      ],
+      "prices": {
+        "default": {
+          "input": "3",
+          "output": "15",
+          "cache_read": "0.15",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.075",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "5.4",
+          "output": "27",
+          "cache_read": "0.27",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-nano-banana-2.1",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gemini-omni-1.2-flash",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1.5",
+          "output": "9",
+          "cache_read": null,
           "cache_write": null
         }
       }
@@ -527,9 +1286,9 @@
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.09",
+          "output": "0.3",
+          "cache_read": "0.05",
           "cache_write": null
         }
       }
@@ -542,9 +1301,107 @@
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "0.2",
+          "output": "0.4",
           "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.5",
+      "alias": [
+        "GLM-4.5"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "2.2",
+          "cache_read": "0.11",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.5-air",
+      "alias": [
+        "GLM-4.5-Air"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.2",
+          "output": "1.1",
+          "cache_read": "0.03",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.5-flash",
+      "alias": [
+        "GLM-4.5-Flash"
+      ],
+      "prices": {
+        "default": {
+          "input": "0",
+          "output": "0",
+          "cache_read": "0",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.5v",
+      "alias": [
+        "GLM-4.5V"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "1.8",
+          "cache_read": "0.11",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.6",
+      "alias": [
+        "GLM-4.6"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "2.2",
+          "cache_read": "0.11",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.6v",
+      "alias": [
+        "GLM-4.6V"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "0.9",
+          "cache_read": "0.05",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-4.6v-flash",
+      "alias": [
+        "GLM-4.6V-Flash"
+      ],
+      "prices": {
+        "default": {
+          "input": "0",
+          "output": "0",
+          "cache_read": "0",
           "cache_write": null
         }
       }
@@ -552,8 +1409,8 @@
     {
       "model_name": "glm-4.7",
       "alias": [
-        "glm-4-7-251222",
-        "GLM-4.7"
+        "GLM-4.7",
+        "glm-4-7-251222"
       ],
       "prices": {
         "default": {
@@ -579,9 +1436,24 @@
       }
     },
     {
+      "model_name": "glm-4.7-flashx",
+      "alias": [
+        "GLM-4.7-FlashX"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.07",
+          "output": "0.4",
+          "cache_read": "0.01",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "glm-5",
       "alias": [
-        "GLM-5"
+        "GLM-5",
+        "zai-glm-5"
       ],
       "prices": {
         "default": {
@@ -593,9 +1465,24 @@
       }
     },
     {
+      "model_name": "glm-5-turbo",
+      "alias": [
+        "GLM-5-Turbo"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.2",
+          "output": "4",
+          "cache_read": "0.24",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "glm-5.1",
       "alias": [
-        "GLM-5.1"
+        "GLM-5.1",
+        "glm-5-1"
       ],
       "prices": {
         "default": {
@@ -609,7 +1496,12 @@
     {
       "model_name": "glm-5.2",
       "alias": [
-        "GLM-5.2"
+        "GLM-5.2",
+        "glm-5-2",
+        "glm-5-2-1m",
+        "zai-glm-5-2",
+        "glm-5-2-260617",
+        "glm-5.2-highspeed"
       ],
       "prices": {
         "default": {
@@ -623,7 +1515,10 @@
     {
       "model_name": "glm-5.3",
       "alias": [
-        "GLM-5.3"
+        "GLM-5.3",
+        "glm-5-3",
+        "zai-glm-5-3",
+        "glm-5.3-highspeed"
       ],
       "prices": {
         "default": {
@@ -637,7 +1532,10 @@
     {
       "model_name": "glm-5.3-flash",
       "alias": [
-        "GLM-5.3-Flash"
+        "GLM-5.3-Flash",
+        "glm-5-3-flash",
+        "zai-glm-5-3-flash",
+        "glm-5-3-flash-260828"
       ],
       "prices": {
         "default": {
@@ -650,7 +1548,9 @@
     },
     {
       "model_name": "glm-5.3-flashx",
-      "alias": [],
+      "alias": [
+        "GLM-5.3-FlashX"
+      ],
       "prices": {
         "default": {
           "input": "0.37",
@@ -661,14 +1561,330 @@
       }
     },
     {
+      "model_name": "glm-5.3-flashx-legal",
+      "alias": [
+        "GLM-5.3-FlashX-Legal"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.37",
+          "output": "1.25",
+          "cache_read": "0.075",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-5.4",
+      "alias": [
+        "GLM-5.4",
+        "glm-5-4"
+      ],
+      "prices": {
+        "default": {
+          "input": null,
+          "output": null,
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "glm-5v-turbo",
+      "alias": [
+        "GLM-5V-Turbo"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.2",
+          "output": "4",
+          "cache_read": "0.24",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-4.1",
+      "alias": [
+        "gpt-4.1-2025-04-14"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "8",
+          "cache_read": "0.5",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "3.5",
+          "output": "14",
+          "cache_read": "0.875",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-4.1-mini",
+      "alias": [
+        "gpt-4.1-mini-2025-04-14"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.4",
+          "output": "1.6",
+          "cache_read": "0.1",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.7",
+          "output": "2.8",
+          "cache_read": "0.175",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-4.1-nano",
+      "alias": [
+        "gpt-4.1-nano-2025-04-14"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.4",
+          "cache_read": "0.025",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-4o",
+      "alias": [
+        "gpt-4o-2024-11-20",
+        "gpt-4o-2024-08-06",
+        "gpt-4o-2024-05-13"
+      ],
+      "prices": {
+        "default": {
+          "input": "2.5",
+          "output": "10",
+          "cache_read": "1.25",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "4.25",
+          "output": "17",
+          "cache_read": "2.125",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-4o-mini",
+      "alias": [
+        "gpt-4o-mini-2024-07-18"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.15",
+          "output": "0.6",
+          "cache_read": "0.075",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.25",
+          "output": "1",
+          "cache_read": "0.125",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5",
+      "alias": [
+        "gpt-5-2025-08-07",
+        "gpt-5-chat-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "10",
+          "cache_read": "0.125",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "20",
+          "cache_read": "0.25",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.625",
+          "output": "5",
+          "cache_read": "0.0625",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5-codex",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "10",
+          "cache_read": "0.125",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5-mini",
+      "alias": [
+        "gpt-5-mini-2025-08-07"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.25",
+          "output": "2",
+          "cache_read": "0.025",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "0.45",
+          "output": "3.6",
+          "cache_read": "0.045",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.125",
+          "output": "1",
+          "cache_read": "0.0125",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5-nano",
+      "alias": [
+        "gpt-5-nano-2025-08-07"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.05",
+          "output": "0.4",
+          "cache_read": "0.005",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.025",
+          "output": "0.2",
+          "cache_read": "0.0025",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5-pro",
+      "alias": [
+        "gpt-5-pro-2025-10-06"
+      ],
+      "prices": {
+        "default": {
+          "input": "15",
+          "output": "120",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.1",
+      "alias": [
+        "gpt-5.1-2025-11-13",
+        "gpt-5.1-chat-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "10",
+          "cache_read": "0.125",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "20",
+          "cache_read": "0.25",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.625",
+          "output": "5",
+          "cache_read": "0.0625",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.1-codex",
+      "alias": [
+        "gpt-5.1-codex-max"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "10",
+          "cache_read": "0.125",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.1-codex-mini",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.25",
+          "output": "2",
+          "cache_read": "0.025",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "gpt-5.2",
       "alias": [
-        "gpt-5.2-2025-12-11"
+        "gpt-5.2-2025-12-11",
+        "gpt-5.2-chat-latest"
       ],
       "prices": {
         "default": {
           "input": "1.75",
-          "output": "14.00",
+          "output": "14",
+          "cache_read": "0.175",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "3.5",
+          "output": "28",
+          "cache_read": "0.35",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.875",
+          "output": "7",
+          "cache_read": "0.0875",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.2-codex",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1.75",
+          "output": "14",
           "cache_read": "0.175",
           "cache_write": null
         }
@@ -681,9 +1897,27 @@
       ],
       "prices": {
         "default": {
-          "input": "21.00",
-          "output": "168.00",
+          "input": "21",
+          "output": "168",
           "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.3-codex",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1.75",
+          "output": "14",
+          "cache_read": "0.175",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "3.5",
+          "output": "28",
+          "cache_read": "0.35",
           "cache_write": null
         }
       }
@@ -691,13 +1925,26 @@
     {
       "model_name": "gpt-5.4",
       "alias": [
-        "gpt-5.4-2026-03-05"
+        "gpt-5.4-2026-03-05",
+        "gpt-5-4"
       ],
       "prices": {
         "default": {
-          "input": "2.50",
-          "output": "15.00",
+          "input": "2.5",
+          "output": "15",
           "cache_read": "0.25",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "5",
+          "output": "30",
+          "cache_read": "0.5",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "1.25",
+          "output": "7.5",
+          "cache_read": "0.13",
           "cache_write": null
         }
       }
@@ -705,13 +1952,46 @@
     {
       "model_name": "gpt-5.4-mini",
       "alias": [
-        "gpt-5.4-mini-2026-03-17"
+        "gpt-5.4-mini-2026-03-17",
+        "gpt-5-4-mini"
       ],
       "prices": {
         "default": {
           "input": "0.75",
-          "output": "4.50",
+          "output": "4.5",
           "cache_read": "0.075",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "1.5",
+          "output": "9",
+          "cache_read": "0.15",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.375",
+          "output": "2.25",
+          "cache_read": "0.0375",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.4-nano",
+      "alias": [
+        "gpt-5.4-nano-2026-03-17"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.2",
+          "output": "1.25",
+          "cache_read": "0.02",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "0.1",
+          "output": "0.625",
+          "cache_read": "0.01",
           "cache_write": null
         }
       }
@@ -723,8 +2003,14 @@
       ],
       "prices": {
         "default": {
-          "input": "30.00",
-          "output": "180.00",
+          "input": "30",
+          "output": "180",
+          "cache_read": null,
+          "cache_write": null
+        },
+        "flex": {
+          "input": "15",
+          "output": "90",
           "cache_read": null,
           "cache_write": null
         }
@@ -733,13 +2019,26 @@
     {
       "model_name": "gpt-5.5",
       "alias": [
-        "gpt-5.5-2026-04-23"
+        "gpt-5.5-2026-04-23",
+        "gpt-5-5"
       ],
       "prices": {
         "default": {
-          "input": "5.00",
-          "output": "30.00",
-          "cache_read": "0.50",
+          "input": "5",
+          "output": "30",
+          "cache_read": "0.5",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "12.5",
+          "output": "75",
+          "cache_read": "1.25",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "2.5",
+          "output": "15",
+          "cache_read": "0.25",
           "cache_write": null
         }
       }
@@ -751,48 +2050,107 @@
       ],
       "prices": {
         "default": {
-          "input": "30.00",
-          "output": "180.00",
+          "input": "30",
+          "output": "180",
+          "cache_read": null,
+          "cache_write": null
+        },
+        "flex": {
+          "input": "15",
+          "output": "90",
           "cache_read": null,
           "cache_write": null
         }
       }
     },
     {
-      "model_name": "gpt-5.6-luna",
+      "model_name": "gpt-5.6-cyber",
       "alias": [],
       "prices": {
         "default": {
-          "input": "0.20",
-          "output": "1.20",
+          "input": "12.5",
+          "output": "75",
+          "cache_read": "1.25",
+          "cache_write": "15.625"
+        }
+      }
+    },
+    {
+      "model_name": "gpt-5.6-luna",
+      "alias": [
+        "gpt-5-6-luna"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.2",
+          "output": "1.2",
           "cache_read": "0.02",
           "cache_write": "0.25"
+        },
+        "priority": {
+          "input": "0.4",
+          "output": "2.4",
+          "cache_read": "0.04",
+          "cache_write": "0.5"
+        },
+        "flex": {
+          "input": "0.1",
+          "output": "0.6",
+          "cache_read": "0.01",
+          "cache_write": "0.125"
         }
       }
     },
     {
       "model_name": "gpt-5.6-sol",
       "alias": [
-        "gpt-5.6"
+        "gpt-5.6",
+        "gpt-5-6-sol"
       ],
       "prices": {
         "default": {
-          "input": "4.00",
-          "output": "20.00",
-          "cache_read": "0.40",
-          "cache_write": "5.00"
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.4",
+          "cache_write": "5"
+        },
+        "priority": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.8",
+          "cache_write": "10"
+        },
+        "flex": {
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.2",
+          "cache_write": "2.5"
         }
       }
     },
     {
       "model_name": "gpt-5.6-terra",
-      "alias": [],
+      "alias": [
+        "gpt-5-6-terra"
+      ],
       "prices": {
         "default": {
-          "input": "2.00",
-          "output": "12.00",
-          "cache_read": "0.20",
-          "cache_write": "2.50"
+          "input": "2",
+          "output": "12",
+          "cache_read": "0.2",
+          "cache_write": "2.5"
+        },
+        "priority": {
+          "input": "4",
+          "output": "24",
+          "cache_read": "0.4",
+          "cache_write": "5"
+        },
+        "flex": {
+          "input": "1",
+          "output": "6",
+          "cache_read": "0.1",
+          "cache_write": "1.25"
         }
       }
     },
@@ -801,10 +2159,10 @@
       "alias": [],
       "prices": {
         "default": {
-          "input": "10.00",
-          "output": "50.00",
-          "cache_read": "1.00",
-          "cache_write": "12.50"
+          "input": "10",
+          "output": "50",
+          "cache_read": "1",
+          "cache_write": "12.5"
         },
         "priority": {
           "input": "20",
@@ -821,12 +2179,66 @@
       }
     },
     {
+      "model_name": "gpt-6-astra-healthcare",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": "1",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "20",
+          "output": "100",
+          "cache_read": "2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6-astra-law",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": "1",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6-chat-thinking",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": null,
+          "output": null,
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6-cyber",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "20",
+          "output": "100",
+          "cache_read": "2",
+          "cache_write": "25"
+        }
+      }
+    },
+    {
       "model_name": "gpt-6-luna",
       "alias": [],
       "prices": {
         "default": {
-          "input": "0.10",
-          "output": "0.50",
+          "input": "0.1",
+          "output": "0.5",
           "cache_read": "0.01",
           "cache_write": "0.125"
         },
@@ -845,14 +2257,26 @@
       }
     },
     {
+      "model_name": "gpt-6-rosalind",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "10",
+          "output": "50",
+          "cache_read": "1",
+          "cache_write": "12.5"
+        }
+      }
+    },
+    {
       "model_name": "gpt-6-sol",
       "alias": [],
       "prices": {
         "default": {
-          "input": "2.00",
-          "output": "10.00",
-          "cache_read": "0.20",
-          "cache_write": "2.50"
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.2",
+          "cache_write": "2.5"
         },
         "priority": {
           "input": "4",
@@ -870,13 +2294,15 @@
     },
     {
       "model_name": "gpt-6.1-sol",
-      "alias": [],
+      "alias": [
+        "gpt-6-1-sol"
+      ],
       "prices": {
         "default": {
-          "input": "2.00",
-          "output": "10.00",
-          "cache_read": "0.10",
-          "cache_write": "2.50"
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.1",
+          "cache_write": "2.5"
         },
         "priority": {
           "input": "4",
@@ -893,12 +2319,32 @@
       }
     },
     {
-      "model_name": "gpt-6.1-terra",
+      "model_name": "gpt-6.1-sol-healthcare",
       "alias": [],
       "prices": {
         "default": {
-          "input": "1.00",
-          "output": "5.00",
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.1",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6.1-terra",
+      "alias": [
+        "gpt-6-1-terra"
+      ],
+      "prices": {
+        "default": {
+          "input": "1",
+          "output": "5",
           "cache_read": "0.05",
           "cache_write": "1.25"
         },
@@ -917,6 +2363,132 @@
       }
     },
     {
+      "model_name": "gpt-6.2-astra",
+      "alias": [
+        "gpt-6-2-astra"
+      ],
+      "prices": {
+        "default": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.4",
+          "cache_write": "10"
+        },
+        "priority": {
+          "input": "16",
+          "output": "80",
+          "cache_read": "0.8",
+          "cache_write": "20"
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6.2-astra-healthcare",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.4",
+          "cache_write": "10"
+        },
+        "priority": {
+          "input": "16",
+          "output": "80",
+          "cache_read": "0.8",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6.2-astra-law",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "8",
+          "output": "40",
+          "cache_read": "0.4",
+          "cache_write": "10"
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6.2-sol",
+      "alias": [
+        "gpt-6-2-sol"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.1",
+          "cache_write": "2.5"
+        },
+        "priority": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": "5"
+        }
+      }
+    },
+    {
+      "model_name": "gpt-6.2-sol-healthcare",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "10",
+          "cache_read": "0.1",
+          "cache_write": "2.5"
+        },
+        "priority": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-oss-120b",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.05",
+          "output": "0.25",
+          "cache_read": "0.05",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "gpt-oss-20b",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.03",
+          "output": "0.13",
+          "cache_read": "0.03",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "grok-3-mini",
+      "alias": [
+        "grok-3-mini-fast"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "0.5",
+          "cache_read": "0.075",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "grok-4.20-multi-agent",
       "alias": [
         "grok-4.20-multi-agent-0309",
@@ -927,6 +2499,12 @@
           "input": "1.25",
           "output": "2.5",
           "cache_read": "0.2",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "5",
+          "cache_read": "0.4",
           "cache_write": null
         }
       }
@@ -943,12 +2521,20 @@
           "output": "2.5",
           "cache_read": "0.2",
           "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "5",
+          "cache_read": "0.4",
+          "cache_write": null
         }
       }
     },
     {
       "model_name": "grok-4.20-reasoning",
       "alias": [
+        "grok-4.20",
+        "grok-4.20-0309",
         "grok-4.20-0309-reasoning",
         "grok-4.20-reasoning-latest"
       ],
@@ -957,6 +2543,12 @@
           "input": "1.25",
           "output": "2.5",
           "cache_read": "0.2",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "5",
+          "cache_read": "0.4",
           "cache_write": null
         }
       }
@@ -972,6 +2564,12 @@
           "output": "2.5",
           "cache_read": "0.2",
           "cache_write": null
+        },
+        "priority": {
+          "input": "2.5",
+          "output": "5",
+          "cache_read": "0.4",
+          "cache_write": null
         }
       }
     },
@@ -986,29 +2584,137 @@
           "output": "6",
           "cache_read": "0.3",
           "cache_write": null
+        },
+        "priority": {
+          "input": "4",
+          "output": "12",
+          "cache_read": "0.6",
+          "cache_write": null
         }
       }
     },
     {
       "model_name": "grok-4.6",
-      "alias": [],
+      "alias": [
+        "grok-4.6-latest",
+        "grok-4-6"
+      ],
       "prices": {
         "default": {
           "input": "2",
           "output": "6",
           "cache_read": "0.5",
           "cache_write": null
+        },
+        "priority": {
+          "input": "4",
+          "output": "12",
+          "cache_read": "1",
+          "cache_write": null
         }
       }
     },
     {
       "model_name": "grok-4.7",
-      "alias": [],
+      "alias": [
+        "grok-4.7-latest",
+        "grok-4-7",
+        "grok-latest"
+      ],
       "prices": {
         "default": {
           "input": "2",
           "output": "6",
           "cache_read": "0.5",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "4",
+          "output": "12",
+          "cache_read": "1",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "grok-4.7-build-fast",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "4",
+          "output": "12",
+          "cache_read": "1",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "grok-build-0.1",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "1",
+          "output": "2",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "grok-code-fast-1",
+      "alias": [
+        "grok-code-fast",
+        "grok-code-fast-1-0825"
+      ],
+      "prices": {
+        "default": {
+          "input": "1",
+          "output": "2",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "grok-composer-2.5-fast",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": null,
+          "output": null,
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "kimi-k2",
+      "alias": [
+        "Kimi-K2",
+        "kimi-k2-0905",
+        "kimi-k2-0905-preview",
+        "kimi-k2-thinking",
+        "moonshot-kimi-k2-instruct"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "2.5",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "kimi-k2.5",
+      "alias": [
+        "Kimi-K2.5"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "3",
+          "cache_read": "0.1",
           "cache_write": null
         }
       }
@@ -1016,7 +2722,8 @@
     {
       "model_name": "kimi-k2.6",
       "alias": [
-        "Kimi-K2.6"
+        "Kimi-K2.6",
+        "kimi-k2-6"
       ],
       "prices": {
         "default": {
@@ -1030,7 +2737,8 @@
     {
       "model_name": "kimi-k2.7-code",
       "alias": [
-        "Kimi-K2.7-Code"
+        "Kimi-K2.7-Code",
+        "kimi-k2-7"
       ],
       "prices": {
         "default": {
@@ -1048,6 +2756,22 @@
       ],
       "prices": {
         "default": {
+          "input": "1.9",
+          "output": "8",
+          "cache_read": "0.38",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "kimi-k2.8",
+      "alias": [
+        "Kimi-K2.8",
+        "kimi-k2.8-preview",
+        "kimi-k2.8-code"
+      ],
+      "prices": {
+        "default": {
           "input": null,
           "output": null,
           "cache_read": null,
@@ -1058,7 +2782,8 @@
     {
       "model_name": "kimi-k3",
       "alias": [
-        "Kimi-K3"
+        "Kimi-K3",
+        "kimi-k3-256k"
       ],
       "prices": {
         "default": {
@@ -1072,7 +2797,9 @@
     {
       "model_name": "kimi-k3.1-pro",
       "alias": [
-        "Kimi-K3.1-Pro"
+        "Kimi-K3.1-Pro",
+        "kimi-k3-1-pro",
+        "kimi-k3-1-pro-261024"
       ],
       "prices": {
         "default": {
@@ -1085,7 +2812,10 @@
     },
     {
       "model_name": "kimi-k3.1-pro-highspeed",
-      "alias": [],
+      "alias": [
+        "Kimi-K3.1-Pro-Highspeed",
+        "kimi-k3.1-pro-prime"
+      ],
       "prices": {
         "default": {
           "input": "4",
@@ -1096,26 +2826,31 @@
       }
     },
     {
-      "model_name": "Llama-4-Maverick-17B-128E-Instruct",
-      "alias": [],
+      "model_name": "Llama-3.3-70B-Instruct",
+      "alias": [
+        "llama-3.3-70b-instruct"
+      ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
+          "input": "0.59",
+          "output": "0.79",
+          "cache_read": "0.295",
           "cache_write": null
         }
       }
     },
     {
-      "model_name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "model_name": "Llama-4-Maverick-17B-128E-Instruct",
       "alias": [
-        "llama-4-maverick-17b-128e-instruct-fp8"
+        "llama-4-maverick-17b-128e-instruct",
+        "Llama-4-Maverick-17B-128E-Instruct-FP8",
+        "llama-4-maverick-17b-128e-instruct-fp8",
+        "llama-4-maverick"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "0.24",
+          "output": "0.97",
           "cache_read": null,
           "cache_write": null
         }
@@ -1124,54 +2859,130 @@
     {
       "model_name": "Llama-4-Scout-17B-16E-Instruct",
       "alias": [
-        "llama-4-scout-17b-16e-instruct"
+        "llama-4-scout-17b-16e-instruct",
+        "Llama-4-Scout-17B-16E-Instruct-FP8",
+        "llama-4-scout-17b-16e-instruct-fp8",
+        "llama-4-scout"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "0.1",
+          "output": "0.3",
           "cache_read": null,
           "cache_write": null
         }
       }
     },
     {
-      "model_name": "Llama-4-Scout-17B-16E-Instruct-FP8",
-      "alias": [],
-      "prices": {
-        "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
-          "cache_write": null
-        }
-      }
-    },
-    {
-      "model_name": "mimo-v2.6-flash",
+      "model_name": "magistral-medium",
       "alias": [
-        "MiMo-V2.6-Flash"
+        "magistral-medium-latest"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.15",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "magistral-small",
+      "alias": [
+        "magistral-small-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.15",
+          "output": "0.6",
+          "cache_read": "0.015",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "MiniMax-M2",
+      "alias": [
+        "minimax-m2"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "1.2",
           "cache_read": null,
           "cache_write": null
         }
       }
     },
     {
-      "model_name": "mimo-v2.6-pro",
+      "model_name": "MiniMax-M2.1",
       "alias": [
-        "MiMo-V2.6-Pro"
+        "minimax-m2.1"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
-          "cache_write": null
+          "input": "0.3",
+          "output": "1.2",
+          "cache_read": "0.03",
+          "cache_write": "0.375"
+        }
+      }
+    },
+    {
+      "model_name": "MiniMax-M2.5",
+      "alias": [
+        "minimax-m2.5"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "1.2",
+          "cache_read": "0.03",
+          "cache_write": "0.375"
+        }
+      }
+    },
+    {
+      "model_name": "MiniMax-M2.5-highspeed",
+      "alias": [
+        "minimax-m2.5-highspeed",
+        "MiniMax-M2.5-lightning"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "2.4",
+          "cache_read": "0.03",
+          "cache_write": "0.375"
+        }
+      }
+    },
+    {
+      "model_name": "MiniMax-M2.7",
+      "alias": [
+        "minimax-m2.7"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.3",
+          "output": "1.2",
+          "cache_read": "0.06",
+          "cache_write": "0.375"
+        }
+      }
+    },
+    {
+      "model_name": "MiniMax-M2.7-highspeed",
+      "alias": [
+        "minimax-m2.7-highspeed"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.6",
+          "output": "2.4",
+          "cache_read": "0.06",
+          "cache_write": "0.375"
         }
       }
     },
@@ -1212,6 +3023,7 @@
     {
       "model_name": "ministral-3-14b",
       "alias": [
+        "ministral-3-14b-2512",
         "ministral-14b-2512",
         "ministral-14b-latest"
       ],
@@ -1227,6 +3039,7 @@
     {
       "model_name": "ministral-3-3b",
       "alias": [
+        "ministral-3-3b-2512",
         "ministral-3b-2512",
         "ministral-3b-latest"
       ],
@@ -1242,6 +3055,7 @@
     {
       "model_name": "ministral-3-8b",
       "alias": [
+        "ministral-3-8b-2512",
         "ministral-8b-2512",
         "ministral-8b-latest"
       ],
@@ -1255,15 +3069,46 @@
       }
     },
     {
+      "model_name": "mistral-large-3",
+      "alias": [
+        "mistral-large-2512"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.5",
+          "output": "1.5",
+          "cache_read": "0.05",
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "mistral-large-4",
       "alias": [
-        "mistral-large-4-0"
+        "mistral-large-4-0",
+        "mistral-large-latest"
       ],
       "prices": {
         "default": {
           "input": "0.7",
           "output": "2.1",
           "cache_read": "0.07",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "mistral-medium-3.5",
+      "alias": [
+        "mistral-medium-3-5",
+        "mistral-medium-2604",
+        "mistral-medium-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.5",
+          "output": "7.5",
+          "cache_read": "0.15",
           "cache_write": null
         }
       }
@@ -1284,27 +3129,212 @@
       }
     },
     {
-      "model_name": "qwen-flash",
+      "model_name": "muse-ember-1.0",
       "alias": [
-        "qwen-flash-2025-07-28"
+        "muse-ember",
+        "muse-ember-1-0"
       ],
       "prices": {
         "default": {
-          "input": "0.05",
-          "output": "0.4",
+          "input": "0.1",
+          "output": "0.5",
+          "cache_read": "0.004",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-spark-1.1",
+      "alias": [
+        "muse-spark-1-1"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "4.25",
+          "cache_read": "0.15",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-spark-1.2",
+      "alias": [
+        "muse-spark-1-2"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "4.25",
+          "cache_read": "0.15",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-spark-1.2-contributor",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.2",
+          "cache_read": "0.002",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-spark-1.3",
+      "alias": [
+        "muse-spark-1-3",
+        "muse-spark-open"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.25",
+          "output": "4.25",
+          "cache_read": "0.15",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-spark-1.3-contributor",
+      "alias": [],
+      "prices": {
+        "default": {
+          "input": "0.1",
+          "output": "0.2",
+          "cache_read": "0.002",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "muse-wonder-1.0",
+      "alias": [
+        "muse-wonder",
+        "muse-wonder-1-0",
+        "muse-wonder-full-1.0",
+        "muse-wonder-1.0-contributor",
+        "muse-wonder-full-1.0-contributor"
+      ],
+      "prices": {
+        "default": {
+          "input": "4",
+          "output": "20",
+          "cache_read": "0.2",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "o1",
+      "alias": [
+        "o1-2024-12-17"
+      ],
+      "prices": {
+        "default": {
+          "input": "15",
+          "output": "60",
+          "cache_read": "7.5",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "o3",
+      "alias": [
+        "o3-2025-04-16"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "8",
+          "cache_read": "0.5",
+          "cache_write": null
+        },
+        "priority": {
+          "input": "3.5",
+          "output": "14",
+          "cache_read": "0.875",
+          "cache_write": null
+        },
+        "flex": {
+          "input": "1",
+          "output": "4",
+          "cache_read": "0.25",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "o3-mini",
+      "alias": [
+        "o3-mini-2025-01-31"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.1",
+          "output": "4.4",
+          "cache_read": "0.55",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "o3-pro",
+      "alias": [
+        "o3-pro-2025-06-10"
+      ],
+      "prices": {
+        "default": {
+          "input": "20",
+          "output": "80",
           "cache_read": null,
           "cache_write": null
         }
       }
     },
     {
+      "model_name": "o4-mini",
+      "alias": [
+        "o4-mini-2025-04-16"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.1",
+          "output": "4.4",
+          "cache_read": "0.275",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen-flash",
+      "alias": [
+        "qwen-flash-2025-07-28",
+        "qwen-flash-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.05",
+          "output": "0.4",
+          "cache_read": "0.01",
+          "cache_write": "0.0625"
+        }
+      }
+    },
+    {
       "model_name": "qwen-max",
-      "alias": [],
+      "alias": [
+        "qwen-max-latest"
+      ],
       "prices": {
         "default": {
           "input": "1.6",
           "output": "6.4",
-          "cache_read": null,
+          "cache_read": "0.32",
           "cache_write": null
         }
       }
@@ -1319,6 +3349,96 @@
         "default": {
           "input": "0.4",
           "output": "1.2",
+          "cache_read": "0.08",
+          "cache_write": "0.5"
+        }
+      }
+    },
+    {
+      "model_name": "qwen-turbo",
+      "alias": [
+        "qwen-turbo-2025-04-28",
+        "qwen-turbo-latest"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.05",
+          "output": "0.2",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-235b-a22b",
+      "alias": [
+        "Qwen3-235B-A22B",
+        "qwen3-235b-a22b-2507",
+        "qwen3-235b-a22b-instruct-2507",
+        "qwen3-235b-a22b-thinking-2507"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.14",
+          "output": "0.8",
+          "cache_read": "0.05",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-30b-a3b",
+      "alias": [
+        "Qwen3-30B-A3B",
+        "qwen3-30b-a3b-instruct-2507"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.12",
+          "output": "0.5",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-32b",
+      "alias": [
+        "Qwen3-32B"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.08",
+          "output": "0.28",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-coder-30b-a3b-instruct",
+      "alias": [
+        "Qwen3-Coder-30B-A3B-Instruct",
+        "qwen3-coder-30b-a3b"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.07",
+          "output": "0.28",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-coder-480b-a35b-instruct",
+      "alias": [
+        "Qwen3-Coder-480B-A35B-Instruct"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.45",
+          "output": "1.8",
           "cache_read": null,
           "cache_write": null
         }
@@ -1327,6 +3447,7 @@
     {
       "model_name": "qwen3-coder-flash",
       "alias": [
+        "Qwen3-Coder-Flash",
         "qwen3-coder-flash-2025-07-28"
       ],
       "prices": {
@@ -1339,14 +3460,107 @@
       }
     },
     {
+      "model_name": "qwen3-coder-next",
+      "alias": [
+        "Qwen3-Coder-Next"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.12",
+          "output": "0.8",
+          "cache_read": "0.07",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-coder-plus",
+      "alias": [
+        "Qwen3-Coder-Plus",
+        "qwen3-coder-plus-2025-07-22",
+        "qwen3-coder"
+      ],
+      "prices": {
+        "default": {
+          "input": "1",
+          "output": "5",
+          "cache_read": "0.1",
+          "cache_write": "1.25"
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-max",
+      "alias": [
+        "Qwen3-Max",
+        "qwen3-max-2026-01-23",
+        "qwen3-max-2025-09-23",
+        "qwen3-max-preview"
+      ],
+      "prices": {
+        "default": {
+          "input": "1.2",
+          "output": "6",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-next-80b-a3b-instruct",
+      "alias": [
+        "Qwen3-Next-80B-A3B-Instruct",
+        "qwen3-next-80b-a3b-thinking"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.15",
+          "output": "1.2",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-omni-flash",
+      "alias": [
+        "Qwen3-Omni-Flash"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.43",
+          "output": "1.66",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3-vl-235b-a22b-instruct",
+      "alias": [
+        "Qwen3-VL-235B-A22B-Instruct",
+        "qwen3-vl-235b-a22b-thinking"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.4",
+          "output": "1.6",
+          "cache_read": null,
+          "cache_write": null
+        }
+      }
+    },
+    {
       "model_name": "qwen3-vl-plus",
-      "alias": [],
+      "alias": [
+        "Qwen3-VL-Plus"
+      ],
       "prices": {
         "default": {
           "input": "0.2",
           "output": "1.6",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.04",
+          "cache_write": "0.25"
         }
       }
     },
@@ -1409,14 +3623,15 @@
     {
       "model_name": "qwen3.5-flash",
       "alias": [
+        "Qwen3.5-Flash",
         "qwen3.5-flash-2026-02-23"
       ],
       "prices": {
         "default": {
           "input": "0.1",
           "output": "0.4",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.01",
+          "cache_write": "0.125"
         }
       }
     },
@@ -1425,7 +3640,8 @@
       "alias": [
         "Qwen3.5-Plus",
         "qwen3.5-plus-2026-02-15",
-        "qwen3.5-plus-2026-04-20"
+        "qwen3.5-plus-2026-04-20",
+        "qwen3.5-plus-20260420"
       ],
       "prices": {
         "default": {
@@ -1474,8 +3690,8 @@
         "default": {
           "input": "0.25",
           "output": "1.5",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.025",
+          "cache_write": "0.3125"
         }
       }
     },
@@ -1490,22 +3706,23 @@
         "default": {
           "input": "0.5",
           "output": "3",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.05",
+          "cache_write": "0.625"
         }
       }
     },
     {
       "model_name": "qwen3.7-flash",
       "alias": [
+        "Qwen3.7-Flash",
         "qwen3.7-flash-2026-07-15"
       ],
       "prices": {
         "default": {
           "input": "0.03",
           "output": "0.13",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.006",
+          "cache_write": "0.0375"
         }
       }
     },
@@ -1520,8 +3737,8 @@
         "default": {
           "input": "2.5",
           "output": "7.5",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.5",
+          "cache_write": "3.125"
         }
       }
     },
@@ -1535,7 +3752,35 @@
         "default": {
           "input": "0.4",
           "output": "1.6",
-          "cache_read": null,
+          "cache_read": "0.08",
+          "cache_write": "0.5"
+        }
+      }
+    },
+    {
+      "model_name": "qwen3.8-2.4t-a95b",
+      "alias": [
+        "Qwen3.8-2.4T-A95B"
+      ],
+      "prices": {
+        "default": {
+          "input": "2",
+          "output": "6",
+          "cache_read": "0.25",
+          "cache_write": null
+        }
+      }
+    },
+    {
+      "model_name": "qwen3.8-27b",
+      "alias": [
+        "Qwen3.8-27B"
+      ],
+      "prices": {
+        "default": {
+          "input": "0.06",
+          "output": "1.96",
+          "cache_read": "0.059",
           "cache_write": null
         }
       }
@@ -1543,7 +3788,8 @@
     {
       "model_name": "qwen3.8-flash",
       "alias": [
-        "Qwen3.8-Flash"
+        "Qwen3.8-Flash",
+        "qwen3.8-flash-next"
       ],
       "prices": {
         "default": {
@@ -1559,14 +3805,29 @@
       "alias": [
         "Qwen3.8-Max",
         "Qwen3.8-Max-0902",
-        "qwen3.8-max-0902"
+        "qwen3.8-max-0902",
+        "qwen3.8-max-preview"
       ],
       "prices": {
         "default": {
           "input": "2",
           "output": "6",
-          "cache_read": null,
-          "cache_write": null
+          "cache_read": "0.25",
+          "cache_write": "2.5"
+        }
+      }
+    },
+    {
+      "model_name": "qwen3.8-max-prime",
+      "alias": [
+        "Qwen3.8-Max-Prime"
+      ],
+      "prices": {
+        "default": {
+          "input": "4",
+          "output": "12",
+          "cache_read": "0.5",
+          "cache_write": "5"
         }
       }
     },
@@ -1585,28 +3846,29 @@
       }
     },
     {
-      "model_name": "step-3.7-flash",
+      "model_name": "qwen4-max",
       "alias": [
-        "Step-3.7-Flash"
+        "Qwen4-Max"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
-          "cache_read": null,
-          "cache_write": null
+          "input": "1.5",
+          "output": "4.5",
+          "cache_read": "0.075",
+          "cache_write": "1.875"
         }
       }
     },
     {
-      "model_name": "step-5-preview",
+      "model_name": "qwq-plus",
       "alias": [
-        "Step-5-Preview"
+        "QwQ-Plus",
+        "qwq-plus-latest"
       ],
       "prices": {
         "default": {
-          "input": null,
-          "output": null,
+          "input": "0.8",
+          "output": "2.4",
           "cache_read": null,
           "cache_write": null
         }

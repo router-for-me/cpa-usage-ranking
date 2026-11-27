@@ -17,7 +17,7 @@
   - 方括号上下文后缀：`[1m]`、`[2m]`
   - 圆括号思考预算后缀：`(minimal)`、`(low)`、`(medium)`、`(high)`、`(xhigh)`、`(max)`、`(none)`、`(off)`、`(auto)` 或 `(<1..8 位纯数字>)`
   - 连字符思考/分层后缀：`-minimal`、`-low`、`-medium`、`-high`、`-xhigh`、`-thinking`、`-nothinking`、`-non-thinking`、`-tiered`
-  - **严禁自动剥离**日期后缀、`-max` 与 `-latest`；官方日期快照变体继续由 `models.json` 的 `alias` 清单精确维护。
+  - **严禁自动剥离**日期后缀、`-max` 与 `-latest`；官方日期快照、跨渠道点号/连字符变体以及 Gemini 思考强度别名（如 `gemini-4-carbon-high`）均由 `models.json` 的 `alias` 清单显式维护。
 - 命中的名称与别名归并到对应标准模型 ID；未命中或单条格式异常的模型名会在聚合阶段静默跳过，不会连坐拒收同一快照中的合法模型，也不会写入 SQLite。当前不提供模型管理 HTTP API。
 
 ### 文件格式与参考价格
@@ -26,7 +26,7 @@
 - 模型名与别名全局无大小写冲突，别名不能占用其他模型的标准名或别名。
 - `prices` 可选地将 `default`、`priority`、`flex` 映射为 `{input, output, cache_read, cache_write}` 非负十进制字符串（缺失或 `null` 表示未知，`"0"` 表示显式免费；缺失的档位不继承 `default`；未知档位或 `null` 档位会被忽略）。
 - 价格档位仅作目录元数据参考，**不是**上报或统计维度（日快照中若携带 `service_tier` 会被静默忽略），服务端不执行计费或成本估算。
-- `config/model-sources.json` 记录随库发布参考价格的来源链接与采集日期；运行时仅加载 `config/models.json`。
+- `config/model-sources.json` 记录随库发布参考价格的来源链接、定价口径（优先采用官方标准美元单价、排除 Gemini 限时优惠价、分时长 `cache_write` 取短周期 TTL、官方缺少美元标准价时回退参考 `models.dev` / `litellm`）与采集日期；运行时仅加载 `config/models.json`。
 
 ## 头像目录
 

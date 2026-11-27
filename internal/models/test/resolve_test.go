@@ -191,3 +191,48 @@ func TestResolveStripsControlledGatewaySuffixes(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveShippedMainstreamModelsAndAliases(t *testing.T) {
+	catalog, err := models.Load(filepath.Join("..", "..", "..", "config", "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := openModelDB(t, filepath.Join(t.TempDir(), "ranking.db"))
+	registry, err := models.Register(t.Context(), db.Writer, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"openai/gpt-6.2-astra":             "gpt-6.2-astra",
+		"devin/gpt-6-2-astra":              "gpt-6.2-astra",
+		"anthropic/claude-fable-5-2":       "claude-fable-5-2",
+		"copilot/claude-fable-5.2":         "claude-fable-5-2",
+		"antigravity/gemini-4-carbon-high": "gemini-4-carbon",
+		"gemini-4-carbon-medium":           "gemini-4-carbon",
+		"gemini-4-carbon-low":              "gemini-4-carbon",
+		"antigravity/gemini-4-neon-xhigh":  "gemini-4-neon",
+		"gemini-3.8-flash-tiered":          "gemini-3.8-flash",
+		"gemini-3.6-flash-minimal":         "gemini-3.6-flash",
+		"alibaba/Qwen4-Max":                "qwen4-max",
+		"zai/GLM-5.4":                      "glm-5.4",
+		"moonshot/kimi-k3.1-pro":           "kimi-k3.1-pro",
+		"deepseek/deepseek-flash":          "deepseek-v4.1-flash",
+		"xai/grok-4.7":                     "grok-4.7",
+		"meta/muse-wonder-1.0":             "muse-wonder-1.0",
+	}
+	for raw, wantCanonical := range cases {
+		res, err := registry.Resolve(raw)
+		if err != nil || !res.Matched || res.CanonicalName != wantCanonical || res.ID <= 0 {
+			t.Fatalf("Resolve(%q) = %+v, %v; want canonical %q", raw, res, err, wantCanonical)
+		}
+	}
+
+	// 已移除的冷门模型不应命中。
+	for _, removed := range []string{"command-a-plus", "cohere/command-a-plus-05-2026", "mimo-v2.6-flash", "step-3.7-flash"} {
+		res, err := registry.Resolve(removed)
+		if err != nil || res.Matched || res.ID != 0 {
+			t.Fatalf("removed model %q unexpectedly matched: %+v, %v", removed, res, err)
+		}
+	}
+}
