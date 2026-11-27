@@ -410,3 +410,89 @@ func TestReadTimeoutInsideSnapshotReleasesTransaction(t *testing.T) {
 		t.Fatal(busy, log, checkpointed, err)
 	}
 }
+
+func TestPublicReadSkipsOverflowingSeatWithoutPartialReentry(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.db.Writer.ExecContext(ctx, `UPDATE clients SET display_name='seat-a', avatar_id=1 WHERE id=?`, f.a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.ExecContext(ctx, `UPDATE clients SET display_name='seat-b', avatar_id=2 WHERE id=?`, f.b); err != nil {
+		t.Fatal(err)
+	}
+
+	// f.a 具备已结月数据（2026-01-01）、极值日数据（2026-02-01）与后续正常未结日数据（2026-02-02），
+	// 验证第 2 条触发溢出后第 3 条不会以残缺数值重入公开快照。
+	f.put(t, f.a, "2026-01-01", 1, item("alpha", 1))
+	f.put(t, f.b, "2026-01-01", 1, item("alpha", 11))
+	f.put(t, f.a, "2026-02-01", 1, item("alpha", 1))
+	f.put(t, f.a, "2026-02-02", 1, item("alpha", 9))
+	f.put(t, f.b, "2026-02-02", 1, item("alpha", 13))
+	if err := reports.AdvanceWindow(ctx, f.db.Writer, time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	f.closeDay(t, "2026-01-01", f.a)
+	f.closeDay(t, "2026-01-01", f.b)
+
+	assertPublicIsolated := func(t *testing.T, r *statistics.Reader, kind string) {
+		t.Helper()
+		snap, err := r.Read(ctx, statistics.Selection{Kind: kind, Day: "2026-02-02", Public: true})
+		if err != nil {
+			t.Fatalf("public %s read failed: %v", kind, err)
+		}
+		if _, ok := snap.Rows[f.a]; ok {
+			t.Fatalf("public %s retained overflowing seat row: %+v", kind, snap.Rows[f.a])
+		}
+		if _, ok := snap.Profiles[f.a]; ok {
+			t.Fatalf("public %s retained overflowing seat profile: %+v", kind, snap.Profiles[f.a])
+		}
+		if len(snap.Rows) != 1 || len(snap.Profiles) != 1 {
+			t.Fatalf("public %s unexpected snapshot size: rows=%d profiles=%d", kind, len(snap.Rows), len(snap.Profiles))
+		}
+		check(t, snap, f.b, 24)
+		if got := snap.Profiles[f.b]; got.DisplayName != "seat-b" || got.AvatarID != 2 {
+			t.Fatalf("public %s normal seat profile = %+v", kind, got)
+		}
+		if _, err := r.Read(ctx, statistics.Selection{Kind: kind, Day: "2026-02-02", Public: false}); !errors.Is(err, statistics.ErrOverflow) {
+			t.Fatalf("non-public %s error = %v, want ErrOverflow", kind, err)
+		}
+	}
+
+	r := f.reader(t, 10)
+	for _, tc := range []struct {
+		column string
+		value  any
+	}{
+		{"total_tokens", int64(math.MaxInt64)},
+		{"ttft_sum_ms", math.MaxFloat64},
+	} {
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET `+tc.column+`=? WHERE client_id=? AND kind IN ('month','all')`, tc.value, f.a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE daily_stats SET `+tc.column+`=? WHERE client_id=? AND day='2026-02-01'`, tc.value, f.a); err != nil {
+			t.Fatal(err)
+		}
+		assertPublicIsolated(t, r, periods.Year)
+		assertPublicIsolated(t, r, periods.All)
+		// 被隔离的溢出席位仍计入候选容量上限。
+		if _, err := f.reader(t, 1).Read(ctx, statistics.Selection{Kind: periods.Year, Day: "2026-02-02", Public: true}); !errors.Is(err, statistics.ErrCapacity) {
+			t.Fatalf("%s capacity error = %v, want ErrCapacity", tc.column, err)
+		}
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET `+tc.column+`=1 WHERE client_id=? AND kind IN ('month','all')`, f.a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE daily_stats SET `+tc.column+`=1 WHERE client_id=? AND day='2026-02-01'`, f.a); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 验证在 period_stats 合并阶段发生溢出时，overflowed 状态会延续到后续 daily_stats 合并阶段。
+	if err := reports.AdvanceWindow(ctx, f.db.Writer, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	f.closeDay(t, "2026-02-01", f.a)
+	if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET total_tokens=? WHERE client_id=? AND kind='month'`, int64(math.MaxInt64), f.a); err != nil {
+		t.Fatal(err)
+	}
+	assertPublicIsolated(t, r, periods.Year)
+}

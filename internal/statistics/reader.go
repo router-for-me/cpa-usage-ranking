@@ -101,6 +101,7 @@ func (r *Reader) Read(ctx context.Context, s Selection) (Snapshot, error) {
 	if s.Public {
 		result.Profiles = make(map[int64]Profile)
 	}
+	var overflowed map[int64]struct{}
 	columns := `s.client_id,s.total_tokens,s.input_tokens,s.output_tokens,s.cache_read_tokens,s.cache_write_tokens,s.reasoning_tokens,s.request_count,s.success_count,s.ttft_sum_ms,s.ttft_samples,s.latency_sum_ms,s.latency_samples`
 	join := ""
 	if s.Public {
@@ -120,7 +121,7 @@ func (r *Reader) Read(ctx context.Context, s Selection) (Snapshot, error) {
 		query += ` AND s.start_day=?`
 		args = append(args, result.Start)
 	}
-	if err := r.merge(ctx, tx, &result, query, args...); err != nil {
+	if err := r.merge(ctx, tx, &result, &overflowed, query, args...); err != nil {
 		return Snapshot{}, err
 	}
 	query = `SELECT ` + columns + ` FROM daily_stats s` + join + ` WHERE s.model_id=?`
@@ -129,7 +130,7 @@ func (r *Reader) Read(ctx context.Context, s Selection) (Snapshot, error) {
 		query += ` AND s.day>=? AND s.day<?`
 		args = append(args, result.Start, result.End)
 	}
-	if err := r.merge(ctx, tx, &result, query, args...); err != nil {
+	if err := r.merge(ctx, tx, &result, &overflowed, query, args...); err != nil {
 		return Snapshot{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -141,7 +142,7 @@ func (r *Reader) Read(ctx context.Context, s Selection) (Snapshot, error) {
 	return result, nil
 }
 
-func (r *Reader) merge(ctx context.Context, tx *sql.Tx, result *Snapshot, query string, args ...any) error {
+func (r *Reader) merge(ctx context.Context, tx *sql.Tx, result *Snapshot, overflowed *map[int64]struct{}, query string, args ...any) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query statistics: %w", err)
@@ -158,13 +159,28 @@ func (r *Reader) merge(ctx context.Context, tx *sql.Tx, result *Snapshot, query 
 		if err := rows.Scan(values...); err != nil {
 			return fmt.Errorf("scan statistics: %w", err)
 		}
+		if result.Profiles != nil {
+			if _, skip := (*overflowed)[id]; skip {
+				continue
+			}
+		}
 		old, exists := result.Rows[id]
-		if !exists && len(result.Rows) >= r.maxCandidates {
+		if !exists && len(result.Rows)+len(*overflowed) >= r.maxCandidates {
 			return ErrCapacity
 		}
 		merged, ok := reports.AddMetrics(old, m)
 		if !ok {
-			return fmt.Errorf("client %d: %w", id, ErrOverflow)
+			if result.Profiles == nil {
+				return fmt.Errorf("client %d: %w", id, ErrOverflow)
+			}
+			// 公开快照读对单席位跨期累加溢出做席位级隔离，避免单租户异常阻塞全局榜单发布。
+			if *overflowed == nil {
+				*overflowed = make(map[int64]struct{})
+			}
+			(*overflowed)[id] = struct{}{}
+			delete(result.Rows, id)
+			delete(result.Profiles, id)
+			continue
 		}
 		result.Rows[id] = merged
 		if result.Profiles != nil {
