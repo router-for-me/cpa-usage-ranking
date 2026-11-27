@@ -45,7 +45,7 @@ func TestShippedCatalogLoads(t *testing.T) {
 			aliasOwner[alias] = entry.Name
 		}
 	}
-	if len(entries) != 134 || aliases != 347 {
+	if len(entries) != 134 || aliases != 413 {
 		t.Fatalf("shipped seed: %d models, %d aliases", len(entries), aliases)
 	}
 
@@ -74,24 +74,27 @@ func TestShippedCatalogLoads(t *testing.T) {
 
 	// 核验 Gemini 思考强度别名、OpenRouter -pro 推理别名及关键路由别名。
 	for alias, canonical := range map[string]string{
-		"gemini-4-carbon-low":      "gemini-4-carbon",
-		"gemini-4-carbon-medium":   "gemini-4-carbon",
-		"gemini-4-carbon-high":     "gemini-4-carbon",
-		"gemini-4-neon-xhigh":      "gemini-4-neon",
-		"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen",
-		"gemini-3.8-flash-high":    "gemini-3.8-flash",
-		"gemini-3.6-flash-minimal": "gemini-3.6-flash",
-		"gpt-6.2-astra-pro":        "gpt-6.2-astra",
-		"gpt-6.2-sol-pro":          "gpt-6.2-sol",
-		"gpt-chat-latest":          "chat-latest",
-		"claude-fable-5.2":         "claude-fable-5-2",
-		"Qwen4-Max":                "qwen4-max",
-		"qwen4-max-preview":        "qwen4-max",
-		"qwen4.0-max-preview":      "qwen4-max",
-		"deepseek-v4-flash-0731":   "deepseek-v4-flash",
-		"deepseek-chat":            "deepseek-v4-flash",
-		"deepseek-reasoner":        "deepseek-v4-flash",
-		"dola-seed-2-1-turbo":      "doubao-seed-2-1-turbo",
+		"gemini-4-carbon-low":       "gemini-4-carbon",
+		"gemini-4-carbon-medium":    "gemini-4-carbon",
+		"gemini-4-carbon-high":      "gemini-4-carbon",
+		"gemini-4-neon-xhigh":       "gemini-4-neon",
+		"gemini-4-hydrogen-xhigh":   "gemini-4-hydrogen",
+		"gemini-3.8-flash-high":     "gemini-3.8-flash",
+		"gemini-3.6-flash-minimal":  "gemini-3.6-flash",
+		"gpt-6.2-astra-pro":         "gpt-6.2-astra",
+		"gpt-6.2-sol-pro":           "gpt-6.2-sol",
+		"gpt-chat-latest":           "chat-latest",
+		"claude-fable-5.2":          "claude-fable-5-2",
+		"Qwen4-Max":                 "qwen4-max",
+		"qwen4-max-preview":         "qwen4-max",
+		"qwen4.0-max-preview":       "qwen4-max",
+		"deepseek-v4-flash-0731":    "deepseek-v4-flash",
+		"deepseek-chat":             "deepseek-v4-flash",
+		"deepseek-reasoner":         "deepseek-v4-flash",
+		"dola-seed-2-1-turbo":       "doubao-seed-2-1-turbo",
+		"k3.1-pro":                  "kimi-k3.1-pro",
+		"codestral-25-08":           "codestral",
+		"anthropic.claude-opus-5-5": "claude-opus-5-5",
 	} {
 		if got := aliasOwner[alias]; got != canonical {
 			t.Fatalf("alias %q mapped to %q, want %q", alias, got, canonical)
@@ -100,6 +103,7 @@ func TestShippedCatalogLoads(t *testing.T) {
 
 	// 核验官方标准挂牌价格：排除限时优惠价，历史模型仍严格使用厂商历史官方价而非第三方渠道价。
 	for modelName, want := range map[string][3]string{
+		"gpt-5.6-sol":         {"5", "30", "0.5"},
 		"gemini-4-carbon":     {"4", "20", "0.2"},
 		"gemini-3.8-flash":    {"1.5", "7.5", "0.15"},
 		"deepseek-v4.1-flash": {"0.3", "1.2", "0.006"},
@@ -117,6 +121,7 @@ func TestShippedCatalogLoads(t *testing.T) {
 	}
 	for modelName, wantCW := range map[string]string{
 		"gpt-6.2-astra":     "10",
+		"gpt-5.6-sol":       "6.25",
 		"claude-fable-5-2":  "10",
 		"kimi-k3.1-pro":     "2",
 		"qwen3.8-2.4t-a95b": "2.5",

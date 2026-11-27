@@ -23,7 +23,7 @@ type Resolution struct {
 
 // 受控网关模式/渠道末尾后缀白名单；较长后缀排在前面，避免部分截断（如 -non-thinking 先于 -thinking）。
 var gatewayLiteralSuffixes = []string{
-	":free", ":thinking", ":online", ":nitro", ":floor", ":extended", ":beta", ":exacto",
+	":free", ":thinking", ":online", ":nitro", ":floor", ":extended", ":beta", ":exacto", ":batch",
 	"[1m]", "[2m]",
 	"-non-thinking", "-nothinking", "-thinking",
 	"-minimal", "-low", "-medium", "-xhigh", "-high", "-tiered",

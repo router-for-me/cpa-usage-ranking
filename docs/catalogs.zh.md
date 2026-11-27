@@ -13,7 +13,7 @@
 - 启动时在单事务内将全部标准 `model_name` 注册到 SQLite `models` 字典表，分配稳定正整数 ID（ID `0` 保留给内部全模型总计），并保留标准名原始大小写用于落盘与展示。移除模型后历史字典行保留但不参与活跃匹配，重新加入时恢复原 ID。别名与价格不写入数据库。
 - 目录查找索引统一按 **ASCII 小写**构建；加载时严格拒绝跨模型的大小写名称/别名冲突。
 - 处理[日累计快照上报](integration.zh.md#utc-日累计快照上报)时，解析器先清理首尾空白并剥离最后一个 `/` 之前的路径前缀，再仅对最终模型段校验非空、合法 UTF-8、`≤128` 字节且无控制字符。匹配时先按不区分 ASCII 大小写查找标准名与别名；若未命中，则按受控白名单最多剥离两层末尾网关模式/渠道后缀后回退匹配：
-  - 冒号渠道后缀：`:free`、`:thinking`、`:online`、`:nitro`、`:floor`、`:extended`、`:beta`、`:exacto`
+  - 冒号渠道后缀：`:free`、`:thinking`、`:online`、`:nitro`、`:floor`、`:extended`、`:beta`、`:exacto`、`:batch`
   - 方括号上下文后缀：`[1m]`、`[2m]`
   - 圆括号思考预算后缀：`(minimal)`、`(low)`、`(medium)`、`(high)`、`(xhigh)`、`(max)`、`(none)`、`(off)`、`(auto)` 或 `(<1..8 位纯数字>)`
   - 连字符思考/分层后缀：`-minimal`、`-low`、`-medium`、`-high`、`-xhigh`、`-thinking`、`-nothinking`、`-non-thinking`、`-tiered`

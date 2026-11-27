@@ -13,7 +13,7 @@ The server loads `config/models.json` (or the path set in `RANKING_MODELS_PATH`)
 - On startup, all canonical `model_name` values are registered into the SQLite `models` dictionary in one transaction with stable positive IDs (ID `0` is reserved for all-model totals), preserving original `model_name` casing for storage and display. Removing a model keeps its historical dictionary row inactive; reintroducing it restores the original ID. Aliases and prices are not stored in SQLite.
 - Lookup is indexed **ASCII case-insensitively**; cross-model case-insensitive collisions across canonical names and aliases are rejected at startup.
 - When processing [daily reports](integration.md#daily-cumulative-snapshot-reporting), the resolver trims surrounding whitespace, strips any prefix through the final `/`, and validates the final segment (nonempty, valid UTF-8, `<= 128` bytes, no control characters). It first performs an ASCII case-insensitive lookup against canonical names and aliases; if unmatched, it strips up to two layers of whitelisted trailing gateway mode/channel suffixes and re-checks the catalog:
-  - Colon suffixes: `:free`, `:thinking`, `:online`, `:nitro`, `:floor`, `:extended`, `:beta`, `:exacto`
+  - Colon suffixes: `:free`, `:thinking`, `:online`, `:nitro`, `:floor`, `:extended`, `:beta`, `:exacto`, `:batch`
   - Context-window brackets: `[1m]`, `[2m]`
   - Parenthesized reasoning budgets: `(minimal)`, `(low)`, `(medium)`, `(high)`, `(xhigh)`, `(max)`, `(none)`, `(off)`, `(auto)`, or `(<1..8 digits>)`
   - Hyphenated reasoning/tier suffixes: `-minimal`, `-low`, `-medium`, `-high`, `-xhigh`, `-thinking`, `-nothinking`, `-non-thinking`, `-tiered`
