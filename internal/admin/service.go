@@ -170,10 +170,17 @@ func (s *Service) Lookup(ctx context.Context, token string) (Session, error) {
 		return Session{}, ErrSession
 	}
 	if !session.Identity.Owner {
-		var exists int
-		if s.reader == nil || s.reader.QueryRowContext(ctx, "SELECT 1 FROM admin_accounts WHERE id = ?", session.Identity.ID).Scan(&exists) != nil {
+		if s.reader == nil {
 			s.Logout(token)
 			return Session{}, ErrSession
+		}
+		var exists int
+		if err := s.reader.QueryRowContext(ctx, "SELECT 1 FROM admin_accounts WHERE id = ?", session.Identity.ID).Scan(&exists); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				s.Logout(token)
+				return Session{}, ErrSession
+			}
+			return Session{}, err
 		}
 	}
 	return session, nil

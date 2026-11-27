@@ -83,7 +83,11 @@ func (h *adminHTTP) status(c *gin.Context) {
 	token, _ := c.Cookie(adminCookie)
 	session, err := h.service.Lookup(c.Request.Context(), token)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"enabled": true, "authenticated": false})
+		if errors.Is(err, admin.ErrSession) {
+			c.JSON(http.StatusOK, gin.H{"enabled": true, "authenticated": false})
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "internal_error", "Internal server error")
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"enabled": true, "authenticated": true, "user": session.Identity, "csrf_token": session.CSRF, "expires_at": session.ExpiresAt})
@@ -135,7 +139,11 @@ func (h *adminHTTP) authorize(c *gin.Context) {
 	token, _ := c.Cookie(adminCookie)
 	session, err := h.service.Lookup(c.Request.Context(), token)
 	if err != nil {
-		writeError(c, http.StatusUnauthorized, "session_required", "Administrator login required")
+		if errors.Is(err, admin.ErrSession) {
+			writeError(c, http.StatusUnauthorized, "session_required", "Administrator login required")
+			return
+		}
+		writeError(c, http.StatusInternalServerError, "internal_error", "Internal server error")
 		return
 	}
 	c.Set("admin_session", session)

@@ -2,10 +2,12 @@ package test
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,5 +100,40 @@ func TestAdminAccountHTTPPermissions(t *testing.T) {
 	}
 	if got := adminCall(router, "GET", "/v1/admin/accounts", "", cookie, "", "", true).Code; got != 401 {
 		t.Fatal("recreation reused session")
+	}
+}
+
+func TestAdminOrdinarySessionSurvivesCanceledRequest(t *testing.T) {
+	router, service, _ := adminDatabaseRouter(t)
+	ownerCookie, owner := adminLoginCookie(t, service, "owner", "isolated-test-password")
+	create := adminCall(router, "POST", "/v1/admin/accounts", `{"username":"staff","password":"ordinary-test-password"}`, ownerCookie, owner.CSRF, "https://ranking.test", true)
+	if create.Code != http.StatusCreated {
+		t.Fatal(create.Code, create.Body.String())
+	}
+	cookie, _ := adminLoginCookie(t, service, "staff", "ordinary-test-password")
+
+	for _, path := range []string{"/v1/admin/session", "/v1/admin/users"} {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodGet, "https://ranking.test"+path, nil).WithContext(canceled)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("Cookie", cookie)
+		req.TLS = &tls.ConnectionState{}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"internal_error"`) {
+			t.Fatalf("canceled %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"authenticated":false`) || strings.Contains(rec.Body.String(), `"session_required"`) {
+			t.Fatalf("canceled %s reported unauthenticated: %s", path, rec.Body.String())
+		}
+
+		okRec := adminCall(router, http.MethodGet, path, "", cookie, "", "", true)
+		if okRec.Code != http.StatusOK {
+			t.Fatalf("follow-up %s: status=%d body=%s", path, okRec.Code, okRec.Body.String())
+		}
+		if path == "/v1/admin/session" && !strings.Contains(okRec.Body.String(), `"authenticated":true`) {
+			t.Fatalf("follow-up %s lost session: %s", path, okRec.Body.String())
+		}
 	}
 }
