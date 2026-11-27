@@ -205,20 +205,27 @@ func TestResolveShippedMainstreamModelsAndAliases(t *testing.T) {
 
 	cases := map[string]string{
 		"openai/gpt-6.2-astra":             "gpt-6.2-astra",
+		"openrouter/gpt-6.2-astra-pro":     "gpt-6.2-astra",
 		"devin/gpt-6-2-astra":              "gpt-6.2-astra",
+		"openai/gpt-4o-2024-05-13":         "gpt-4o-2024-05-13",
 		"anthropic/claude-fable-5-2":       "claude-fable-5-2",
 		"copilot/claude-fable-5.2":         "claude-fable-5-2",
+		"copilot/mai-code-2":               "mai-code-2",
 		"antigravity/gemini-4-carbon-high": "gemini-4-carbon",
 		"gemini-4-carbon-medium":           "gemini-4-carbon",
 		"gemini-4-carbon-low":              "gemini-4-carbon",
 		"antigravity/gemini-4-neon-xhigh":  "gemini-4-neon",
 		"gemini-3.8-flash-tiered":          "gemini-3.8-flash",
 		"gemini-3.6-flash-minimal":         "gemini-3.6-flash",
+		"gemini-nano-banana-2.1-high":      "gemini-nano-banana-2.1",
 		"alibaba/Qwen4-Max":                "qwen4-max",
 		"zai/GLM-5.4":                      "glm-5.4",
 		"moonshot/kimi-k3.1-pro":           "kimi-k3.1-pro",
 		"deepseek/deepseek-flash":          "deepseek-v4.1-flash",
+		"deepseek/deepseek-chat":           "deepseek-v4-flash-0731",
 		"xai/grok-4.7":                     "grok-4.7",
+		"xai/grok-3-mini-fast":             "grok-3-mini-fast",
+		"tencent/hy4":                      "hy4",
 		"meta/muse-wonder-1.0":             "muse-wonder-1.0",
 	}
 	for raw, wantCanonical := range cases {

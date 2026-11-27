@@ -26,7 +26,7 @@
 - 模型名与别名全局无大小写冲突，别名不能占用其他模型的标准名或别名。
 - `prices` 可选地将 `default`、`priority`、`flex` 映射为 `{input, output, cache_read, cache_write}` 非负十进制字符串（缺失或 `null` 表示未知，`"0"` 表示显式免费；缺失的档位不继承 `default`；未知档位或 `null` 档位会被忽略）。
 - 价格档位仅作目录元数据参考，**不是**上报或统计维度（日快照中若携带 `service_tier` 会被静默忽略），服务端不执行计费或成本估算。
-- `config/model-sources.json` 记录随库发布参考价格的来源链接、定价口径（优先采用官方标准美元单价、排除 Gemini 限时优惠价、分时长 `cache_write` 取短周期 TTL、官方缺少美元标准价时回退参考 `models.dev` / `litellm`）与采集日期；运行时仅加载 `config/models.json`。
+- `config/model-sources.json` 记录随库发布参考价格的来源链接、定价口径（凡厂商发布过官方标准美元单价——含官方已下架但历史公布过的官方标准价——一律采用厂商官方价而不使用第三方转售平台价；排除 Gemini 限时优惠价；分时长 `cache_write` 取短周期 TTL；仅在厂商从未公布美元按量标准价时参考 `models.dev` / `litellm`）与采集日期；运行时仅加载 `config/models.json`。
 
 ## 头像目录
 

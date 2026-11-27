@@ -45,17 +45,20 @@ func TestShippedCatalogLoads(t *testing.T) {
 			aliasOwner[alias] = entry.Name
 		}
 	}
-	if len(entries) != 226 || aliases != 434 {
+	if len(entries) != 259 || aliases != 492 {
 		t.Fatalf("shipped seed: %d models, %d aliases", len(entries), aliases)
 	}
 
-	// 核验主流新旗舰模型均已收录，且冷门模型已移除。
+	// 核验主流新旗舰与拆分后的独立计价型号均已收录，且冷门模型已移除。
 	for _, want := range []string{
-		"gpt-6.2-astra", "gpt-6.2-sol", "claude-fable-5-2", "claude-fable-5",
-		"claude-opus-5-5", "claude-sonnet-5-5", "gemini-4-carbon", "gemini-4-neon",
-		"gemini-4-hydrogen", "gemini-3.8-flash", "qwen4-max", "glm-5.4",
-		"kimi-k3.1-pro", "deepseek-v4.1-flash", "grok-4.7", "MiniMax-M3.1-Flash",
-		"doubao-seed-2-1-pro", "muse-wonder-1.0", "mistral-large-4",
+		"gpt-6.2-astra", "gpt-6.2-sol", "gpt-4o-2024-05-13", "gpt-5.1-codex-max",
+		"claude-fable-5-2", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5",
+		"gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen", "gemini-3.8-flash",
+		"qwen4-max", "qwen3.8-27b", "qwen3.8-flash-next", "glm-5.4",
+		"kimi-k3.1-pro", "kimi-k2-thinking", "deepseek-v4.1-flash", "deepseek-v4-flash-0731",
+		"deepseek-v3.1", "grok-4.7", "grok-3-mini-fast", "MiniMax-M3.1-Flash",
+		"doubao-seed-2-1-pro", "hy4", "hy4-flash", "muse-wonder-1.0",
+		"mistral-large-4", "mai-code-2",
 	} {
 		if _, ok := byName[want]; !ok {
 			t.Fatalf("missing mainstream model %q", want)
@@ -67,34 +70,62 @@ func TestShippedCatalogLoads(t *testing.T) {
 		}
 	}
 
-	// 核验 Gemini 思考强度别名显式收录且采用正常非促销价格，分时长 cache_write 采用短 TTL。
+	// 核验 Gemini 思考强度别名（含图像思考模型）、OpenRouter -pro 推理别名及关键路由别名。
 	for alias, canonical := range map[string]string{
-		"gemini-4-carbon-low":      "gemini-4-carbon",
-		"gemini-4-carbon-medium":   "gemini-4-carbon",
-		"gemini-4-carbon-high":     "gemini-4-carbon",
-		"gemini-4-neon-xhigh":      "gemini-4-neon",
-		"gemini-4-hydrogen-xhigh":  "gemini-4-hydrogen",
-		"gemini-3.8-flash-high":    "gemini-3.8-flash",
-		"gemini-3.6-flash-minimal": "gemini-3.6-flash",
-		"claude-fable-5.2":         "claude-fable-5-2",
-		"Qwen4-Max":                "qwen4-max",
+		"gemini-4-carbon-low":         "gemini-4-carbon",
+		"gemini-4-carbon-medium":      "gemini-4-carbon",
+		"gemini-4-carbon-high":        "gemini-4-carbon",
+		"gemini-4-neon-xhigh":         "gemini-4-neon",
+		"gemini-4-hydrogen-xhigh":     "gemini-4-hydrogen",
+		"gemini-3.8-flash-high":       "gemini-3.8-flash",
+		"gemini-3.6-flash-minimal":    "gemini-3.6-flash",
+		"gemini-nano-banana-2.1-high": "gemini-nano-banana-2.1",
+		"gemini-3.1-flash-image-high": "gemini-3.1-flash-image",
+		"gpt-6.2-astra-pro":           "gpt-6.2-astra",
+		"gpt-6.2-sol-pro":             "gpt-6.2-sol",
+		"claude-fable-5.2":            "claude-fable-5-2",
+		"Qwen4-Max":                   "qwen4-max",
+		"qwen4-max-preview":           "qwen4-max",
+		"deepseek-chat":               "deepseek-v4-flash-0731",
+		"deepseek-reasoner":           "deepseek-v4-flash-0731",
+		"dola-seed-2-1-turbo":         "doubao-seed-2-1-turbo",
 	} {
 		if got := aliasOwner[alias]; got != canonical {
 			t.Fatalf("alias %q mapped to %q, want %q", alias, got, canonical)
 		}
 	}
-	carbon := byName["gemini-4-carbon"].Prices[models.Default]
-	if carbon.Input == nil || *carbon.Input != "4" || carbon.Output == nil || *carbon.Output != "20" || carbon.CacheRead == nil || *carbon.CacheRead != "0.2" {
-		t.Fatalf("gemini-4-carbon normal price mismatch: %+v", carbon)
+
+	// 核验官方标准价格：Gemini 排除促销价，已退役模型仍严格使用厂商历史官方价而非第三方渠道价。
+	for modelName, want := range map[string][3]string{
+		"gemini-4-carbon":        {"4", "20", "0.2"},
+		"gemini-3.8-flash":       {"1.5", "7.5", "0.15"},
+		"deepseek-v4.1-flash":    {"0.3", "1.2", "0.006"},
+		"deepseek-v4-flash-0731": {"0.44", "1.32", "0.014"},
+		"deepseek-v4-pro":        {"1.32", "3.96", "0.044"},
+		"deepseek-v3.2":          {"0.28", "0.42", "0.028"},
+		"deepseek-v3.1":          {"0.56", "1.68", "0.07"},
+		"deepseek-v3":            {"0.27", "1.1", "0.07"},
+		"deepseek-r1":            {"0.55", "2.19", "0.14"},
+		"qwen3.8-27b":            {"0.5", "3", "0.1"},
+		"grok-3-mini":            {"0.3", "0.5", "0.075"},
+		"grok-3-mini-fast":       {"0.6", "4", "0.15"},
+	} {
+		p := byName[modelName].Prices[models.Default]
+		if p.Input == nil || *p.Input != want[0] || p.Output == nil || *p.Output != want[1] || p.CacheRead == nil || *p.CacheRead != want[2] {
+			t.Fatalf("%s official price mismatch: got (%v,%v,%v), want %v", modelName, p.Input, p.Output, p.CacheRead, want)
+		}
 	}
-	flash38 := byName["gemini-3.8-flash"].Prices[models.Default]
-	if flash38.Input == nil || *flash38.Input != "1.5" || flash38.Output == nil || *flash38.Output != "7.5" || flash38.CacheRead == nil || *flash38.CacheRead != "0.15" {
-		t.Fatalf("gemini-3.8-flash normal price mismatch: %+v", flash38)
+	may4o := byName["gpt-4o-2024-05-13"].Prices[models.Default]
+	if may4o.Input == nil || *may4o.Input != "5" || may4o.Output == nil || *may4o.Output != "15" {
+		t.Fatalf("gpt-4o-2024-05-13 price mismatch: %+v", may4o)
 	}
 	for modelName, wantCW := range map[string]string{
-		"gpt-6.2-astra":    "10",
-		"claude-fable-5-2": "10",
-		"kimi-k3.1-pro":    "2",
+		"gpt-6.2-astra":        "10",
+		"claude-fable-5-2":     "10",
+		"claude-opus-4-8-fast": "12.5",
+		"kimi-k3.1-pro":        "2",
+		"qwen3.8-2.4t-a95b":    "2.5",
+		"qwen3.8-27b":          "0.625",
 	} {
 		cw := byName[modelName].Prices[models.Default].CacheWrite
 		if cw == nil || *cw != wantCW {
