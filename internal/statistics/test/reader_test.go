@@ -474,10 +474,6 @@ func TestPublicReadSkipsOverflowingSeatWithoutPartialReentry(t *testing.T) {
 		}
 		assertPublicIsolated(t, r, periods.Year)
 		assertPublicIsolated(t, r, periods.All)
-		// 被隔离的溢出席位仍计入候选容量上限。
-		if _, err := f.reader(t, 1).Read(ctx, statistics.Selection{Kind: periods.Year, Day: "2026-02-02", Public: true}); !errors.Is(err, statistics.ErrCapacity) {
-			t.Fatalf("%s capacity error = %v, want ErrCapacity", tc.column, err)
-		}
 		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET `+tc.column+`=1 WHERE client_id=? AND kind IN ('month','all')`, f.a); err != nil {
 			t.Fatal(err)
 		}
@@ -495,4 +491,62 @@ func TestPublicReadSkipsOverflowingSeatWithoutPartialReentry(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPublicIsolated(t, r, periods.Year)
+}
+
+func TestPublicReadOverflowedSeatCountsTowardCapacity(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.db.Writer.ExecContext(ctx, `UPDATE clients SET display_name='seat-a', avatar_id=1 WHERE id=?`, f.a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.db.Writer.ExecContext(ctx, `UPDATE clients SET display_name='seat-b', avatar_id=2 WHERE id=?`, f.b); err != nil {
+		t.Fatal(err)
+	}
+
+	// period_stats 中只有 f.a 的两个已结月，f.b 仅在后续 daily_stats 中首次出现：
+	// f.a 在第一阶段即因跨月累加溢出被剔除（len(Rows)==0 且 len(overflowed)==1），
+	// 进入第二阶段扫描 f.b 时即可精确验证被剔除席位仍计入候选容量上限。
+	f.put(t, f.a, "2026-01-01", 1, item("alpha", 1))
+	f.put(t, f.a, "2026-02-01", 1, item("alpha", 1))
+	f.put(t, f.b, "2026-02-02", 1, item("alpha", 13))
+	if err := reports.AdvanceWindow(ctx, f.db.Writer, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	f.closeDay(t, "2026-01-01", f.a)
+	f.closeDay(t, "2026-02-01", f.a)
+
+	for _, tc := range []struct {
+		column string
+		value  any
+	}{
+		{"total_tokens", int64(math.MaxInt64)},
+		{"ttft_sum_ms", math.MaxFloat64},
+	} {
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET `+tc.column+`=? WHERE client_id=? AND kind='month'`, tc.value, f.a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.reader(t, 1).Read(ctx, statistics.Selection{Kind: periods.Year, Day: "2026-02-02", Public: true}); !errors.Is(err, statistics.ErrCapacity) {
+			t.Fatalf("%s maxCandidates=1 error = %v, want ErrCapacity", tc.column, err)
+		}
+		snap, err := f.reader(t, 2).Read(ctx, statistics.Selection{Kind: periods.Year, Day: "2026-02-02", Public: true})
+		if err != nil {
+			t.Fatalf("%s maxCandidates=2 failed: %v", tc.column, err)
+		}
+		if _, ok := snap.Rows[f.a]; ok {
+			t.Fatalf("%s retained overflowing seat row: %+v", tc.column, snap.Rows[f.a])
+		}
+		if _, ok := snap.Profiles[f.a]; ok {
+			t.Fatalf("%s retained overflowing seat profile: %+v", tc.column, snap.Profiles[f.a])
+		}
+		if len(snap.Rows) != 1 || len(snap.Profiles) != 1 {
+			t.Fatalf("%s unexpected snapshot size: rows=%d profiles=%d", tc.column, len(snap.Rows), len(snap.Profiles))
+		}
+		check(t, snap, f.b, 13)
+		if got := snap.Profiles[f.b]; got.DisplayName != "seat-b" || got.AvatarID != 2 {
+			t.Fatalf("%s normal seat profile = %+v", tc.column, got)
+		}
+		if _, err := f.db.Writer.ExecContext(ctx, `UPDATE period_stats SET `+tc.column+`=1 WHERE client_id=? AND kind='month'`, f.a); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
