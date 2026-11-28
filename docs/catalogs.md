@@ -13,11 +13,11 @@ The server loads `config/models.json` (or the path set in `RANKING_MODELS_PATH`)
 - On startup, all canonical `model_name` values are registered into the SQLite `models` dictionary in one transaction with stable positive IDs (ID `0` is reserved for all-model totals), preserving original `model_name` casing for storage and display. Removing a model keeps its historical dictionary row inactive; reintroducing it restores the original ID. Aliases and prices are not stored in SQLite.
 - Lookup is indexed **ASCII case-insensitively**; cross-model case-insensitive collisions across canonical names and aliases are rejected at startup.
 - When processing [daily reports](integration.md#daily-cumulative-snapshot-reporting), the resolver trims surrounding whitespace, strips any prefix through the final `/`, and validates the final segment (nonempty, valid UTF-8, `<= 128` bytes, no control characters). It first performs an ASCII case-insensitive lookup against canonical names and aliases; if unmatched, it strips up to two layers of whitelisted trailing gateway mode/channel suffixes and re-checks the catalog:
-  - Colon suffixes: `:free`, `:thinking`, `:online`, `:nitro`, `:floor`, `:extended`, `:beta`, `:exacto`
+  - Colon suffixes: `:free`, `:thinking`, `:online`, `:nitro`, `:floor`, `:extended`, `:beta`, `:exacto`, `:batch`
   - Context-window brackets: `[1m]`, `[2m]`
   - Parenthesized reasoning budgets: `(minimal)`, `(low)`, `(medium)`, `(high)`, `(xhigh)`, `(max)`, `(none)`, `(off)`, `(auto)`, or `(<1..8 digits>)`
   - Hyphenated reasoning/tier suffixes: `-minimal`, `-low`, `-medium`, `-high`, `-xhigh`, `-thinking`, `-nothinking`, `-non-thinking`, `-tiered`
-  - Official date snapshots, `-max`, and `-latest` are **never** stripped automatically; official dated variants remain managed explicitly in `alias`.
+  - Official date snapshots, `-max`, and `-latest` are **never** stripped automatically; official dated variants, cross-channel dot/hyphen aliases, and Gemini thinking-intensity aliases (such as `gemini-4-carbon-high`) remain managed explicitly in `alias`.
 - Matched names and aliases map to their canonical model ID. Unmatched or malformed unknown model entries are silently skipped during aggregation so a single unfamiliar model never rejects valid models in the same report, and are never inserted into SQLite. There is no HTTP model-management API.
 
 ### Schema and Reference Prices
@@ -26,7 +26,7 @@ The server loads `config/models.json` (or the path set in `RANKING_MODELS_PATH`)
 - Names must be unique across models (ASCII case-insensitively); an alias cannot occupy another model's canonical name or alias.
 - `prices` optionally maps `default`, `priority`, and `flex` tiers to `{input, output, cache_read, cache_write}` non-negative decimal strings (`null`/omitted means unknown, `"0"` means explicitly free; missing tiers do not inherit `default`; unknown or `null` tier entries are ignored).
 - Price tiers are reference metadata only—they are **not** a reporting or statistics dimension (any `service_tier` field in daily reports is ignored), and no billing or cost calculation is performed.
-- `config/model-sources.json` records provenance URLs and capture dates for shipped reference prices; only `config/models.json` is loaded at runtime.
+- `config/model-sources.json` records provenance URLs, pricing policy (official first-party vendor standard USD rates—current or historical official publications when retired—strictly used without substituting third-party reseller rates; promotional discount rates excluded; shorter TTL chosen when `cache_write` varies by duration; `models.dev` / `litellm` fallback used only when a vendor has never published a standard USD pay-as-you-go rate), and capture dates for shipped reference prices; only `config/models.json` is loaded at runtime.
 
 ## Avatar Catalog
 

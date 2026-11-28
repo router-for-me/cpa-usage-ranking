@@ -127,6 +127,7 @@ func TestResolveStripsControlledGatewaySuffixes(t *testing.T) {
 		{"claude-sonnet-4-5:extended", claudeID},
 		{"claude-sonnet-4-5:beta", claudeID},
 		{"claude-sonnet-4-5:exacto", claudeID},
+		{"claude-sonnet-4-5:batch", claudeID},
 		// 方括号后缀
 		{"claude-sonnet-4-5[1m]", claudeID},
 		{"claude-sonnet-4-5[2M]", claudeID},
@@ -188,6 +189,67 @@ func TestResolveStripsControlledGatewaySuffixes(t *testing.T) {
 		res, err := registry.Resolve(raw)
 		if err != nil || res.Matched || res.ID != 0 {
 			t.Fatalf("Resolve(%q) unexpectedly matched: %+v, %v", raw, res, err)
+		}
+	}
+}
+
+func TestResolveShippedMainstreamModelsAndAliases(t *testing.T) {
+	catalog, err := models.Load(filepath.Join("..", "..", "..", "config", "models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := openModelDB(t, filepath.Join(t.TempDir(), "ranking.db"))
+	registry, err := models.Register(t.Context(), db.Writer, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"openai/gpt-6.2-astra":              "gpt-6.2-astra",
+		"openai/gpt-6.2-astra:batch":        "gpt-6.2-astra",
+		"openrouter/gpt-6.2-astra-pro":      "gpt-6.2-astra",
+		"bedrock/openai.gpt-5.6-sol":        "gpt-5.6-sol",
+		"devin/gpt-6-2-astra":               "gpt-6.2-astra",
+		"openrouter/gpt-chat-latest":        "chat-latest",
+		"anthropic/claude-fable-5-2":        "claude-fable-5-2",
+		"copilot/claude-fable-5.2":          "claude-fable-5-2",
+		"bedrock/anthropic.claude-opus-5-5": "claude-opus-5-5",
+		"antigravity/gemini-4-carbon-high":  "gemini-4-carbon",
+		"gemini-4-carbon-medium":            "gemini-4-carbon",
+		"gemini-4-carbon-low":               "gemini-4-carbon",
+		"antigravity/gemini-4-neon-xhigh":   "gemini-4-neon",
+		"gemini-3.8-flash-tiered":           "gemini-3.8-flash",
+		"gemini-3.6-flash-minimal":          "gemini-3.6-flash",
+		"alibaba/Qwen4-Max":                 "qwen4-max",
+		"zai/GLM-5.4":                       "glm-5.4",
+		"moonshot/kimi-k3.1-pro":            "kimi-k3.1-pro",
+		"kimi-code/k3.1-pro":                "kimi-k3.1-pro",
+		"kimi-code/k3-256k":                 "kimi-k3",
+		"deepseek/deepseek-flash":           "deepseek-v4.1-flash",
+		"deepseek/deepseek-v4-flash":        "deepseek-v4.1-flash",
+		"deepseek/deepseek-chat":            "deepseek-v4.1-flash",
+		"deepseek/deepseek-reasoner":        "deepseek-v4.1-flash",
+		"xai/grok-4.7":                      "grok-4.7",
+		"xai/grok-4.20-beta-latest":         "grok-4.20-reasoning",
+		"mistral/codestral-25-08":           "codestral",
+		"mistral/mistral-medium-3-5-26-04":  "mistral-medium-3.5",
+		"mistral/devstral-2-25-12":          "devstral-2512",
+		"openrouter/devstral-2512":          "devstral-2512",
+		"tencent/hy4":                       "hy4",
+		"meta/muse-wonder-1.0":              "muse-wonder-1.0",
+	}
+	for raw, wantCanonical := range cases {
+		res, err := registry.Resolve(raw)
+		if err != nil || !res.Matched || res.CanonicalName != wantCanonical || res.ID <= 0 {
+			t.Fatalf("Resolve(%q) = %+v, %v; want canonical %q", raw, res, err, wantCanonical)
+		}
+	}
+
+	// 已移除的冷门模型不应命中。
+	for _, removed := range []string{"command-a-plus", "cohere/command-a-plus-05-2026", "mimo-v2.6-flash", "step-3.7-flash"} {
+		res, err := registry.Resolve(removed)
+		if err != nil || res.Matched || res.ID != 0 {
+			t.Fatalf("removed model %q unexpectedly matched: %+v, %v", removed, res, err)
 		}
 	}
 }

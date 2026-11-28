@@ -36,11 +36,101 @@ func TestShippedCatalogLoads(t *testing.T) {
 	}
 	entries := catalog.List()
 	aliases := 0
+	byName := make(map[string]models.Model, len(entries))
+	aliasOwner := make(map[string]string)
 	for _, entry := range entries {
 		aliases += len(entry.Aliases)
+		byName[entry.Name] = entry
+		for _, alias := range entry.Aliases {
+			aliasOwner[alias] = entry.Name
+		}
 	}
-	if len(entries) != 105 || aliases != 96 {
+	if len(entries) != 133 || aliases != 411 {
 		t.Fatalf("shipped seed: %d models, %d aliases", len(entries), aliases)
+	}
+
+	// 核验主流现役通用旗舰模型均已收录，且冷门、行业白名单与过时旧模型已剔除。
+	for _, want := range []string{
+		"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol",
+		"claude-fable-5-2", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5",
+		"gemini-4-carbon", "gemini-4-argon", "gemini-4-neon", "gemini-4-hydrogen",
+		"gemini-3.8-flash", "qwen4-max", "qwen3.8-max", "qwen3.8-27b", "glm-5.4",
+		"glm-5.3", "kimi-k3.1-pro", "deepseek-v4.1-flash",
+		"deepseek-v4-pro", "grok-4.7", "MiniMax-M3.1-Flash", "doubao-seed-2-1-pro",
+		"hy4", "hy4-flash", "muse-wonder-1.0", "mistral-large-4", "devstral-2512",
+	} {
+		if _, ok := byName[want]; !ok {
+			t.Fatalf("missing mainstream model %q", want)
+		}
+	}
+	for _, removed := range []string{
+		"command-a-plus", "mimo-v2.6-flash", "mimo-v2.6-pro", "step-3.7-flash", "step-5-preview",
+		"gpt-6.2-astra-healthcare", "claude-mythos-5-2", "gpt-4o", "claude-3-5-haiku",
+	} {
+		if _, ok := byName[removed]; ok {
+			t.Fatalf("excluded model %q should not remain in shipped catalog", removed)
+		}
+	}
+
+	// 核验 Gemini 思考强度别名、OpenRouter -pro 推理别名及关键路由别名。
+	for alias, canonical := range map[string]string{
+		"gemini-4-carbon-low":       "gemini-4-carbon",
+		"gemini-4-carbon-medium":    "gemini-4-carbon",
+		"gemini-4-carbon-high":      "gemini-4-carbon",
+		"gemini-4-neon-xhigh":       "gemini-4-neon",
+		"gemini-4-hydrogen-xhigh":   "gemini-4-hydrogen",
+		"gemini-3.8-flash-high":     "gemini-3.8-flash",
+		"gemini-3.6-flash-minimal":  "gemini-3.6-flash",
+		"gpt-6.2-astra-pro":         "gpt-6.2-astra",
+		"gpt-6.2-sol-pro":           "gpt-6.2-sol",
+		"gpt-chat-latest":           "chat-latest",
+		"claude-fable-5.2":          "claude-fable-5-2",
+		"Qwen4-Max":                 "qwen4-max",
+		"qwen4-max-preview":         "qwen4-max",
+		"qwen4.0-max-preview":       "qwen4-max",
+		"deepseek-v4-flash":         "deepseek-v4.1-flash",
+		"deepseek-chat":             "deepseek-v4.1-flash",
+		"deepseek-reasoner":         "deepseek-v4.1-flash",
+		"dola-seed-2-1-turbo":       "doubao-seed-2-1-turbo",
+		"k3.1-pro":                  "kimi-k3.1-pro",
+		"codestral-25-08":           "codestral",
+		"devstral-2-25-12":          "devstral-2512",
+		"anthropic.claude-opus-5-5": "claude-opus-5-5",
+	} {
+		if got := aliasOwner[alias]; got != canonical {
+			t.Fatalf("alias %q mapped to %q, want %q", alias, got, canonical)
+		}
+	}
+
+	// 核验官方标准挂牌价格：排除限时优惠价，历史模型仍严格使用厂商历史官方价而非第三方渠道价。
+	for modelName, want := range map[string][3]string{
+		"gpt-5.6-sol":         {"5", "30", "0.5"},
+		"gemini-4-carbon":     {"4", "20", "0.2"},
+		"gemini-3.8-flash":    {"1.5", "7.5", "0.15"},
+		"deepseek-v4.1-flash": {"0.3", "1.2", "0.006"},
+		"deepseek-v4-pro":     {"1.32", "3.96", "0.044"},
+		"deepseek-v3.2":       {"0.28", "0.42", "0.028"},
+		"qwen3.8-27b":         {"0.5", "3", "0.1"},
+		"hy4":                 {"0.834", "2.501", "0.042"},
+		"hy4-flash":           {"0.14", "0.562", "0.006"},
+	} {
+		p := byName[modelName].Prices[models.Default]
+		if p.Input == nil || *p.Input != want[0] || p.Output == nil || *p.Output != want[1] || p.CacheRead == nil || *p.CacheRead != want[2] {
+			t.Fatalf("%s official price mismatch: got (%v,%v,%v), want %v", modelName, p.Input, p.Output, p.CacheRead, want)
+		}
+	}
+	for modelName, wantCW := range map[string]string{
+		"gpt-6.2-astra":     "10",
+		"gpt-5.6-sol":       "6.25",
+		"claude-fable-5-2":  "10",
+		"kimi-k3.1-pro":     "2",
+		"qwen3.8-2.4t-a95b": "2.5",
+		"qwen3.8-27b":       "0.625",
+	} {
+		cw := byName[modelName].Prices[models.Default].CacheWrite
+		if cw == nil || *cw != wantCW {
+			t.Fatalf("%s short-TTL cache_write = %v, want %q", modelName, cw, wantCW)
+		}
 	}
 }
 
